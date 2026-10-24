@@ -47,7 +47,7 @@ struct ConversationListView: View {
             }
             .navigationTitle("AI 对话")
             .navigationDestination(for: Conversation.self) { conv in
-                ChatDetailView(conversation: conv)
+                ChatDetailView(conversationId: conv.id)
             }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
