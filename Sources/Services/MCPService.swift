@@ -154,9 +154,10 @@ class MCPService {
         req.timeoutInterval = 60
 
         let (data, response) = try await URLSession.shared.data(for: req)
+        let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 500
         guard let httpRes = response as? HTTPURLResponse, (200...299).contains(httpRes.statusCode) else {
             let errText = String(data: data, encoding: .utf8) ?? ""
-            throw NSError(domain: "MCPService", code: (response as? HTTPURLResponse)?.statusCode ?? 500, userInfo: [NSLocalizedDescriptionKey: "HTTP \(httpRes.statusCode): \(errText.prefix(200))"])
+            throw NSError(domain: "MCPService", code: statusCode, userInfo: [NSLocalizedDescriptionKey: "HTTP \(statusCode): \(errText.prefix(200))"])
         }
 
         let parsedJSON = try parseResponse(data: data)
