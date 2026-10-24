@@ -1,13 +1,13 @@
 import Foundation
 
-enum MessageRole: String, Codable {
+enum MessageRole: String, Codable, Hashable {
     case system
     case user
     case assistant
     case tool
 }
 
-struct ToolCallItem: Identifiable, Codable, Equatable {
+struct ToolCallItem: Identifiable, Codable, Equatable, Hashable {
     var id: String
     var name: String
     var arguments: String
@@ -16,7 +16,7 @@ struct ToolCallItem: Identifiable, Codable, Equatable {
     var error: String?
 }
 
-struct ChatMessage: Identifiable, Codable, Equatable {
+struct ChatMessage: Identifiable, Codable, Equatable, Hashable {
     var id: String = UUID().uuidString
     var role: MessageRole
     var content: String
