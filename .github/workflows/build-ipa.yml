@@ -35,7 +35,9 @@ jobs:
       - name: Generate App Icon
         run: |
           mkdir -p Assets.xcassets/AppIcon.appiconset
-          python3 - <<'PY'
+          python3 -m venv /tmp/icon_env
+          /tmp/icon_env/bin/pip install --quiet pillow
+          /tmp/icon_env/bin/python - <<'PY'
           from PIL import Image, ImageDraw
           img = Image.new('RGB', (1024, 1024), color=(18, 24, 38))
           draw = ImageDraw.Draw(img)
