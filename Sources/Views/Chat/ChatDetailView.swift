@@ -2,16 +2,20 @@ import SwiftUI
 
 struct ChatDetailView: View {
     @EnvironmentObject var storage: DataStorage
-    @State var conversation: Conversation
+    let conversationId: String
     @StateObject private var coordinator = AgentCoordinator()
     @State private var inputText: String = ""
+
+    private var currentConversation: Conversation {
+        storage.conversations.first(where: { $0.id == conversationId }) ?? Conversation(title: "对话", messages: [])
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 14) {
-                        ForEach(conversation.messages) { msg in
+                        ForEach(currentConversation.messages) { msg in
                             if msg.role != .tool {
                                 MessageBubbleView(message: msg)
                                     .id(msg.id)
@@ -53,8 +57,8 @@ struct ChatDetailView: View {
                     }
                     .padding(.vertical, 14)
                 }
-                .onChange(of: conversation.messages.count) { _ in
-                    if let last = conversation.messages.last {
+                .onChange(of: currentConversation.messages.count) { _ in
+                    if let last = currentConversation.messages.last {
                         withAnimation {
                             proxy.scrollTo(last.id, anchor: .bottom)
                         }
@@ -89,12 +93,14 @@ struct ChatDetailView: View {
                         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
                         guard !text.isEmpty else { return }
                         inputText = ""
-                        if conversation.messages.isEmpty {
-                            conversation.title = String(text.prefix(18))
+                        if currentConversation.messages.isEmpty {
+                            var updated = currentConversation
+                            updated.title = String(text.prefix(18))
+                            storage.updateConversation(updated)
                         }
                         Task {
                             await coordinator.sendMessage(
-                                conversation: &conversation,
+                                conversationId: conversationId,
                                 userPrompt: text,
                                 settings: storage.settings,
                                 servers: storage.servers
@@ -112,7 +118,7 @@ struct ChatDetailView: View {
             .padding(.vertical, 10)
             .background(Color(.systemBackground))
         }
-        .navigationTitle(conversation.title)
+        .navigationTitle(currentConversation.title)
         .navigationBarTitleDisplayMode(.inline)
     }
 }
