@@ -11,12 +11,13 @@ class AgentCoordinator: ObservableObject {
     private var currentTask: Task<Void, Never>? = nil
 
     func sendMessage(
-        conversation: inout Conversation,
+        conversationId: String,
         userPrompt: String,
         settings: OpenAISettings,
         servers: [MCPServer]
     ) async {
         guard !userPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        guard var conversation = DataStorage.shared.conversations.first(where: { $0.id == conversationId }) else { return }
         errorMessage = nil
         isGenerating = true
         statusText = "思考中..."
