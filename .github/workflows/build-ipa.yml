@@ -1,0 +1,130 @@
+name: Build and Package IPA
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build IPA
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          if [ -d "/Applications/Xcode_16.0.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_16.0.app
+          elif [ -d "/Applications/Xcode_16.1.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_16.1.app
+          elif [ -d "/Applications/Xcode_16.2.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_16.2.app
+          elif [ -d "/Applications/Xcode_15.4.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_15.4.app
+          fi
+          xcodebuild -version
+
+      - name: Generate App Icon
+        run: |
+          mkdir -p Assets.xcassets/AppIcon.appiconset
+          python3 - <<'PY'
+          from PIL import Image, ImageDraw
+          img = Image.new('RGB', (1024, 1024), color=(18, 24, 38))
+          draw = ImageDraw.Draw(img)
+          for i in range(1024):
+              ratio = i / 1024.0
+              r = int(24 + (10 - 24) * ratio)
+              g = int(32 + (40 - 32) * ratio)
+              b = int(72 + (120 - 72) * ratio)
+              draw.line([(0, i), (1024, i)], fill=(r, g, b))
+          draw.rounded_rectangle([160, 160, 864, 864], radius=180, fill=(35, 45, 90), outline=(80, 120, 240), width=16)
+          draw.ellipse([432, 280, 592, 440], fill=(96, 165, 250))
+          draw.ellipse([280, 600, 440, 760], fill=(52, 211, 153))
+          draw.ellipse([584, 600, 744, 760], fill=(167, 139, 250))
+          draw.line([(512, 440), (360, 600)], fill=(220, 230, 255), width=24)
+          draw.line([(512, 440), (664, 600)], fill=(220, 230, 255), width=24)
+          draw.line([(360, 680), (664, 680)], fill=(220, 230, 255), width=24)
+          img.save('Assets.xcassets/AppIcon.appiconset/icon-1024.png', 'PNG')
+          PY
+          cat <<'JSON' > Assets.xcassets/AppIcon.appiconset/Contents.json
+          {
+            "images": [
+              {
+                "filename": "icon-1024.png",
+                "idiom": "universal",
+                "platform": "ios",
+                "size": "1024x1024"
+              }
+            ],
+            "info": {
+              "author": "xcode",
+              "version": 1
+            }
+          }
+          JSON
+
+      - name: Install XcodeGen
+        run: |
+          brew install xcodegen
+
+      - name: Generate Xcode Project
+        run: |
+          xcodegen generate
+          sed -i '' 's/objectVersion = 77;/objectVersion = 56;/g' OpenMCP.xcodeproj/project.pbxproj || true
+
+      - name: Build Application (.app)
+        run: |
+          set -o pipefail
+          xcodebuild clean build \
+            -project OpenMCP.xcodeproj \
+            -scheme OpenMCP \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath build \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee xcodebuild.log
+
+      - name: Package IPA
+        run: |
+          mkdir -p Payload
+          APP_PATH=$(find build/Build/Products/Release-iphoneos -name "OpenMCP.app" -type d | head -n 1)
+          if [ -z "$APP_PATH" ]; then
+            APP_PATH=$(find build/Build/Products/Release-iphoneos -name "*.app" -type d | head -n 1)
+          fi
+          echo "Found app at: $APP_PATH"
+          cp -R "$APP_PATH" Payload/
+          zip -qr OpenMCP.ipa Payload
+          ls -lh OpenMCP.ipa
+
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenMCP-ipa
+          path: OpenMCP.ipa
+          retention-days: 14
+
+      - name: Create Release and Upload IPA
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: OpenMCP v1.0.${{ github.run_number }}
+          body: |
+            OpenMCP iOS 客户端自动构建发布包。
+            - 支持自定义 OpenAI 兼容接口
+            - 支持直接挂载与多轮调度 MCP 工具
+            - 原生 SwiftUI 架构与流畅对话体验
+          files: OpenMCP.ipa
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
