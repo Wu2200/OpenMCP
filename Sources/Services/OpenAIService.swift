@@ -3,6 +3,65 @@ import Foundation
 class OpenAIService {
     static let shared = OpenAIService()
 
+    func fetchModels(settings: OpenAISettings) async throws -> [String] {
+        var base = settings.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        if base.hasSuffix("/") {
+            base = String(base.dropLast())
+        }
+        if base.hasSuffix("/chat/completions") {
+            base = String(base.dropLast("/chat/completions".count))
+        }
+        let fullEndpoint = "\(base)/models"
+        guard let url = URL(string: fullEndpoint) else {
+            throw URLError(.badURL)
+        }
+
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        if !settings.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let key = settings.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            req.setValue(key.hasPrefix("Bearer ") ? key : "Bearer \(key)", forHTTPHeaderField: "Authorization")
+        }
+        req.timeoutInterval = 30
+
+        let (data, response) = try await URLSession.shared.data(for: req)
+        guard let httpRes = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+
+        guard (200...299).contains(httpRes.statusCode) else {
+            let errString = String(data: data, encoding: .utf8) ?? ""
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let errObj = json["error"] as? [String: Any],
+               let msg = errObj["message"] as? String {
+                throw NSError(domain: "OpenAIService", code: httpRes.statusCode, userInfo: [NSLocalizedDescriptionKey: msg])
+            }
+            throw NSError(domain: "OpenAIService", code: httpRes.statusCode, userInfo: [NSLocalizedDescriptionKey: "获取模型失败 (\(httpRes.statusCode)): \(errString.prefix(200))"])
+        }
+
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw NSError(domain: "OpenAIService", code: -1, userInfo: [NSLocalizedDescriptionKey: "无法解析模型列表数据"])
+        }
+
+        var modelIds: [String] = []
+        if let dataArray = json["data"] as? [[String: Any]] {
+            for item in dataArray {
+                if let id = item["id"] as? String {
+                    modelIds.append(id)
+                }
+            }
+        } else if let modelsArray = json["models"] as? [[String: Any]] {
+            for item in modelsArray {
+                if let id = item["id"] as? String ?? item["name"] as? String {
+                    modelIds.append(id)
+                }
+            }
+        }
+
+        return modelIds.sorted()
+    }
+
     func chatCompletion(
         settings: OpenAISettings,
         messages: [ChatMessage],

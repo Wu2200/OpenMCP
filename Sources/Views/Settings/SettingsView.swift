@@ -3,6 +3,9 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject var storage: DataStorage
     @State private var showingSaveAlert: Bool = false
+    @State private var isFetchingModels: Bool = false
+    @State private var fetchErrorMessage: String? = nil
+    @State private var fetchSuccessMessage: String? = nil
 
     var body: some View {
         NavigationStack {
@@ -13,35 +16,88 @@ struct SettingsView: View {
                         .keyboardType(.URL)
                     SecureField("API Key", text: $storage.settings.apiKey)
                         .autocapitalization(.none)
-                    TextField("模型名称 (如 gpt-4o, deepseek-chat)", text: $storage.settings.modelName)
-                        .autocapitalization(.none)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            TextField("模型名称 (如 gpt-4o, deepseek-chat)", text: $storage.settings.modelName)
+                                .autocapitalization(.none)
+
+                            if !storage.settings.availableModels.isEmpty {
+                                Menu {
+                                    ForEach(storage.settings.availableModels, id: \.self) { model in
+                                        Button(action: {
+                                            storage.settings.modelName = model
+                                            storage.saveSettings()
+                                        }) {
+                                            HStack {
+                                                Text(model)
+                                                if storage.settings.modelName == model {
+                                                    Image(systemName: "checkmark")
+                                                }
+                                            }
+                                        }
+                                    }
+                                } label: {
+                                    HStack(spacing: 4) {
+                                        Text("选择")
+                                            .font(.caption.weight(.medium))
+                                        Image(systemName: "chevron.up.chevron.down")
+                                            .font(.caption2)
+                                    }
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                                    .background(Color(.systemGray5))
+                                    .cornerRadius(8)
+                                }
+                            }
+                        }
+
+                        Button(action: {
+                            fetchModels()
+                        }) {
+                            HStack {
+                                if isFetchingModels {
+                                    ProgressView()
+                                        .scaleEffect(0.8)
+                                    Text("正在获取模型...")
+                                } else {
+                                    Image(systemName: "arrow.triangle.2.circlepath")
+                                    Text("获取可用模型列表")
+                                }
+                            }
+                            .font(.footnote.weight(.medium))
+                        }
+                        .disabled(isFetchingModels || storage.settings.baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                        if let success = fetchSuccessMessage {
+                            Text(success)
+                                .font(.caption)
+                                .foregroundColor(.green)
+                        }
+
+                        if let err = fetchErrorMessage {
+                            Text(err)
+                                .font(.caption)
+                                .foregroundColor(.red)
+                        }
+                    }
                 }
 
                 Section(header: Text("快速服务预设")) {
                     Button("DeepSeek 官方") {
-                        storage.settings.baseURL = "https://api.deepseek.com"
-                        storage.settings.modelName = "deepseek-chat"
-                        storage.saveSettings()
+                        applyPreset(base: "https://api.deepseek.com", model: "deepseek-chat")
                     }
                     Button("OpenAI 官方") {
-                        storage.settings.baseURL = "https://api.openai.com/v1"
-                        storage.settings.modelName = "gpt-4o"
-                        storage.saveSettings()
+                        applyPreset(base: "https://api.openai.com/v1", model: "gpt-4o")
                     }
                     Button("Moonshot (Kimi)") {
-                        storage.settings.baseURL = "https://api.moonshot.cn/v1"
-                        storage.settings.modelName = "moonshot-v1-8k"
-                        storage.saveSettings()
+                        applyPreset(base: "https://api.moonshot.cn/v1", model: "moonshot-v1-8k")
                     }
                     Button("Groq 高速端点") {
-                        storage.settings.baseURL = "https://api.groq.com/openai/v1"
-                        storage.settings.modelName = "llama-3.3-70b-versatile"
-                        storage.saveSettings()
+                        applyPreset(base: "https://api.groq.com/openai/v1", model: "llama-3.3-70b-versatile")
                     }
                     Button("Ollama 本地 / 局域网") {
-                        storage.settings.baseURL = "http://127.0.0.1:11434/v1"
-                        storage.settings.modelName = "qwen2.5:latest"
-                        storage.saveSettings()
+                        applyPreset(base: "http://127.0.0.1:11434/v1", model: "qwen2.5:latest")
                     }
                 }
 
@@ -84,6 +140,40 @@ struct SettingsView: View {
                 Button("确定", role: .cancel) { }
             } message: {
                 Text("接口配置已成功保存至本地。")
+            }
+        }
+    }
+
+    private func applyPreset(base: String, model: String) {
+        storage.settings.baseURL = base
+        storage.settings.modelName = model
+        storage.settings.availableModels = []
+        fetchErrorMessage = nil
+        fetchSuccessMessage = nil
+        storage.saveSettings()
+    }
+
+    private func fetchModels() {
+        fetchErrorMessage = nil
+        fetchSuccessMessage = nil
+        isFetchingModels = true
+        Task {
+            do {
+                let models = try await OpenAIService.shared.fetchModels(settings: storage.settings)
+                await MainActor.run {
+                    storage.settings.availableModels = models
+                    if !models.isEmpty && !models.contains(storage.settings.modelName) {
+                        storage.settings.modelName = models[0]
+                    }
+                    storage.saveSettings()
+                    fetchSuccessMessage = "成功获取 \(models.count) 个模型"
+                    isFetchingModels = false
+                }
+            } catch {
+                await MainActor.run {
+                    fetchErrorMessage = error.localizedDescription
+                    isFetchingModels = false
+                }
             }
         }
     }
