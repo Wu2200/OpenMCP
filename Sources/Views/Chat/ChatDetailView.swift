@@ -38,6 +38,7 @@ struct ChatDetailView: View {
                         role: .user,
                         primaryMessageId: msg.id,
                         content: msg.content,
+                        reasoningContent: "",
                         attachments: msg.attachments ?? [],
                         toolCalls: [],
                         createdAt: msg.createdAt,
@@ -48,6 +49,13 @@ struct ChatDetailView: View {
                 if let lastIdx = turns.indices.last, turns[lastIdx].role == .assistant {
                     if let calls = msg.toolCalls, !calls.isEmpty {
                         turns[lastIdx].toolCalls.append(contentsOf: calls)
+                    }
+                    if let r = msg.reasoningContent?.trimmingCharacters(in: .whitespacesAndNewlines), !r.isEmpty {
+                        if turns[lastIdx].reasoningContent.isEmpty {
+                            turns[lastIdx].reasoningContent = r
+                        } else {
+                            turns[lastIdx].reasoningContent += "\n\n" + r
+                        }
                     }
                     let trimmed = msg.content.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !trimmed.isEmpty {
@@ -66,6 +74,7 @@ struct ChatDetailView: View {
                             role: .assistant,
                             primaryMessageId: msg.id,
                             content: msg.content,
+                            reasoningContent: msg.reasoningContent ?? "",
                             attachments: msg.attachments ?? [],
                             toolCalls: msg.toolCalls ?? [],
                             createdAt: msg.createdAt,
@@ -580,9 +589,9 @@ struct ChatDetailView: View {
                 Menu {
                     Button(action: {
                         dismissKeyboard()
-                        showingDocumentPicker = true
+                        showingPhotoPicker = true
                     }) {
-                        Label("文件上传", systemImage: "doc.badge.plus")
+                        Label("图片上传", systemImage: "photo.on.rectangle.angled")
                     }
 
                     Button(action: {
@@ -594,9 +603,9 @@ struct ChatDetailView: View {
 
                     Button(action: {
                         dismissKeyboard()
-                        showingPhotoPicker = true
+                        showingDocumentPicker = true
                     }) {
-                        Label("图片上传", systemImage: "photo.on.rectangle.angled")
+                        Label("文件上传", systemImage: "doc.badge.plus")
                     }
                 } label: {
                     Image(systemName: "plus.circle")

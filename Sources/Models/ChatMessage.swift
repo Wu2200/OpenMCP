@@ -118,6 +118,7 @@ struct ChatMessage: Identifiable, Codable, Equatable, Hashable {
     var id: String = UUID().uuidString
     var role: MessageRole
     var content: String
+    var reasoningContent: String? = nil
     var attachments: [ChatAttachment]? = nil
     var toolCalls: [ToolCallItem]?
     var toolCallId: String?

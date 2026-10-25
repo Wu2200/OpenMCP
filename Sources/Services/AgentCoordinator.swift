@@ -6,10 +6,12 @@ import Combine
 final class StreamingTurnState: ObservableObject {
     @Published var activeMessageId: String? = nil
     @Published var displayedText: String = ""
+    @Published var displayedReasoning: String = ""
 
     func begin(messageId: String) {
         activeMessageId = messageId
         displayedText = ""
+        displayedReasoning = ""
     }
 
     func pushPartialText(_ newText: String) {
@@ -22,11 +24,24 @@ final class StreamingTurnState: ObservableObject {
         }
     }
 
-    func finishImmediate(with finalText: String) {
+    func pushPartialReasoning(_ newReasoning: String) {
+        if displayedReasoning != newReasoning {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                displayedReasoning = newReasoning
+            }
+        }
+    }
+
+    func finishImmediate(with finalText: String, finalReasoning: String? = nil) {
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) {
             displayedText = finalText
+            if let finalReasoning {
+                displayedReasoning = finalReasoning
+            }
         }
     }
 
@@ -36,6 +51,7 @@ final class StreamingTurnState: ObservableObject {
         withTransaction(transaction) {
             activeMessageId = nil
             displayedText = ""
+            displayedReasoning = ""
         }
     }
 }
@@ -49,21 +65,24 @@ class AgentCoordinator: ObservableObject {
 
     let streamingState = StreamingTurnState()
 
-    private var generationTask: Task<Void, Never>? = nil
+    private var activeTask: Task<Void, Never>? = nil
     private var activeConversationId: String? = nil
-    private var currentRunGeneratedMessageIds: Set<String> = []
-    private var isCancelledByUser: Bool = false
+    private var currentTurnMessageIds: Set<String> = []
 
     func startSendMessage(
         conversationId: String,
         userPrompt: String,
         attachments: [ChatAttachment] = [],
         settings: OpenAISettings,
-        servers: [MCPServer]
+        servers: [MCPServerConfig]
     ) {
-        generationTask?.cancel()
-        generationTask = Task { @MainActor in
-            await sendMessage(
+        activeTask?.cancel()
+        currentTurnMessageIds.removeAll()
+        streamingState.reset()
+        activeConversationId = conversationId
+        activeTask = Task { [weak self] in
+            guard let self = self else { return }
+            await self.sendMessage(
                 conversationId: conversationId,
                 userPrompt: userPrompt,
                 attachments: attachments,
@@ -78,11 +97,15 @@ class AgentCoordinator: ObservableObject {
         messageId: String,
         newPrompt: String? = nil,
         settings: OpenAISettings,
-        servers: [MCPServer]
+        servers: [MCPServerConfig]
     ) {
-        generationTask?.cancel()
-        generationTask = Task { @MainActor in
-            await retryFromMessage(
+        activeTask?.cancel()
+        currentTurnMessageIds.removeAll()
+        streamingState.reset()
+        activeConversationId = conversationId
+        activeTask = Task { [weak self] in
+            guard let self = self else { return }
+            await self.retryFromMessage(
                 conversationId: conversationId,
                 messageId: messageId,
                 newPrompt: newPrompt,
@@ -93,23 +116,22 @@ class AgentCoordinator: ObservableObject {
     }
 
     func stopGeneration() {
-        guard isGenerating else { return }
-        isCancelledByUser = true
-        generationTask?.cancel()
-        generationTask = nil
+        activeTask?.cancel()
+        activeTask = nil
 
-        let convId = activeConversationId
-        let idsToDelete = currentRunGeneratedMessageIds
-        currentRunGeneratedMessageIds.removeAll()
-        streamingState.reset()
-
-        withAnimation(.spring(response: 0.26, dampingFraction: 0.86)) {
-            if let convId = convId, !idsToDelete.isEmpty {
-                DataStorage.shared.deleteMessageTurn(conversationId: convId, messageIds: Array(idsToDelete))
+        if let convId = activeConversationId, !currentTurnMessageIds.isEmpty {
+            let idsToRemove = Array(currentTurnMessageIds)
+            withAnimation(.easeInOut(duration: 0.18)) {
+                DataStorage.shared.deleteMessageTurn(conversationId: convId, messageIds: idsToRemove)
             }
+        }
+
+        currentTurnMessageIds.removeAll()
+        streamingState.reset()
+        withAnimation(.easeInOut(duration: 0.18)) {
             isGenerating = false
-            thinkingStartTime = nil
             statusText = ""
+            thinkingStartTime = nil
             errorMessage = nil
         }
     }
@@ -119,38 +141,22 @@ class AgentCoordinator: ObservableObject {
         userPrompt: String,
         attachments: [ChatAttachment] = [],
         settings: OpenAISettings,
-        servers: [MCPServer]
+        servers: [MCPServerConfig]
     ) async {
         let trimmed = userPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !attachments.isEmpty else { return }
-        guard var conversation = DataStorage.shared.conversations.first(where: { $0.id == conversationId }) else { return }
 
-        var finalContent = trimmed
-        var finalAttachments = attachments
-
-        if ChatAttachment.shouldPackageAsLongText(trimmed) {
-            let packaged = ChatAttachment.makeLongTextAttachment(from: trimmed)
-            finalAttachments.append(packaged)
-            finalContent = ""
-        }
+        errorMessage = nil
+        isGenerating = true
+        thinkingStartTime = Date()
+        statusText = "思考中"
 
         let userMsg = ChatMessage(
             role: .user,
-            content: finalContent,
-            attachments: finalAttachments.isEmpty ? nil : finalAttachments
+            content: userPrompt,
+            attachments: attachments.isEmpty ? nil : attachments
         )
-        conversation.messages.append(userMsg)
-        conversation.updatedAt = Date()
-
-        if conversation.messages.filter({ $0.role == .user }).count == 1 && conversation.title == "新对话" {
-            if !trimmed.isEmpty {
-                let firstLine = trimmed.components(separatedBy: .newlines).first ?? trimmed
-                conversation.title = String(firstLine.prefix(18))
-            } else if let firstAtt = finalAttachments.first {
-                conversation.title = String(firstAtt.fileName.prefix(18))
-            }
-        }
-        DataStorage.shared.updateConversation(conversation)
+        DataStorage.shared.appendMessage(to: conversationId, message: userMsg)
 
         await runGenerationLoop(conversationId: conversationId, settings: settings, servers: servers)
     }
@@ -160,203 +166,196 @@ class AgentCoordinator: ObservableObject {
         messageId: String,
         newPrompt: String? = nil,
         settings: OpenAISettings,
-        servers: [MCPServer]
+        servers: [MCPServerConfig]
     ) async {
-        guard var conversation = DataStorage.shared.conversations.first(where: { $0.id == conversationId }) else { return }
-        guard let idx = conversation.messages.firstIndex(where: { $0.id == messageId }) else { return }
+        guard let conv = DataStorage.shared.conversations.first(where: { $0.id == conversationId }),
+              let targetIndex = conv.messages.firstIndex(where: { $0.id == messageId }) else { return }
 
-        if conversation.messages[idx].role == .user {
-            if let updated = newPrompt?.trimmingCharacters(in: .whitespacesAndNewlines), !updated.isEmpty {
-                let nonLongAttachments = (conversation.messages[idx].attachments ?? []).filter { $0.kind != .longText }
-                if ChatAttachment.shouldPackageAsLongText(updated) {
-                    var newAtts = nonLongAttachments
-                    newAtts.append(ChatAttachment.makeLongTextAttachment(from: updated))
-                    conversation.messages[idx].content = ""
-                    conversation.messages[idx].attachments = newAtts
-                } else {
-                    conversation.messages[idx].content = updated
-                    conversation.messages[idx].attachments = nonLongAttachments.isEmpty ? nil : nonLongAttachments
-                }
-            }
-            if idx + 1 < conversation.messages.count {
-                conversation.messages.removeSubrange((idx + 1)..<conversation.messages.count)
-            }
-        } else {
-            if let userIdx = conversation.messages[0...idx].lastIndex(where: { $0.role == .user }) {
-                if userIdx + 1 < conversation.messages.count {
-                    conversation.messages.removeSubrange((userIdx + 1)..<conversation.messages.count)
-                }
-            } else {
-                conversation.messages.removeSubrange(idx..<conversation.messages.count)
-            }
-        }
-
-        conversation.updatedAt = Date()
-        DataStorage.shared.updateConversation(conversation)
-
-        await runGenerationLoop(conversationId: conversationId, settings: settings, servers: servers)
-    }
-
-    private func runGenerationLoop(
-        conversationId: String,
-        settings: OpenAISettings,
-        servers: [MCPServer]
-    ) async {
-        guard var conversation = DataStorage.shared.conversations.first(where: { $0.id == conversationId }) else { return }
-
-        isCancelledByUser = false
-        activeConversationId = conversationId
-        currentRunGeneratedMessageIds.removeAll()
         errorMessage = nil
         isGenerating = true
         thinkingStartTime = Date()
         statusText = "思考中"
 
-        var openAITools: [[String: Any]] = []
-        var toolServerMap: [String: (server: MCPServer, originalToolName: String)] = [:]
+        let targetMsg = conv.messages[targetIndex]
+        if targetMsg.role == .user {
+            DataStorage.shared.truncateMessages(conversationId: conversationId, upToIndex: targetIndex + 1)
+            if let updated = newPrompt?.trimmingCharacters(in: .whitespacesAndNewlines), !updated.isEmpty {
+                DataStorage.shared.updateMessageContent(conversationId: conversationId, messageId: messageId, newContent: updated)
+            }
+        } else {
+            if let precedingUserIdx = conv.messages[..<targetIndex].lastIndex(where: { $0.role == .user }) {
+                DataStorage.shared.truncateMessages(conversationId: conversationId, upToIndex: precedingUserIdx + 1)
+            } else {
+                DataStorage.shared.truncateMessages(conversationId: conversationId, upToIndex: targetIndex)
+            }
+        }
+
+        await runGenerationLoop(conversationId: conversationId, settings: settings, servers: servers)
+    }
+
+    private func cleanupInterruptedTurn(conversationId: String) {
+        if !currentTurnMessageIds.isEmpty {
+            let ids = Array(currentTurnMessageIds)
+            DataStorage.shared.deleteMessageTurn(conversationId: conversationId, messageIds: ids)
+            currentTurnMessageIds.removeAll()
+        }
+        streamingState.reset()
+        isGenerating = false
+        statusText = ""
+        thinkingStartTime = nil
+    }
+
+    private func runGenerationLoop(
+        conversationId: String,
+        settings: OpenAISettings,
+        servers: [MCPServerConfig]
+    ) async {
+        var enabledTools: [(serverName: String, tool: MCPTool)] = []
+        var toolServerMap: [String: MCPServerConfig] = [:]
 
         for server in servers where server.isEnabled {
             for tool in server.tools where tool.isEnabled {
-                let safeName = "\(server.id.prefix(6))_\(tool.name)".replacingOccurrences(of: "-", with: "_")
-                toolServerMap[safeName] = (server, tool.rawName)
-                let schemaObj = (try? JSONSerialization.jsonObject(with: Data(tool.inputSchemaJSON.utf8))) as? [String: Any] ?? ["type": "object", "properties": [:]]
-                openAITools.append([
-                    "type": "function",
-                    "function": [
-                        "name": safeName,
-                        "description": "[\(server.name)] \(tool.description)",
-                        "parameters": schemaObj
-                    ]
-                ])
+                enabledTools.append((serverName: server.name, tool: tool))
+                toolServerMap[tool.name] = server
             }
         }
 
         var maxIterations = 8
         while maxIterations > 0 {
-            if isCancelledByUser || Task.isCancelled {
+            if Task.isCancelled {
+                cleanupInterruptedTurn(conversationId: conversationId)
                 return
             }
             maxIterations -= 1
-            let contextMessages = conversation.messages
 
-            let placeholderMsg = ChatMessage(
-                role: .assistant,
-                content: "",
-                toolCalls: nil
-            )
-            currentRunGeneratedMessageIds.insert(placeholderMsg.id)
-            streamingState.begin(messageId: placeholderMsg.id)
-
-            conversation.messages.append(placeholderMsg)
-            let msgIndex = conversation.messages.count - 1
-            DataStorage.shared.updateConversation(conversation, persistImmediately: false)
+            let currentMessages = DataStorage.shared.conversations.first(where: { $0.id == conversationId })?.messages ?? []
+            let placeholderMsg = ChatMessage(role: .assistant, content: "")
+            let placeholderId = placeholderMsg.id
+            currentTurnMessageIds.insert(placeholderId)
+            streamingState.begin(messageId: placeholderId)
+            DataStorage.shared.appendMessage(to: conversationId, message: placeholderMsg)
 
             do {
-                let (content, toolCalls) = try await OpenAIService.shared.streamChatCompletion(
+                statusText = "思考中"
+                let assistantMsg = try await OpenAIService.shared.createChatCompletionStream(
+                    messages: currentMessages,
                     settings: settings,
-                    messages: contextMessages,
-                    tools: openAITools.isEmpty ? nil : openAITools,
-                    onPartialUpdate: { [weak self] partialText in
-                        guard let self = self, !self.isCancelledByUser, !Task.isCancelled else { return }
-                        self.streamingState.pushPartialText(partialText)
+                    tools: enabledTools,
+                    onDelta: { [weak self] partialText in
+                        await MainActor.run {
+                            guard let self = self, !Task.isCancelled else { return }
+                            self.streamingState.pushPartialText(partialText)
+                        }
+                    },
+                    onReasoningDelta: { [weak self] partialReasoning in
+                        await MainActor.run {
+                            guard let self = self, !Task.isCancelled else { return }
+                            self.streamingState.pushPartialReasoning(partialReasoning)
+                        }
                     }
                 )
 
-                if isCancelledByUser || Task.isCancelled {
+                if Task.isCancelled {
+                    cleanupInterruptedTurn(conversationId: conversationId)
                     return
                 }
 
-                let finalText = content ?? ""
-                streamingState.finishImmediate(with: finalText)
+                streamingState.finishImmediate(
+                    with: assistantMsg.content,
+                    finalReasoning: assistantMsg.reasoningContent
+                )
 
-                conversation.messages[msgIndex].content = finalText
+                var finalizedAssistantMsg = assistantMsg
+                finalizedAssistantMsg.id = placeholderId
+                DataStorage.shared.replaceMessage(
+                    in: conversationId,
+                    messageId: placeholderId,
+                    with: finalizedAssistantMsg,
+                    persist: true
+                )
+                streamingState.reset()
 
-                if let calls = toolCalls, !calls.isEmpty {
-                    var executingCalls = calls.map { c -> ToolCallItem in
-                        var item = c
-                        item.isExecuting = true
-                        return item
-                    }
-                    conversation.messages[msgIndex].toolCalls = executingCalls
-                    DataStorage.shared.updateConversation(conversation, persistImmediately: false)
-
-                    for i in executingCalls.indices {
-                        if isCancelledByUser || Task.isCancelled {
-                            return
-                        }
-                        let call = executingCalls[i]
-                        statusText = "调用工具中"
-
-                        var toolOutput = ""
-                        if let mapping = toolServerMap[call.name] {
-                            do {
-                                toolOutput = try await MCPService.shared.callTool(
-                                    server: mapping.server,
-                                    rawName: mapping.originalToolName,
-                                    argumentsJSON: call.arguments
-                                )
-                                executingCalls[i].result = toolOutput
-                            } catch {
-                                if isCancelledByUser || Task.isCancelled || error is CancellationError {
-                                    return
-                                }
-                                let errStr = "Error: \(error.localizedDescription)"
-                                toolOutput = errStr
-                                executingCalls[i].error = error.localizedDescription
-                                executingCalls[i].result = errStr
-                            }
-                        } else {
-                            toolOutput = "Error: 未找到对应的 MCP 工具映射 (\(call.name))"
-                            executingCalls[i].error = "未找到工具"
-                            executingCalls[i].result = toolOutput
-                        }
-
-                        if isCancelledByUser || Task.isCancelled {
-                            return
-                        }
-
-                        executingCalls[i].isExecuting = false
-                        conversation.messages[msgIndex].toolCalls = executingCalls
-
-                        let toolMsg = ChatMessage(
-                            role: .tool,
-                            content: toolOutput,
-                            toolCallId: call.id
-                        )
-                        currentRunGeneratedMessageIds.insert(toolMsg.id)
-                        conversation.messages.append(toolMsg)
-                        DataStorage.shared.updateConversation(conversation, persistImmediately: false)
-                    }
-
-                    DataStorage.shared.saveConversations()
-                    statusText = "思考中"
-                } else {
-                    conversation.updatedAt = Date()
-                    DataStorage.shared.updateConversation(conversation, persistImmediately: true)
+                guard let toolCalls = finalizedAssistantMsg.toolCalls, !toolCalls.isEmpty else {
                     break
                 }
+
+                for tc in toolCalls {
+                    if Task.isCancelled {
+                        cleanupInterruptedTurn(conversationId: conversationId)
+                        return
+                    }
+
+                    statusText = "正在调用 \(tc.name)"
+
+                    let toolOutput: String
+                    var isErr = false
+
+                    if let server = toolServerMap[tc.name] {
+                        do {
+                            toolOutput = try await MCPService.shared.callTool(
+                                server: server,
+                                toolName: tc.name,
+                                argumentsJSON: tc.arguments
+                            )
+                        } catch {
+                            isErr = true
+                            toolOutput = "Error executing tool \(tc.name): \(error.localizedDescription)"
+                        }
+                    } else {
+                        isErr = true
+                        toolOutput = "Error: Server for tool \(tc.name) not found or disabled."
+                    }
+
+                    if Task.isCancelled {
+                        cleanupInterruptedTurn(conversationId: conversationId)
+                        return
+                    }
+
+                    DataStorage.shared.updateToolCallStatus(
+                        in: conversationId,
+                        messageId: finalizedAssistantMsg.id,
+                        toolCallId: tc.id,
+                        result: toolOutput,
+                        isExecuting: false,
+                        error: isErr ? toolOutput : nil
+                    )
+
+                    let toolReplyMsg = ChatMessage(
+                        role: .tool,
+                        content: toolOutput,
+                        toolCallId: tc.id
+                    )
+                    currentTurnMessageIds.insert(toolReplyMsg.id)
+                    DataStorage.shared.appendMessage(to: conversationId, message: toolReplyMsg)
+                }
+
+            } catch is CancellationError {
+                cleanupInterruptedTurn(conversationId: conversationId)
+                return
+            } catch let urlError as URLError where urlError.code == .cancelled {
+                cleanupInterruptedTurn(conversationId: conversationId)
+                return
             } catch {
-                if isCancelledByUser || Task.isCancelled || error is CancellationError || (error as NSError).code == NSURLErrorCancelled {
+                if Task.isCancelled {
+                    cleanupInterruptedTurn(conversationId: conversationId)
                     return
                 }
                 streamingState.reset()
-                if msgIndex < conversation.messages.count,
-                   conversation.messages[msgIndex].content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                   (conversation.messages[msgIndex].toolCalls ?? []).isEmpty {
-                    conversation.messages.remove(at: msgIndex)
+                let currentPlaceholder = DataStorage.shared.conversations
+                    .first(where: { $0.id == conversationId })?
+                    .messages.first(where: { $0.id == placeholderId })
+                if currentPlaceholder?.content.isEmpty == true && (currentPlaceholder?.toolCalls?.isEmpty ?? true) {
+                    DataStorage.shared.deleteMessageTurn(conversationId: conversationId, messageIds: [placeholderId])
                 }
-                DataStorage.shared.updateConversation(conversation, persistImmediately: true)
                 errorMessage = error.localizedDescription
                 break
             }
         }
 
-        if !isCancelledByUser && !Task.isCancelled {
-            streamingState.reset()
-            isGenerating = false
-            thinkingStartTime = nil
-            statusText = ""
-            currentRunGeneratedMessageIds.removeAll()
-        }
+        currentTurnMessageIds.removeAll()
+        streamingState.reset()
+        isGenerating = false
+        statusText = ""
+        thinkingStartTime = nil
     }
 }

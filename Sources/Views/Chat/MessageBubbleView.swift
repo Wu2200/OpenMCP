@@ -6,10 +6,107 @@ struct MessageDisplayTurn: Identifiable, Equatable {
     var role: MessageRole
     var primaryMessageId: String
     var content: String
+    var reasoningContent: String
     var attachments: [ChatAttachment]
     var toolCalls: [ToolCallItem]
     var createdAt: Date
     var underlyingMessageIds: [String]
+}
+
+struct ReasoningFoldCardView: View {
+    let reasoningText: String
+    let isStreamingReasoning: Bool
+    let startDate: Date
+    let theme: AppThemePalette
+    var width: CGFloat
+    @State private var isExpanded: Bool = true
+
+    private var previewLine: String {
+        let lines = reasoningText
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        return lines.last ?? "正在深度思考..."
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 7) {
+                Image(systemName: "brain.head.profile")
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundColor(theme.accent)
+
+                if isStreamingReasoning {
+                    TimelineView(.periodic(from: .now, by: 0.1)) { context in
+                        let elapsed = max(0, context.date.timeIntervalSince(startDate))
+                        HStack(spacing: 5) {
+                            Text("深度思考中")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(theme.primaryText)
+                            Text(ThinkingStatusView.formatElapsed(elapsed))
+                                .font(.system(size: 11.5, weight: .medium, design: .rounded).monospacedDigit())
+                                .foregroundColor(theme.secondaryText)
+                        }
+                    }
+                } else {
+                    Text("已深度思考")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(theme.secondaryText)
+                }
+
+                if !isExpanded {
+                    Text(previewLine)
+                        .font(.system(size: 11.5))
+                        .foregroundColor(theme.mutedText)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+
+                Spacer(minLength: 4)
+
+                Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundColor(theme.mutedText)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                withAnimation(.easeInOut(duration: 0.16)) {
+                    isExpanded.toggle()
+                }
+            }
+
+            if isExpanded {
+                Rectangle()
+                    .fill(theme.border.opacity(0.75))
+                    .frame(height: 1)
+
+                Text(reasoningText)
+                    .font(.system(size: 12.5))
+                    .foregroundColor(theme.secondaryText)
+                    .lineSpacing(3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+            }
+        }
+        .frame(width: width, alignment: .leading)
+        .background(theme.elevatedBackground.opacity(0.65))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(theme.border, lineWidth: 1)
+        )
+        .onChange(of: isStreamingReasoning) { streaming in
+            if !streaming {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    isExpanded = false
+                }
+            }
+        }
+    }
 }
 
 struct MessageBubbleView: View {
@@ -176,9 +273,28 @@ struct MessageBubbleView: View {
         return base
     }
 
+    private var effectiveReasoningText: String {
+        let base = turn.reasoningContent.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isActiveGeneratingTurn else {
+            return base
+        }
+        let live = streamingState.displayedReasoning.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !live.isEmpty {
+            if base.isEmpty || base == live {
+                return live
+            }
+            if !base.hasSuffix(live) {
+                return base + "\n\n" + live
+            }
+            return live
+        }
+        return base
+    }
+
     private var assistantTurnView: some View {
         let currentText = effectiveAssistantText
-        let isPureThinking = isActiveGeneratingTurn && currentText.isEmpty && turn.toolCalls.isEmpty
+        let currentReasoning = effectiveReasoningText
+        let isPureThinking = isActiveGeneratingTurn && currentText.isEmpty && currentReasoning.isEmpty && turn.toolCalls.isEmpty
         let innerContentWidth = max(180, bubbleColumnWidth - 24)
 
         return HStack(alignment: .top, spacing: 6) {
@@ -217,6 +333,16 @@ struct MessageBubbleView: View {
                                     .frame(width: innerContentWidth)
                             }
 
+                            if !currentReasoning.isEmpty {
+                                ReasoningFoldCardView(
+                                    reasoningText: currentReasoning,
+                                    isStreamingReasoning: isActiveGeneratingTurn && currentText.isEmpty,
+                                    startDate: thinkingStartTime ?? turn.createdAt,
+                                    theme: theme,
+                                    width: innerContentWidth
+                                )
+                            }
+
                             if !currentText.isEmpty {
                                 MarkdownDocumentView(
                                     content: currentText,
@@ -225,7 +351,7 @@ struct MessageBubbleView: View {
                                     isStreaming: isActiveGeneratingTurn
                                 )
                                 .frame(width: innerContentWidth, alignment: .leading)
-                            } else if isActiveGeneratingTurn {
+                            } else if isActiveGeneratingTurn && currentReasoning.isEmpty {
                                 ThinkingStatusView(
                                     statusText: statusText,
                                     startDate: thinkingStartTime ?? turn.createdAt,
