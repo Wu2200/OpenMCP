@@ -1082,10 +1082,10 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
                         coord.scrollToBottom(force: false, animated: true)
                     }
                 }
-            } else if wasViewActive != isViewActive && isViewActive && autoFollowOutput {
-                scheduleBottomFollow(coord)
+            } else if !wasViewActive && isViewActive && autoFollowOutput {
+                coord.scheduleBottomFollow()
             } else if wasGenerating != isGenerating && autoFollowOutput {
-                scheduleBottomFollow(coord)
+                coord.scheduleBottomFollow()
             }
         }
     }
@@ -1194,6 +1194,16 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
             animator.startAnimation()
         }
 
+        func scheduleBottomFollow() {
+            scrollToBottom(animated: false)
+            for delay in [0.08, 0.22, 0.45] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                    guard let self = self, self.isViewActive, self.autoFollowOutput else { return }
+                    self.scrollToBottom(animated: false)
+                }
+            }
+        }
+
         private func bottomOffset(for scrollView: UIScrollView) -> CGFloat {
             let scale = UIScreen.main.scale
             let minOffset = -scrollView.adjustedContentInset.top
@@ -1223,9 +1233,12 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
                 }
 
                 let distanceToTarget = self.bottomOffset(for: sv) - sv.contentOffset.y
-                guard heightDelta >= 1.5 || (self.isGenerating && distanceToTarget > 6.0) else { return }
+                guard heightDelta >= 0.5 || (self.isGenerating && distanceToTarget > 1.0) else {
+                    self.lastObservedHeight = newHeight
+                    return
+                }
                 self.lastObservedHeight = newHeight
-                self.scrollToBottom(force: false, animated: true)
+                self.scheduleBottomFollow()
             }
         }
 
