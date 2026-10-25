@@ -798,6 +798,21 @@ struct SettingsView: View {
                     .foregroundColor(theme.accent)
             }
 
+            Toggle(isOn: Binding(
+                get: { logger.isLoggingEnabled },
+                set: { logger.setLoggingEnabled($0) }
+            )) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("启用诊断日志")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(theme.primaryText)
+                    Text("关闭后停止记录新的请求、流式状态与工具调用日志，已有日志会保留")
+                        .font(.system(size: 11))
+                        .foregroundColor(theme.secondaryText)
+                }
+            }
+            .toggleStyle(SwitchToggleStyle(tint: theme.accent))
+
             HStack(spacing: 10) {
                 Button(action: {
                     dismissKeyboard()
