@@ -312,7 +312,7 @@ struct ConversationListView: View {
                     }
                 }
 
-                if let preview = lastMessage?.content {
+                if let preview = previewText {
                     Text(preview)
                         .font(.system(size: 13))
                         .foregroundColor(theme.secondaryText)
