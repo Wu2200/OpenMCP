@@ -291,6 +291,8 @@ class AgentCoordinator: ObservableObject {
         generationTask = nil
 
         let convId = activeConversationId
+        let currentTurnId = activeTurnId
+        let currentTurnPrompt = activeTurnPrompt
         let partialLength = streamingState.displayedText.count
         let idsToDelete = currentRunGeneratedMessageIds
         currentRunGeneratedMessageIds.removeAll()
@@ -301,7 +303,9 @@ class AgentCoordinator: ObservableObject {
             level: .info,
             title: "用户手动停止输出",
             summary: "已清理本轮生成消息 (\(idsToDelete.count) 条)，停止前已显示 \(partialLength) 字",
-            conversationId: convId
+            conversationId: convId,
+            turnId: currentTurnId,
+            turnPrompt: currentTurnPrompt
         )
 
         withAnimation(.spring(response: 0.26, dampingFraction: 0.86)) {
@@ -315,6 +319,8 @@ class AgentCoordinator: ObservableObject {
         }
         releaseAfterGeneration(convId)
         activeConversationId = nil
+        activeTurnId = nil
+        activeTurnPrompt = nil
     }
 
     func sendMessage(
@@ -408,8 +414,26 @@ class AgentCoordinator: ObservableObject {
         guard var conversation = DataStorage.shared.conversations.first(where: { $0.id == conversationId }) else { return }
         let effectiveSettings = settings.resolvedSettings(for: conversation)
 
+        let turnId = UUID().uuidString
+        let lastUserMsg = conversation.messages.last(where: { $0.role == .user })
+        let rawPromptText: String = {
+            if let text = lastUserMsg?.content.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
+                return text
+            }
+            if let firstAtt = lastUserMsg?.attachments?.first {
+                if let snippet = firstAtt.textContent?.trimmingCharacters(in: .whitespacesAndNewlines), !snippet.isEmpty {
+                    return snippet
+                }
+                return firstAtt.fileName
+            }
+            return "对话交互"
+        }()
+        let turnPrompt = String(rawPromptText.replacingOccurrences(of: "\n", with: " ").prefix(48))
+
         isCancelledByUser = false
         activeConversationId = conversationId
+        activeTurnId = turnId
+        activeTurnPrompt = turnPrompt
         currentRunGeneratedMessageIds.removeAll()
         errorMessage = nil
         isGenerating = true
@@ -436,11 +460,13 @@ class AgentCoordinator: ObservableObject {
         }
 
         var maxIterations = 8
+        var stepIndex = 0
         while maxIterations > 0 {
             if isCancelledByUser || Task.isCancelled {
                 return
             }
             maxIterations -= 1
+            stepIndex += 1
             let contextMessages = conversation.messages
 
             let placeholderMsg = ChatMessage(
@@ -462,6 +488,10 @@ class AgentCoordinator: ObservableObject {
                     messages: contextMessages,
                     tools: openAITools.isEmpty ? nil : openAITools,
                     conversationId: conversationId,
+                    conversationTitle: conversation.title,
+                    turnId: turnId,
+                    turnPrompt: turnPrompt,
+                    stepIndex: stepIndex,
                     onPartialUpdate: { [weak self] partialText in
                         guard let self = self, !self.isCancelledByUser, !Task.isCancelled else { return }
                         self.streamingState.pushPartialText(partialText)
@@ -509,35 +539,62 @@ class AgentCoordinator: ObservableObject {
                                 )
                                 executingCalls[i].result = toolOutput
                                 let callElapsed = String(format: "%.2fs", CFAbsoluteTimeGetCurrent() - callStart)
-                                AppLogManager.shared.log(
-                                    category: .mcpTool,
-                                    level: .info,
-                                    title: "MCP 工具执行成功 [\(mapping.originalToolName)]",
-                                    summary: "服务: \(mapping.server.name) · 耗时: \(callElapsed) · 返回长度: \(toolOutput.count) 字",
-                                    details: "Tool: \(call.name) (\(mapping.originalToolName))\nServer: \(mapping.server.name)\nArguments:\n\(call.arguments)\n\nOutput Preview (前500字):\n\(toolOutput.prefix(500))",
-                                    conversationId: conversationId
+                                AppLogManager.shared.logToolCall(
+                                    conversationId: conversationId,
+                                    conversationTitle: conversation.title,
+                                    turnId: turnId,
+                                    turnPrompt: turnPrompt,
+                                    stepIndex: stepIndex,
+                                    toolName: mapping.originalToolName,
+                                    serverName: mapping.server.name,
+                                    elapsed: callElapsed,
+                                    isSuccess: true,
+                                    summary: "服务: \(mapping.server.name) · 耗时: \(callElapsed) · 返回: \(toolOutput.count) 字",
+                                    arguments: call.arguments,
+                                    outputPreview: String(toolOutput.prefix(600))
                                 )
                             } catch {
                                 if isCancelledByUser || Task.isCancelled || error is CancellationError {
                                     return
                                 }
+                                let callElapsed = String(format: "%.2fs", CFAbsoluteTimeGetCurrent() - callStart)
                                 let errStr = "Error: \(error.localizedDescription)"
                                 toolOutput = errStr
                                 executingCalls[i].error = error.localizedDescription
                                 executingCalls[i].result = errStr
-                                AppLogManager.shared.log(
-                                    category: .mcpTool,
-                                    level: .error,
-                                    title: "MCP 工具执行失败 [\(mapping.originalToolName)]",
-                                    summary: error.localizedDescription,
-                                    details: "Tool: \(call.name)\nArguments:\n\(call.arguments)\nError:\n\(error.localizedDescription)",
-                                    conversationId: conversationId
+                                AppLogManager.shared.logToolCall(
+                                    conversationId: conversationId,
+                                    conversationTitle: conversation.title,
+                                    turnId: turnId,
+                                    turnPrompt: turnPrompt,
+                                    stepIndex: stepIndex,
+                                    toolName: mapping.originalToolName,
+                                    serverName: mapping.server.name,
+                                    elapsed: callElapsed,
+                                    isSuccess: false,
+                                    summary: "服务: \(mapping.server.name) · 失败: \(error.localizedDescription)",
+                                    arguments: call.arguments,
+                                    outputPreview: error.localizedDescription
                                 )
                             }
                         } else {
                             toolOutput = "Error: 未找到对应的 MCP 工具映射 (\(call.name))"
                             executingCalls[i].error = "未找到工具"
                             executingCalls[i].result = toolOutput
+                            AppLogManager.shared.logToolCall(
+                                conversationId: conversationId,
+                                conversationTitle: conversation.title,
+                                turnId: turnId,
+                                turnPrompt: turnPrompt,
+                                stepIndex: stepIndex,
+                                toolName: call.name,
+                                serverName: "未知服务",
+                                elapsed: "0.00s",
+                                isSuccess: false,
+                                summary: "未找到对应的 MCP 工具映射",
+                                arguments: call.arguments,
+                                outputPreview: toolOutput
+                            )
                         }
 
                         if isCancelledByUser || Task.isCancelled {
@@ -588,6 +645,8 @@ class AgentCoordinator: ObservableObject {
             currentRunGeneratedMessageIds.removeAll()
             releaseAfterGeneration(activeConversationId)
             activeConversationId = nil
+            activeTurnId = nil
+            activeTurnPrompt = nil
         }
     }
 }
