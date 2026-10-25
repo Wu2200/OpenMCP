@@ -35,7 +35,7 @@ class DataStorage: ObservableObject {
            let decoded = try? JSONDecoder().decode([Conversation].self, from: data) {
             self.conversations = decoded
         } else {
-            self.conversations = [Conversation(title: "新对话")]
+            self.conversations = [Conversation(title: "新对话", messages: [])]
         }
     }
 
@@ -68,17 +68,22 @@ class DataStorage: ObservableObject {
         }
     }
 
-    func createNewConversation() -> Conversation {
-        let conv = Conversation(title: "新对话")
+    @discardableResult
+    func addConversation(title: String = "新对话") -> Conversation {
+        let conv = Conversation(title: title, messages: [])
         conversations.insert(conv, at: 0)
         saveConversations()
         return conv
     }
 
+    func createNewConversation() -> Conversation {
+        return addConversation(title: "新对话")
+    }
+
     func deleteConversation(id: String) {
         conversations.removeAll { $0.id == id }
         if conversations.isEmpty {
-            conversations.append(Conversation(title: "新对话"))
+            conversations.append(Conversation(title: "新对话", messages: []))
         }
         saveConversations()
     }
