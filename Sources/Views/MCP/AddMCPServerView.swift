@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct AddMCPServerView: View {
     @Environment(\.dismiss) var dismiss
@@ -144,6 +145,12 @@ struct AddMCPServerView: View {
                     }
                     .padding(16)
                 }
+                .scrollDismissesKeyboard(.interactively)
+                .simultaneousGesture(
+                    TapGesture().onEnded {
+                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                    }
+                )
             }
             .navigationTitle(server == nil ? "添加 MCP 服务" : "编辑 MCP 服务")
             .navigationBarTitleDisplayMode(.inline)
@@ -170,6 +177,7 @@ struct AddMCPServerView: View {
     }
 
     private func testAndFetch() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         isTesting = true
         testResult = nil
         let target = MCPServer(name: name, url: url, token: token)
@@ -194,6 +202,7 @@ struct AddMCPServerView: View {
     }
 
     private func saveServer() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         var s = server ?? MCPServer(name: name, url: url, token: token)
         s.name = name
         s.url = url

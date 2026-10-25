@@ -98,6 +98,22 @@ class DataStorage: ObservableObject {
         }
     }
 
+    func updateMessageContent(conversationId: String, messageId: String, newContent: String) {
+        guard let cIdx = conversations.firstIndex(where: { $0.id == conversationId }),
+              let mIdx = conversations[cIdx].messages.firstIndex(where: { $0.id == messageId }) else { return }
+        conversations[cIdx].messages[mIdx].content = newContent
+        conversations[cIdx].updatedAt = Date()
+        saveConversations()
+    }
+
+    func deleteMessageTurn(conversationId: String, messageIds: [String]) {
+        guard let cIdx = conversations.firstIndex(where: { $0.id == conversationId }) else { return }
+        let idSet = Set(messageIds)
+        conversations[cIdx].messages.removeAll { idSet.contains($0.id) }
+        conversations[cIdx].updatedAt = Date()
+        saveConversations()
+    }
+
     func deleteConversation(at indexSet: IndexSet) {
         conversations.remove(atOffsets: indexSet)
         saveConversations()

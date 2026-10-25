@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct SettingsView: View {
     @EnvironmentObject var storage: DataStorage
@@ -51,6 +52,12 @@ struct SettingsView: View {
                     .padding(.top, 8)
                     .padding(.bottom, 32)
                 }
+                .scrollDismissesKeyboard(.interactively)
+                .simultaneousGesture(
+                    TapGesture().onEnded {
+                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                    }
+                )
             }
             .navigationTitle("外观与设置")
             .navigationBarTitleDisplayMode(.large)
@@ -290,7 +297,10 @@ struct SettingsView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
                     if !storage.settings.availableModels.isEmpty {
-                        Button(action: { showingModelPickerSheet = true }) {
+                        Button(action: {
+                            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                            showingModelPickerSheet = true
+                        }) {
                             HStack(spacing: 4) {
                                 Text("列表 (\(storage.settings.availableModels.count))")
                                     .font(.system(size: 12, weight: .semibold))
@@ -365,6 +375,7 @@ struct SettingsView: View {
                 ForEach(presets, id: \.name) { item in
                     let isCurrent = storage.settings.baseURL == item.base
                     Button(action: {
+                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
                         storage.settings.baseURL = item.base
                         storage.settings.modelName = item.model
                         storage.settings.availableModels = []
@@ -504,6 +515,7 @@ struct SettingsView: View {
                         .padding(.horizontal, 16)
                         .padding(.bottom, 24)
                     }
+                    .scrollDismissesKeyboard(.interactively)
                 }
             }
             .navigationTitle("选择模型 (\(storage.settings.availableModels.count))")
@@ -518,6 +530,7 @@ struct SettingsView: View {
     }
 
     private func fetchModels() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         fetchErrorMessage = nil
         fetchSuccessMessage = nil
         isFetchingModels = true

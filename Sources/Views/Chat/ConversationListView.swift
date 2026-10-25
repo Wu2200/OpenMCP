@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct ConversationListView: View {
     @EnvironmentObject var storage: DataStorage
@@ -50,6 +51,12 @@ struct ConversationListView: View {
                     .padding(.top, 8)
                     .padding(.bottom, 28)
                 }
+                .scrollDismissesKeyboard(.interactively)
+                .simultaneousGesture(
+                    TapGesture().onEnded {
+                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                    }
+                )
             }
             .navigationTitle("AI 工作台")
             .navigationBarTitleDisplayMode(.large)
@@ -229,6 +236,7 @@ struct ConversationListView: View {
         let hasTools = conv.messages.contains(where: { ($0.toolCalls?.isEmpty == false) })
 
         return Button(action: {
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             navigationPath.append(conv.id)
         }) {
             VStack(alignment: .leading, spacing: 10) {
@@ -335,6 +343,7 @@ struct ConversationListView: View {
     }
 
     private func createAndOpenConversation() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         let newConv = storage.addConversation()
         navigationPath.append(newConv.id)
     }

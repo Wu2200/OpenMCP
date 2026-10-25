@@ -8,146 +8,169 @@ class AgentCoordinator: ObservableObject {
     @Published var statusText: String = ""
     @Published var errorMessage: String? = nil
 
-    private var currentTask: Task<Void, Never>? = nil
-
     func sendMessage(
         conversationId: String,
         userPrompt: String,
         settings: OpenAISettings,
         servers: [MCPServer]
     ) async {
-        guard !userPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let trimmed = userPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
         guard var conversation = DataStorage.shared.conversations.first(where: { $0.id == conversationId }) else { return }
+
+        let userMsg = ChatMessage(role: .user, content: trimmed)
+        conversation.messages.append(userMsg)
+        conversation.updatedAt = Date()
+        if conversation.messages.filter({ $0.role == .user }).count == 1 && conversation.title == "新对话" {
+            conversation.title = String(trimmed.prefix(18))
+        }
+        DataStorage.shared.updateConversation(conversation)
+
+        await runGenerationLoop(conversationId: conversationId, settings: settings, servers: servers)
+    }
+
+    func retryFromMessage(
+        conversationId: String,
+        messageId: String,
+        newPrompt: String? = nil,
+        settings: OpenAISettings,
+        servers: [MCPServer]
+    ) async {
+        guard var conversation = DataStorage.shared.conversations.first(where: { $0.id == conversationId }) else { return }
+        guard let idx = conversation.messages.firstIndex(where: { $0.id == messageId }) else { return }
+
+        if conversation.messages[idx].role == .user {
+            if let updated = newPrompt?.trimmingCharacters(in: .whitespacesAndNewlines), !updated.isEmpty {
+                conversation.messages[idx].content = updated
+            }
+            if idx + 1 < conversation.messages.count {
+                conversation.messages.removeSubrange((idx + 1)..<conversation.messages.count)
+            }
+        } else {
+            if let userIdx = conversation.messages[0...idx].lastIndex(where: { $0.role == .user }) {
+                if userIdx + 1 < conversation.messages.count {
+                    conversation.messages.removeSubrange((userIdx + 1)..<conversation.messages.count)
+                }
+            } else {
+                conversation.messages.removeSubrange(idx..<conversation.messages.count)
+            }
+        }
+
+        conversation.updatedAt = Date()
+        DataStorage.shared.updateConversation(conversation)
+
+        await runGenerationLoop(conversationId: conversationId, settings: settings, servers: servers)
+    }
+
+    private func runGenerationLoop(
+        conversationId: String,
+        settings: OpenAISettings,
+        servers: [MCPServer]
+    ) async {
+        guard var conversation = DataStorage.shared.conversations.first(where: { $0.id == conversationId }) else { return }
+
         errorMessage = nil
         isGenerating = true
         statusText = "思考中..."
 
-        let userMsg = ChatMessage(role: .user, content: userPrompt)
-        conversation.messages.append(userMsg)
-        conversation.updatedAt = Date()
-        DataStorage.shared.updateConversation(conversation)
-
-        var activeToolsMap: [String: (server: MCPServer, rawName: String)] = [:]
         var openAITools: [[String: Any]] = []
+        var toolServerMap: [String: (server: MCPServer, originalToolName: String)] = [:]
 
         for server in servers where server.isEnabled {
             for tool in server.tools where tool.isEnabled {
-                activeToolsMap[tool.name] = (server, tool.rawName)
-
-                var paramsObj: Any = ["type": "object", "properties": [String: Any]()]
-                if let schemaData = tool.inputSchemaJSON.data(using: .utf8),
-                   let parsed = try? JSONSerialization.jsonObject(with: schemaData) {
-                    paramsObj = parsed
-                }
-
+                let safeName = "\(server.id.prefix(6))_\(tool.name)".replacingOccurrences(of: "-", with: "_")
+                toolServerMap[safeName] = (server, tool.name)
+                let schemaObj = (try? JSONSerialization.jsonObject(with: Data(tool.inputSchemaJSON.utf8))) as? [String: Any] ?? ["type": "object", "properties": [:]]
                 openAITools.append([
                     "type": "function",
                     "function": [
-                        "name": tool.name,
+                        "name": safeName,
                         "description": "[\(server.name)] \(tool.description)",
-                        "parameters": paramsObj
+                        "parameters": schemaObj
                     ]
                 ])
             }
         }
 
-        currentTask = Task {
-            var loopCount = 0
-            let maxLoops = 8
+        var maxIterations = 8
+        while maxIterations > 0 {
+            maxIterations -= 1
+            do {
+                let (content, toolCalls) = try await OpenAIService.shared.chatCompletion(
+                    settings: settings,
+                    messages: conversation.messages,
+                    tools: openAITools.isEmpty ? nil : openAITools
+                )
 
-            while loopCount < maxLoops {
-                if Task.isCancelled { break }
-                loopCount += 1
+                var assistantMsg = ChatMessage(
+                    role: .assistant,
+                    content: content ?? "",
+                    toolCalls: toolCalls
+                )
 
-                do {
-                    statusText = loopCount == 1 ? "思考中..." : "综合工具调用结果思考中..."
-                    let result = try await OpenAIService.shared.chatCompletion(
-                        settings: settings,
-                        messages: conversation.messages,
-                        tools: openAITools.isEmpty ? nil : openAITools
-                    )
+                if let calls = toolCalls, !calls.isEmpty {
+                    var executingCalls = calls.map { c -> ToolCallItem in
+                        var item = c
+                        item.isExecuting = true
+                        return item
+                    }
+                    assistantMsg.toolCalls = executingCalls
+                    conversation.messages.append(assistantMsg)
+                    DataStorage.shared.updateConversation(conversation)
 
-                    if let toolCalls = result.toolCalls, !toolCalls.isEmpty {
-                        let assistantMsg = ChatMessage(
-                            role: .assistant,
-                            content: result.content ?? "",
-                            toolCalls: toolCalls
-                        )
-                        conversation.messages.append(assistantMsg)
-                        DataStorage.shared.updateConversation(conversation)
+                    let msgIndex = conversation.messages.count - 1
 
-                        let assistantIndex = conversation.messages.count - 1
+                    for i in executingCalls.indices {
+                        let call = executingCalls[i]
+                        statusText = "正在调用工具: \(call.name)..."
 
-                        for i in 0..<toolCalls.count {
-                            if Task.isCancelled { break }
-                            let call = toolCalls[i]
-                            statusText = "正在调用工具: \(call.name)..."
-
-                            conversation.messages[assistantIndex].toolCalls?[i].isExecuting = true
-                            DataStorage.shared.updateConversation(conversation)
-
-                            var execResult = ""
-                            var execError: String? = nil
-
-                            if let target = activeToolsMap[call.name] {
-                                do {
-                                    execResult = try await MCPService.shared.callTool(
-                                        server: target.server,
-                                        rawName: target.rawName,
-                                        argumentsJSON: call.arguments
-                                    )
-                                } catch {
-                                    execError = error.localizedDescription
-                                    execResult = "错误: \(error.localizedDescription)"
-                                }
-                            } else {
-                                execError = "未找到已启用的目标 MCP 工具"
-                                execResult = "错误: 未找到该工具对应的 MCP 服务"
+                        var toolOutput = ""
+                        if let mapping = toolServerMap[call.name] {
+                            let argsDict = (try? JSONSerialization.jsonObject(with: Data(call.arguments.utf8))) as? [String: Any] ?? [:]
+                            do {
+                                toolOutput = try await MCPService.shared.callTool(
+                                    on: mapping.server,
+                                    toolName: mapping.originalToolName,
+                                    arguments: argsDict
+                                )
+                                executingCalls[i].result = toolOutput
+                            } catch {
+                                let errStr = "Error: \(error.localizedDescription)"
+                                toolOutput = errStr
+                                executingCalls[i].error = error.localizedDescription
+                                executingCalls[i].result = errStr
                             }
-
-                            conversation.messages[assistantIndex].toolCalls?[i].isExecuting = false
-                            conversation.messages[assistantIndex].toolCalls?[i].result = execResult
-                            conversation.messages[assistantIndex].toolCalls?[i].error = execError
-
-                            let toolMsg = ChatMessage(
-                                role: .tool,
-                                content: execResult,
-                                toolCalls: nil,
-                                toolCallId: call.id
-                            )
-                            conversation.messages.append(toolMsg)
-                            conversation.updatedAt = Date()
-                            DataStorage.shared.updateConversation(conversation)
+                        } else {
+                            toolOutput = "Error: 未找到对应的 MCP 工具映射 (\(call.name))"
+                            executingCalls[i].error = "未找到工具"
+                            executingCalls[i].result = toolOutput
                         }
-                    } else {
-                        let finalContent = result.content ?? ""
-                        let assistantMsg = ChatMessage(
-                            role: .assistant,
-                            content: finalContent
+
+                        executingCalls[i].isExecuting = false
+                        conversation.messages[msgIndex].toolCalls = executingCalls
+
+                        let toolMsg = ChatMessage(
+                            role: .tool,
+                            content: toolOutput,
+                            toolCallId: call.id
                         )
-                        conversation.messages.append(assistantMsg)
-                        conversation.updatedAt = Date()
+                        conversation.messages.append(toolMsg)
                         DataStorage.shared.updateConversation(conversation)
-                        break
                     }
-                } catch {
-                    if !Task.isCancelled {
-                        self.errorMessage = error.localizedDescription
-                    }
+
+                    statusText = "整理工具结果..."
+                } else {
+                    conversation.messages.append(assistantMsg)
+                    conversation.updatedAt = Date()
+                    DataStorage.shared.updateConversation(conversation)
                     break
                 }
+            } catch {
+                errorMessage = error.localizedDescription
+                break
             }
-
-            self.isGenerating = false
-            self.statusText = ""
         }
 
-        await currentTask?.value
-    }
-
-    func cancel() {
-        currentTask?.cancel()
-        currentTask = nil
         isGenerating = false
         statusText = ""
     }
