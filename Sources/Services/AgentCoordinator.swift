@@ -8,20 +8,17 @@ final class StreamingTurnState: ObservableObject {
     @Published var displayedText: String = ""
     @Published var displayedReasoning: String = ""
 
-    private var pendingText: String? = nil
-    private var pendingReasoning: String? = nil
-    private var lastTextCommitTime: CFAbsoluteTime = 0
-    private var lastReasoningCommitTime: CFAbsoluteTime = 0
-    private var coalesceWorkItem: DispatchWorkItem? = nil
-    private var isDisplayPaused = false
+    private var targetText: String = ""
+    private var targetReasoning: String = ""
+    private var isStreamComplete: Bool = false
+    private var isDisplayPaused: Bool = false
+    private var drainTimer: Timer? = nil
 
     func begin(messageId: String) {
-        coalesceWorkItem?.cancel()
-        coalesceWorkItem = nil
-        pendingText = nil
-        pendingReasoning = nil
-        lastTextCommitTime = 0
-        lastReasoningCommitTime = 0
+        stopDrainTimer()
+        targetText = ""
+        targetReasoning = ""
+        isStreamComplete = false
         isDisplayPaused = false
         activeMessageId = messageId
         displayedText = ""
@@ -32,99 +29,146 @@ final class StreamingTurnState: ObservableObject {
         guard isDisplayPaused != paused else { return }
         isDisplayPaused = paused
         if paused {
-            coalesceWorkItem?.cancel()
-            coalesceWorkItem = nil
+            stopDrainTimer()
         } else {
-            commitPendingUpdates(at: CFAbsoluteTimeGetCurrent())
+            flushImmediatelyToTarget()
         }
     }
 
     func pushPartialText(_ newText: String) {
-        guard displayedText != newText else { return }
-        pendingText = newText
+        guard targetText != newText else { return }
+        targetText = newText
         guard !isDisplayPaused else { return }
 
-        let now = CFAbsoluteTimeGetCurrent()
-        let elapsed = now - lastTextCommitTime
-        let minInterval: CFAbsoluteTime = 0.055
-
-        if displayedText.isEmpty || elapsed >= minInterval {
-            commitPendingUpdates(at: now)
-        } else {
-            scheduleCoalescedCommit(delay: minInterval - elapsed)
+        if displayedText.isEmpty {
+            let initialEnd = advanceIndex(in: targetText, from: targetText.startIndex, maxChars: min(16, targetText.count))
+            commitDisplayed(text: String(targetText[..<initialEnd]), reasoning: nil)
         }
+        ensureDrainTimer()
     }
 
     func pushPartialReasoning(_ newReasoning: String) {
-        guard displayedReasoning != newReasoning else { return }
-        pendingReasoning = newReasoning
+        guard targetReasoning != newReasoning else { return }
+        targetReasoning = newReasoning
         guard !isDisplayPaused else { return }
 
-        let now = CFAbsoluteTimeGetCurrent()
-        let elapsed = now - lastReasoningCommitTime
-        let minInterval: CFAbsoluteTime = 0.065
-
-        if displayedReasoning.isEmpty || elapsed >= minInterval {
-            commitPendingUpdates(at: now)
-        } else {
-            scheduleCoalescedCommit(delay: minInterval - elapsed)
+        if displayedReasoning != targetReasoning {
+            commitDisplayed(text: nil, reasoning: targetReasoning)
         }
     }
 
-    private func scheduleCoalescedCommit(delay: TimeInterval) {
-        guard coalesceWorkItem == nil else { return }
-        let item = DispatchWorkItem { [weak self] in
-            guard let self = self else { return }
-            self.coalesceWorkItem = nil
-            self.commitPendingUpdates(at: CFAbsoluteTimeGetCurrent())
+    private func ensureDrainTimer() {
+        guard drainTimer == nil, !isDisplayPaused else { return }
+        let timer = Timer(timeInterval: 0.025, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.tickDrain()
+            }
         }
-        coalesceWorkItem = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + max(0.016, delay), execute: item)
+        RunLoop.main.add(timer, forMode: .common)
+        drainTimer = timer
     }
 
-    private func commitPendingUpdates(at timestamp: CFAbsoluteTime) {
-        coalesceWorkItem?.cancel()
-        coalesceWorkItem = nil
-        guard !isDisplayPaused else { return }
+    private func stopDrainTimer() {
+        drainTimer?.invalidate()
+        drainTimer = nil
+    }
 
+    private func tickDrain() {
+        guard !isDisplayPaused else {
+            stopDrainTimer()
+            return
+        }
+
+        var didChange = false
+        var nextText: String? = nil
+        var nextReasoning: String? = nil
+
+        if displayedReasoning != targetReasoning {
+            nextReasoning = targetReasoning
+            didChange = true
+        }
+
+        if displayedText != targetText {
+            if !targetText.hasPrefix(displayedText) {
+                nextText = targetText
+            } else {
+                let currentEnd = displayedText.endIndex
+                let remainingCount = targetText.distance(from: currentEnd, to: targetText.endIndex)
+                if remainingCount > 0 {
+                    let stepChars: Int
+                    if isStreamComplete {
+                        stepChars = max(14, (remainingCount + 2) / 3)
+                    } else if remainingCount > 240 {
+                        stepChars = max(24, remainingCount / 5)
+                    } else if remainingCount > 90 {
+                        stepChars = max(12, remainingCount / 6)
+                    } else if remainingCount > 32 {
+                        stepChars = max(6, remainingCount / 6)
+                    } else if remainingCount > 10 {
+                        stepChars = 4
+                    } else {
+                        stepChars = min(remainingCount, 2)
+                    }
+                    let nextIdx = advanceIndex(in: targetText, from: currentEnd, maxChars: min(remainingCount, stepChars))
+                    nextText = String(targetText[..<nextIdx])
+                }
+            }
+            if nextText != nil {
+                didChange = true
+            }
+        }
+
+        if didChange {
+            commitDisplayed(text: nextText, reasoning: nextReasoning)
+        }
+
+        if displayedText == targetText && displayedReasoning == targetReasoning {
+            stopDrainTimer()
+        }
+    }
+
+    private func advanceIndex(in text: String, from start: String.Index, maxChars: Int) -> String.Index {
+        guard maxChars > 0, start < text.endIndex else { return start }
+        return text.index(start, offsetBy: maxChars, limitedBy: text.endIndex) ?? text.endIndex
+    }
+
+    private func flushImmediatelyToTarget() {
+        stopDrainTimer()
+        let nextText = (displayedText != targetText) ? targetText : nil
+        let nextReasoning = (displayedReasoning != targetReasoning) ? targetReasoning : nil
+        if nextText != nil || nextReasoning != nil {
+            commitDisplayed(text: nextText, reasoning: nextReasoning)
+        }
+    }
+
+    private func commitDisplayed(text: String?, reasoning: String?) {
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) {
-            if let text = pendingText, text != displayedText {
+            if let text = text, displayedText != text {
                 displayedText = text
-                lastTextCommitTime = timestamp
             }
-            pendingText = nil
-
-            if let reasoning = pendingReasoning, reasoning != displayedReasoning {
+            if let reasoning = reasoning, displayedReasoning != reasoning {
                 displayedReasoning = reasoning
-                lastReasoningCommitTime = timestamp
             }
-            pendingReasoning = nil
         }
     }
 
     func finishImmediate(with finalText: String, finalReasoning: String? = nil) {
-        coalesceWorkItem?.cancel()
-        coalesceWorkItem = nil
-        pendingText = nil
-        pendingReasoning = nil
-
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            displayedText = finalText
-            if let finalReasoning = finalReasoning {
-                displayedReasoning = finalReasoning
-            }
+        stopDrainTimer()
+        targetText = finalText
+        if let finalReasoning = finalReasoning {
+            targetReasoning = finalReasoning
         }
+        isStreamComplete = true
+        commitDisplayed(text: finalText, reasoning: finalReasoning)
     }
 
     func reset() {
-        coalesceWorkItem?.cancel()
-        coalesceWorkItem = nil
-        pendingText = nil
-        pendingReasoning = nil
+        stopDrainTimer()
+        targetText = ""
+        targetReasoning = ""
+        isStreamComplete = false
         isDisplayPaused = false
 
         var transaction = Transaction()

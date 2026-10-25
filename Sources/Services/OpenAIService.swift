@@ -350,10 +350,7 @@ class OpenAIService {
                 accumulatedReasoning += rPiece
                 let now = CFAbsoluteTimeGetCurrent()
                 let elapsed = now - lastReasoningYieldTime
-                let pendingChars = accumulatedReasoning.count - lastFlushedReasoningLength
-                let hasBoundary = Self.containsClauseOrLineBoundary(rPiece)
-
-                if wasEmpty || (hasBoundary && elapsed >= 0.04) || pendingChars >= 14 || elapsed >= 0.07 {
+                if wasEmpty || elapsed >= 0.03 {
                     lastReasoningYieldTime = now
                     lastFlushedReasoningLength = accumulatedReasoning.count
                     await onReasoningUpdate?(accumulatedReasoning)
@@ -365,15 +362,7 @@ class OpenAIService {
                 accumulatedContent += piece
                 let now = CFAbsoluteTimeGetCurrent()
                 let elapsed = now - lastYieldTime
-                let pendingChars = accumulatedContent.count - lastFlushedLength
-                let hasSentenceOrLineBreak = Self.containsClauseOrLineBoundary(piece)
-
-                let shouldFlushFirstChunk = wasEmpty
-                let shouldFlushBoundary = (hasSentenceOrLineBreak && elapsed >= 0.035)
-                let shouldFlushMultiWord = (pendingChars >= 14 && elapsed >= 0.045)
-                let shouldFlushTimeWindow = (pendingChars >= 1 && elapsed >= 0.07)
-
-                if shouldFlushFirstChunk || shouldFlushBoundary || shouldFlushMultiWord || shouldFlushTimeWindow {
+                if wasEmpty || elapsed >= 0.016 {
                     lastYieldTime = now
                     lastFlushedLength = accumulatedContent.count
                     await onPartialUpdate?(accumulatedContent)
@@ -451,18 +440,6 @@ class OpenAIService {
         let finalReasoning: String? = trimmedReasoning.isEmpty ? nil : trimmedReasoning
         let finalContent: String? = accumulatedContent.isEmpty ? nil : accumulatedContent
         return (finalContent, finalReasoning, finalToolCalls)
-    }
-
-    private static func containsClauseOrLineBoundary(_ piece: String) -> Bool {
-        for ch in piece {
-            switch ch {
-            case "\n", "。", "！", "？", "；", "：", "，", "、", ".", "!", "?", ";", ":", ",", ")", "）", "】", "]":
-                return true
-            default:
-                continue
-            }
-        }
-        return false
     }
 
     private func buildOpenAIMessages(settings: OpenAISettings, messages: [ChatMessage]) -> [[String: Any]] {

@@ -598,6 +598,10 @@ struct CodeBlockCard: View {
         totalLines > previewLineThreshold || code.count > 360
     }
 
+    private var remainingLines: Int {
+        max(1, totalLines - previewLineThreshold)
+    }
+
     private var displayedCode: String {
         if !isCollapsible {
             return code
@@ -742,34 +746,70 @@ struct CodeBlockCard: View {
                 .fill(theme.border)
                 .frame(height: 1)
 
-            if isStreaming {
-                Text(displayedCode)
-                    .font(.system(size: 12.5, design: .monospaced))
-                    .foregroundColor(theme.primaryText)
-                    .lineSpacing(3)
-                    .lineLimit(isStreamingCollapsedWindow ? previewLineThreshold : nil)
-                    .truncationMode(.tail)
-                    .padding(10)
-                    .frame(
-                        maxWidth: .infinity,
-                        minHeight: isStreamingCollapsedWindow ? 164 : nil,
-                        maxHeight: isStreamingCollapsedWindow ? 164 : nil,
-                        alignment: .topLeading
-                    )
-                    .clipped()
-            } else {
-                ScrollView(.horizontal, showsIndicators: true) {
+            ZStack(alignment: .bottom) {
+                if isStreaming {
                     Text(displayedCode)
                         .font(.system(size: 12.5, design: .monospaced))
                         .foregroundColor(theme.primaryText)
                         .lineSpacing(3)
-                        .fixedSize(horizontal: true, vertical: true)
-                        .textSelection(.enabled)
+                        .lineLimit(isStreamingCollapsedWindow ? previewLineThreshold : nil)
+                        .truncationMode(.tail)
                         .padding(10)
+                        .frame(
+                            maxWidth: .infinity,
+                            minHeight: isStreamingCollapsedWindow ? 164 : nil,
+                            maxHeight: isStreamingCollapsedWindow ? 164 : nil,
+                            alignment: .topLeading
+                        )
+                        .clipped()
+                } else {
+                    ScrollView(.horizontal, showsIndicators: true) {
+                        Text(displayedCode)
+                            .font(.system(size: 12.5, design: .monospaced))
+                            .foregroundColor(theme.primaryText)
+                            .lineSpacing(3)
+                            .fixedSize(horizontal: true, vertical: true)
+                            .textSelection(.enabled)
+                            .padding(10)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+
+                if isCollapsible && !isStreaming {
+                    LinearGradient(
+                        stops: [
+                            .init(color: theme.cardBackground.opacity(0), location: 0),
+                            .init(color: theme.cardBackground.opacity(0.92), location: 1)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .frame(height: 24)
+                    .allowsHitTesting(false)
+                }
             }
 
+            if isCollapsible {
+                Rectangle()
+                    .fill(theme.border)
+                    .frame(height: 1)
+
+                HStack(spacing: 5) {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                        .font(.system(size: 10.5, weight: .semibold))
+                    Text(isStreaming ? "查看完整代码（已生成 \(totalLines) 行）" : "展开查看剩余 \(remainingLines) 行代码（共 \(totalLines) 行）")
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .lineLimit(1)
+                }
+                .foregroundColor(theme.accent)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .background(theme.elevatedBackground.opacity(0.65))
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    showingFullViewer = true
+                }
+            }
         }
         .frame(width: cardWidth)
         .background(theme.cardBackground)
