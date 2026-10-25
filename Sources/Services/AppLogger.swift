@@ -4,10 +4,24 @@ import SwiftUI
 enum AppLogCategory: String, Codable, CaseIterable {
     case all = "全部"
     case aiRequest = "AI请求"
-    case aiStream = "AI流式"
-    case aiStop = "流结束/截断"
+    case aiStop = "流结束"
+    case aiTruncated = "流截断"
     case mcpTool = "MCP工具"
     case error = "错误异常"
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let raw = try container.decode(String.self)
+        switch raw {
+        case "全部": self = .all
+        case "AI请求", "AI流式": self = .aiRequest
+        case "流结束", "流结束/截断": self = .aiStop
+        case "流截断": self = .aiTruncated
+        case "MCP工具": self = .mcpTool
+        case "错误异常": self = .error
+        default: self = .aiStop
+        }
+    }
 }
 
 enum AppLogLevel: String, Codable {
@@ -55,7 +69,13 @@ final class AppLogManager: ObservableObject {
     private init() {
         if let data = UserDefaults.standard.data(forKey: storageKey),
            let decoded = try? JSONDecoder().decode([AppLogEntry].self, from: data) {
-            self.logs = decoded
+            self.logs = decoded.map { entry in
+                var updated = entry
+                if updated.category == .aiStop && (updated.level != .info || updated.title.contains("截断") || updated.title.contains("异常断开")) {
+                    updated.category = .aiTruncated
+                }
+                return updated
+            }
         }
     }
 
