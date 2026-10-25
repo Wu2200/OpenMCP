@@ -466,6 +466,7 @@ class AgentCoordinator: ObservableObject {
                 return
             }
             stepIndex += 1
+            let contextMessages = conversation.messages
             let placeholderMsg = ChatMessage(
                 role: .assistant,
                 content: "",
@@ -482,7 +483,7 @@ class AgentCoordinator: ObservableObject {
             do {
                 let (content, reasoning, toolCalls) = try await OpenAIService.shared.streamChatCompletion(
                     settings: effectiveSettings,
-                    messages: conversation.messages,
+                    messages: contextMessages,
                     tools: openAITools.isEmpty ? nil : openAITools,
                     conversationId: conversationId,
                     conversationTitle: conversation.title,
