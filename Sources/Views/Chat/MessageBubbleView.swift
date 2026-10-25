@@ -86,7 +86,7 @@ struct MessageBubbleView: View {
             }
         }
         .padding(14)
-        .background(theme.userCardBackground)
+        .background(theme.userMessageBackground)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
