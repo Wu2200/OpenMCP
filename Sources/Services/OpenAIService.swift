@@ -21,129 +21,55 @@ class OpenAIService {
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         if !settings.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let key = settings.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-            req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+            req.setValue(key.hasPrefix("Bearer ") ? key : "Bearer \(key)", forHTTPHeaderField: "Authorization")
         }
+        req.timeoutInterval = 30
 
         let (data, response) = try await URLSession.shared.data(for: req)
-        guard let httpResp = response as? HTTPURLResponse, (200...299).contains(httpResp.statusCode) else {
-            let status = (response as? HTTPURLResponse)?.statusCode ?? -1
-            let errText = String(data: data, encoding: .utf8) ?? "Unknown error"
-            throw NSError(domain: "OpenAIService", code: status, userInfo: [
-                NSLocalizedDescriptionKey: "获取模型失败 (HTTP \(status)): \(errText)"
-            ])
+        guard let httpRes = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
         }
 
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let dataArray = json["data"] as? [[String: Any]] else {
-            throw NSError(domain: "OpenAIService", code: -2, userInfo: [
-                NSLocalizedDescriptionKey: "返回数据格式不符合 OpenAI /models 规范"
-            ])
+        guard (200...299).contains(httpRes.statusCode) else {
+            let errString = String(data: data, encoding: .utf8) ?? ""
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let errObj = json["error"] as? [String: Any],
+               let msg = errObj["message"] as? String {
+                throw NSError(domain: "OpenAIService", code: httpRes.statusCode, userInfo: [NSLocalizedDescriptionKey: msg])
+            }
+            throw NSError(domain: "OpenAIService", code: httpRes.statusCode, userInfo: [NSLocalizedDescriptionKey: "获取模型失败 (\(httpRes.statusCode)): \(errString.prefix(200))"])
         }
 
-        let models = dataArray.compactMap { $0["id"] as? String }.sorted()
-        return models
-    }
-
-    private func buildRequestMessages(messages: [ChatMessage], systemPrompt: String) -> [[String: Any]] {
-        var reqMessages: [[String: Any]] = []
-
-        if !systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            reqMessages.append([
-                "role": "system",
-                "content": systemPrompt
-            ])
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw NSError(domain: "OpenAIService", code: -1, userInfo: [NSLocalizedDescriptionKey: "无法解析模型列表数据"])
         }
 
-        for msg in messages {
-            var dict: [String: Any] = ["role": msg.role.rawValue]
-
-            let attachments = msg.attachments ?? []
-            let imageAttachments = attachments.filter { $0.kind == .image && ($0.imageDataBase64?.isEmpty == false) }
-            let textAttachments = attachments.filter { $0.kind != .image && ($0.textContent?.isEmpty == false) }
-
-            var combinedText = msg.content
-            if !textAttachments.isEmpty {
-                let attachmentBlocks = textAttachments.map { att -> String in
-                    let body = att.textContent ?? ""
-                    return "【附件文件: \(att.fileName)】\n\(body)"
-                }.joined(separator: "\n\n")
-
-                if combinedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    combinedText = attachmentBlocks
-                } else {
-                    combinedText = combinedText + "\n\n" + attachmentBlocks
+        var modelIds: [String] = []
+        if let dataArray = json["data"] as? [[String: Any]] {
+            for item in dataArray {
+                if let id = item["id"] as? String {
+                    modelIds.append(id)
                 }
             }
-
-            if let toolCalls = msg.toolCalls, !toolCalls.isEmpty {
-                dict["content"] = combinedText.isEmpty ? NSNull() : combinedText
-                dict["tool_calls"] = toolCalls.map { tc in
-                    [
-                        "id": tc.id,
-                        "type": "function",
-                        "function": [
-                            "name": tc.name,
-                            "arguments": tc.arguments
-                        ]
-                    ]
+        } else if let modelsArray = json["models"] as? [[String: Any]] {
+            for item in modelsArray {
+                if let id = item["id"] as? String ?? item["name"] as? String {
+                    modelIds.append(id)
                 }
-            } else if msg.role == .user && !imageAttachments.isEmpty {
-                var contentParts: [[String: Any]] = []
-                let promptText = combinedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    ? "请结合上传的图片进行分析回答。"
-                    : combinedText
-                contentParts.append([
-                    "type": "text",
-                    "text": promptText
-                ])
-                for img in imageAttachments {
-                    if let b64 = img.imageDataBase64 {
-                        contentParts.append([
-                            "type": "image_url",
-                            "image_url": [
-                                "url": "data:\(img.mimeType);base64,\(b64)"
-                            ]
-                        ])
-                    }
-                }
-                dict["content"] = contentParts
-            } else {
-                dict["content"] = combinedText
             }
-
-            if let toolCallId = msg.toolCallId {
-                dict["tool_call_id"] = toolCallId
-            }
-
-            reqMessages.append(dict)
         }
 
-        return reqMessages
+        return modelIds.sorted()
     }
 
-    private func buildOpenAITools(tools: [(serverName: String, tool: MCPTool)]) -> [[String: Any]] {
-        var openAITools: [[String: Any]] = []
-        for item in tools {
-            var fnDict: [String: Any] = [
-                "name": item.tool.name,
-                "description": "[\(item.serverName)] \(item.tool.description)"
-            ]
-            if let schemaData = item.tool.inputSchemaJSON.data(using: .utf8),
-               let schemaObj = try? JSONSerialization.jsonObject(with: schemaData) {
-                fnDict["parameters"] = schemaObj
-            } else {
-                fnDict["parameters"] = ["type": "object", "properties": [String: Any]()]
-            }
-            openAITools.append([
-                "type": "function",
-                "function": fnDict
-            ])
-        }
-        return openAITools
-    }
-
-    private func buildEndpointURL(baseURL: String) throws -> URL {
-        var base = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    func streamChatCompletion(
+        settings: OpenAISettings,
+        messages: [ChatMessage],
+        tools: [[String: Any]]? = nil,
+        onPartialUpdate: (@MainActor (String) -> Void)? = nil,
+        onReasoningUpdate: (@MainActor (String) -> Void)? = nil
+    ) async throws -> (content: String?, reasoning: String?, toolCalls: [ToolCallItem]?) {
+        var base = settings.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         if base.hasSuffix("/") {
             base = String(base.dropLast())
         }
@@ -151,189 +77,178 @@ class OpenAIService {
         guard let url = URL(string: fullEndpoint) else {
             throw URLError(.badURL)
         }
-        return url
-    }
 
-    func createChatCompletionStream(
-        messages: [ChatMessage],
-        settings: OpenAISettings,
-        tools: [(serverName: String, tool: MCPTool)],
-        onDelta: @escaping @Sendable (String) async -> Void,
-        onReasoningDelta: (@Sendable (String) async -> Void)? = nil
-    ) async throws -> ChatMessage {
-        let url = try buildEndpointURL(baseURL: settings.baseURL)
-        let reqMessages = buildRequestMessages(messages: messages, systemPrompt: settings.systemPrompt)
-        let openAITools = buildOpenAITools(tools: tools)
+        let openAIMessages = buildOpenAIMessages(settings: settings, messages: messages)
 
-        var body: [String: Any] = [
+        var payload: [String: Any] = [
             "model": settings.modelName,
-            "messages": reqMessages,
             "temperature": settings.temperature,
+            "messages": openAIMessages,
             "stream": true
         ]
 
-        if !openAITools.isEmpty {
-            body["tools"] = openAITools
-            body["tool_choice"] = "auto"
+        if let tools = tools, !tools.isEmpty {
+            payload["tools"] = tools
         }
 
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
-        req.timeoutInterval = 300
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         req.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
         if !settings.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let key = settings.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-            req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+            req.setValue(key.hasPrefix("Bearer ") ? key : "Bearer \(key)", forHTTPHeaderField: "Authorization")
         }
-        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        req.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        req.timeoutInterval = 300
 
         let (bytes, response) = try await URLSession.shared.bytes(for: req)
-        guard let httpResp = response as? HTTPURLResponse else {
+        try Task.checkCancellation()
+
+        guard let httpRes = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
         }
 
-        if !(200...299).contains(httpResp.statusCode) {
+        guard (200...299).contains(httpRes.statusCode) else {
             var errorData = Data()
             for try await byte in bytes {
+                try Task.checkCancellation()
                 errorData.append(byte)
-                if errorData.count > 16384 { break }
+                if errorData.count > 8192 { break }
             }
-            let errText = String(data: errorData, encoding: .utf8) ?? "Unknown error"
-            throw NSError(domain: "OpenAIService", code: httpResp.statusCode, userInfo: [
-                NSLocalizedDescriptionKey: "HTTP \(httpResp.statusCode): \(errText)"
-            ])
+            let errString = String(data: errorData, encoding: .utf8) ?? ""
+            if let json = try? JSONSerialization.jsonObject(with: errorData) as? [String: Any],
+               let errObj = json["error"] as? [String: Any],
+               let msg = errObj["message"] as? String {
+                throw NSError(domain: "OpenAIService", code: httpRes.statusCode, userInfo: [NSLocalizedDescriptionKey: msg])
+            }
+            throw NSError(domain: "OpenAIService", code: httpRes.statusCode, userInfo: [NSLocalizedDescriptionKey: "API 响应错误 (\(httpRes.statusCode)): \(errString.prefix(200))"])
         }
 
-        let contentType = (httpResp.value(forHTTPHeaderField: "Content-Type") ?? "").lowercased()
-        if !contentType.contains("text/event-stream") && contentType.contains("application/json") {
-            var fullData = Data()
+        let contentType = (httpRes.value(forHTTPHeaderField: "Content-Type") ?? "").lowercased()
+        if !contentType.contains("event-stream") && contentType.contains("application/json") {
+            var rawData = Data()
             for try await byte in bytes {
                 try Task.checkCancellation()
-                fullData.append(byte)
+                rawData.append(byte)
             }
-            let msg = try parseNonStreamingResponse(data: fullData)
-            if let reasoning = msg.reasoningContent, !reasoning.isEmpty {
-                await onReasoningDelta?(reasoning)
+            if let json = try? JSONSerialization.jsonObject(with: rawData) as? [String: Any] {
+                let parsed = try parseNonStreamingJSON(json)
+                if let r = parsed.reasoning, !r.isEmpty {
+                    await onReasoningUpdate?(r)
+                }
+                if let text = parsed.content, !text.isEmpty {
+                    await onPartialUpdate?(text)
+                }
+                return parsed
             }
-            if !msg.content.isEmpty {
-                await onDelta(msg.content)
-            }
-            return msg
         }
 
+        var accumulatedContent = ""
+        var accumulatedReasoning = ""
         struct PartialToolCall {
             var id: String = ""
             var name: String = ""
             var arguments: String = ""
         }
-
-        var accumulatedContent = ""
-        var accumulatedReasoning = ""
-        var partialToolCalls: [Int: PartialToolCall] = [:]
+        var toolCallsByIndex: [Int: PartialToolCall] = [:]
         var nonSSELines: [String] = []
-        var sawSSEData = false
-        var lastEmitTime = CFAbsoluteTimeGetCurrent()
-        var lastReasoningEmitTime = CFAbsoluteTimeGetCurrent()
-        var pendingSentenceChars = 0
-
-        func isNaturalBreakSymbol(_ text: String) -> Bool {
-            guard let last = text.last else { return false }
-            switch last {
-            case "\n", "。", "！", "？", "；", "：", "，", "、", ".", "!", "?", ";", ":", ",", ")", "）", "】", "]":
-                return true
-            default:
-                return false
-            }
-        }
-
+        var receivedSSEEvent = false
+        var lastYieldTime = CFAbsoluteTimeGetCurrent()
+        var lastReasoningYieldTime = CFAbsoluteTimeGetCurrent()
+        var lastFlushedLength = 0
+        var lastFlushedReasoningLength = 0
         var lineBuffer = Data()
 
-        func processRawLine(_ rawLine: String) async throws -> Bool {
-            let trimmed = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed.isEmpty { return false }
-            if trimmed.hasPrefix(":") || trimmed.hasPrefix("event:") || trimmed.hasPrefix("id:") || trimmed.hasPrefix("retry:") {
+        func processLine(_ rawLine: String) async throws -> Bool {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if line.isEmpty { return false }
+            if line.hasPrefix(":") || line.hasPrefix("event:") || line.hasPrefix("id:") || line.hasPrefix("retry:") {
                 return false
             }
 
-            let payload: String
-            if trimmed.hasPrefix("data:") {
-                sawSSEData = true
-                payload = String(trimmed.dropFirst(5)).trimmingCharacters(in: .whitespaces)
-            } else {
-                if !sawSSEData {
-                    nonSSELines.append(trimmed)
+            if !line.hasPrefix("data:") {
+                if !receivedSSEEvent {
+                    nonSSELines.append(rawLine)
                 }
                 return false
             }
 
-            if payload == "[DONE]" {
+            receivedSSEEvent = true
+            let dataStr = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+            if dataStr == "[DONE]" {
                 return true
             }
-
-            guard let data = payload.data(using: .utf8),
+            guard let data = dataStr.data(using: .utf8),
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 return false
             }
 
+            if let errObj = json["error"] as? [String: Any],
+               let msg = errObj["message"] as? String {
+                throw NSError(domain: "OpenAIService", code: -1, userInfo: [NSLocalizedDescriptionKey: msg])
+            }
+
             let eventType = json["type"] as? String ?? ""
+            var contentPiece: String? = nil
+            var reasoningPiece: String? = nil
 
-            var contentDeltaPiece: String? = nil
-            var reasoningDeltaPiece: String? = nil
-
-            if let choices = json["choices"] as? [[String: Any]], let firstChoice = choices.first {
+            if let choices = json["choices"] as? [[String: Any]],
+               let firstChoice = choices.first {
                 if let delta = firstChoice["delta"] as? [String: Any] {
                     if let c = delta["content"] as? String, !c.isEmpty {
-                        contentDeltaPiece = c
+                        contentPiece = c
                     }
                     if let r = delta["reasoning_content"] as? String, !r.isEmpty {
-                        reasoningDeltaPiece = r
+                        reasoningPiece = r
                     } else if let r = delta["reasoning"] as? String, !r.isEmpty {
-                        reasoningDeltaPiece = r
+                        reasoningPiece = r
                     } else if let r = delta["thinking"] as? String, !r.isEmpty {
-                        reasoningDeltaPiece = r
+                        reasoningPiece = r
                     }
 
-                    if let tcs = delta["tool_calls"] as? [[String: Any]] {
-                        for (fallbackIdx, tc) in tcs.enumerated() {
-                            let idx = (tc["index"] as? Int) ?? fallbackIdx
-                            var current = partialToolCalls[idx] ?? PartialToolCall()
+                    if let rawToolCalls = delta["tool_calls"] as? [[String: Any]] {
+                        for (idx, tc) in rawToolCalls.enumerated() {
+                            let tcIndex = (tc["index"] as? Int) ?? idx
+                            var entry = toolCallsByIndex[tcIndex] ?? PartialToolCall()
                             if let id = tc["id"] as? String, !id.isEmpty {
-                                current.id = id
+                                entry.id = id
                             }
                             if let fn = tc["function"] as? [String: Any] {
-                                if let name = fn["name"] as? String, !name.isEmpty {
-                                    current.name += name
+                                if let namePiece = fn["name"] as? String, !namePiece.isEmpty {
+                                    entry.name += namePiece
                                 }
-                                if let args = fn["arguments"] as? String, !args.isEmpty {
-                                    current.arguments += args
+                                if let argPiece = fn["arguments"] as? String, !argPiece.isEmpty {
+                                    entry.arguments += argPiece
                                 }
                             }
-                            partialToolCalls[idx] = current
+                            toolCallsByIndex[tcIndex] = entry
                         }
                     }
-                } else if let message = firstChoice["message"] as? [String: Any] {
-                    if let c = message["content"] as? String, !c.isEmpty {
-                        accumulatedContent = c
-                        await onDelta(accumulatedContent)
-                    }
-                    if let r = message["reasoning_content"] as? String, !r.isEmpty {
+                } else if let messageObj = firstChoice["message"] as? [String: Any] {
+                    if let r = (messageObj["reasoning_content"] as? String)
+                        ?? (messageObj["reasoning"] as? String)
+                        ?? (messageObj["thinking"] as? String),
+                       !r.isEmpty {
                         accumulatedReasoning = r
-                        await onReasoningDelta?(accumulatedReasoning)
-                    } else if let r = message["reasoning"] as? String, !r.isEmpty {
-                        accumulatedReasoning = r
-                        await onReasoningDelta?(accumulatedReasoning)
+                        lastFlushedReasoningLength = accumulatedReasoning.count
+                        await onReasoningUpdate?(accumulatedReasoning)
                     }
-                    if let tcs = message["tool_calls"] as? [[String: Any]] {
-                        for (idx, tc) in tcs.enumerated() {
-                            var current = PartialToolCall()
-                            current.id = (tc["id"] as? String) ?? UUID().uuidString
+                    if let fullText = messageObj["content"] as? String, !fullText.isEmpty {
+                        accumulatedContent = fullText
+                        lastFlushedLength = accumulatedContent.count
+                        await onPartialUpdate?(accumulatedContent)
+                    }
+                    if let rawCalls = messageObj["tool_calls"] as? [[String: Any]] {
+                        for (idx, tc) in rawCalls.enumerated() {
+                            var entry = PartialToolCall()
+                            entry.id = (tc["id"] as? String) ?? "call_\(idx)"
                             if let fn = tc["function"] as? [String: Any] {
-                                current.name = (fn["name"] as? String) ?? ""
-                                current.arguments = (fn["arguments"] as? String) ?? "{}"
+                                entry.name = (fn["name"] as? String) ?? ""
+                                entry.arguments = (fn["arguments"] as? String) ?? "{}"
                             }
-                            partialToolCalls[idx] = current
+                            toolCallsByIndex[idx] = entry
                         }
                     }
                 }
@@ -341,59 +256,59 @@ class OpenAIService {
                 switch eventType {
                 case "response.output_text.delta":
                     if let d = json["delta"] as? String, !d.isEmpty {
-                        contentDeltaPiece = d
+                        contentPiece = d
                     }
                 case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
                     if let d = json["delta"] as? String, !d.isEmpty {
-                        reasoningDeltaPiece = d
+                        reasoningPiece = d
                     }
                 case "response.reasoning_summary_text.done", "response.reasoning_text.done":
-                    if !accumulatedReasoning.hasSuffix("\n\n") && !accumulatedReasoning.isEmpty {
-                        reasoningDeltaPiece = "\n\n"
+                    if !accumulatedReasoning.isEmpty && !accumulatedReasoning.hasSuffix("\n\n") {
+                        reasoningPiece = "\n\n"
                     }
                 case "response.output_item.added":
                     if let item = json["item"] as? [String: Any],
                        let itemType = item["type"] as? String,
                        (itemType == "function_call" || itemType == "custom_tool_call") {
-                        let idx = (json["output_index"] as? Int) ?? partialToolCalls.count
-                        var current = partialToolCalls[idx] ?? PartialToolCall()
+                        let idx = (json["output_index"] as? Int) ?? toolCallsByIndex.count
+                        var entry = toolCallsByIndex[idx] ?? PartialToolCall()
                         if let callId = item["call_id"] as? String, !callId.isEmpty {
-                            current.id = callId
+                            entry.id = callId
                         } else if let id = item["id"] as? String, !id.isEmpty {
-                            current.id = id
+                            entry.id = id
                         }
                         if let name = item["name"] as? String, !name.isEmpty {
-                            current.name = name
+                            entry.name = name
                         }
-                        partialToolCalls[idx] = current
+                        toolCallsByIndex[idx] = entry
                     }
                 case "response.function_call_arguments.delta", "response.custom_tool_call_input.delta":
                     if let d = json["delta"] as? String, !d.isEmpty {
-                        let idx = (json["output_index"] as? Int) ?? max(0, partialToolCalls.count - 1)
-                        var current = partialToolCalls[idx] ?? PartialToolCall()
-                        current.arguments += d
-                        partialToolCalls[idx] = current
+                        let idx = (json["output_index"] as? Int) ?? max(0, toolCallsByIndex.count - 1)
+                        var entry = toolCallsByIndex[idx] ?? PartialToolCall()
+                        entry.arguments += d
+                        toolCallsByIndex[idx] = entry
                     }
                 case "response.output_item.done":
                     if let item = json["item"] as? [String: Any],
                        let itemType = item["type"] as? String,
                        (itemType == "function_call" || itemType == "custom_tool_call") {
-                        let idx = (json["output_index"] as? Int) ?? max(0, partialToolCalls.count - 1)
-                        var current = partialToolCalls[idx] ?? PartialToolCall()
-                        if current.id.isEmpty {
-                            current.id = (item["call_id"] as? String) ?? (item["id"] as? String) ?? UUID().uuidString
+                        let idx = (json["output_index"] as? Int) ?? max(0, toolCallsByIndex.count - 1)
+                        var entry = toolCallsByIndex[idx] ?? PartialToolCall()
+                        if entry.id.isEmpty {
+                            entry.id = (item["call_id"] as? String) ?? (item["id"] as? String) ?? "call_\(idx)"
                         }
-                        if current.name.isEmpty, let name = item["name"] as? String {
-                            current.name = name
+                        if entry.name.isEmpty, let name = item["name"] as? String {
+                            entry.name = name
                         }
-                        if current.arguments.isEmpty {
+                        if entry.arguments.isEmpty {
                             if let args = item["arguments"] as? String, !args.isEmpty {
-                                current.arguments = args
+                                entry.arguments = args
                             } else if let input = item["input"] as? String, !input.isEmpty {
-                                current.arguments = input
+                                entry.arguments = input
                             }
                         }
-                        partialToolCalls[idx] = current
+                        toolCallsByIndex[idx] = entry
                     }
                 case "response.completed", "response.done":
                     if let respObj = json["response"] as? [String: Any],
@@ -405,7 +320,8 @@ class OpenAIService {
                                 let texts = contentArr.compactMap { $0["text"] as? String }.joined()
                                 if !texts.isEmpty {
                                     accumulatedContent = texts
-                                    await onDelta(accumulatedContent)
+                                    lastFlushedLength = accumulatedContent.count
+                                    await onPartialUpdate?(accumulatedContent)
                                 }
                             } else if itemType == "reasoning", accumulatedReasoning.isEmpty {
                                 var rParts: [String] = []
@@ -418,7 +334,8 @@ class OpenAIService {
                                 let joined = rParts.joined(separator: "\n")
                                 if !joined.isEmpty {
                                     accumulatedReasoning = joined
-                                    await onReasoningDelta?(accumulatedReasoning)
+                                    lastFlushedReasoningLength = accumulatedReasoning.count
+                                    await onReasoningUpdate?(accumulatedReasoning)
                                 }
                             }
                         }
@@ -428,27 +345,38 @@ class OpenAIService {
                 }
             }
 
-            if let rPiece = reasoningDeltaPiece, !rPiece.isEmpty {
+            if let rPiece = reasoningPiece, !rPiece.isEmpty {
+                let wasEmpty = (lastFlushedReasoningLength == 0)
                 accumulatedReasoning += rPiece
                 let now = CFAbsoluteTimeGetCurrent()
-                if now - lastReasoningEmitTime >= 0.05 || isNaturalBreakSymbol(rPiece) {
-                    lastReasoningEmitTime = now
-                    await onReasoningDelta?(accumulatedReasoning)
+                let elapsed = now - lastReasoningYieldTime
+                let pendingChars = accumulatedReasoning.count - lastFlushedReasoningLength
+                let hasBoundary = Self.containsClauseOrLineBoundary(rPiece)
+
+                if wasEmpty || (hasBoundary && elapsed >= 0.04) || pendingChars >= 14 || elapsed >= 0.07 {
+                    lastReasoningYieldTime = now
+                    lastFlushedReasoningLength = accumulatedReasoning.count
+                    await onReasoningUpdate?(accumulatedReasoning)
                 }
             }
 
-            if let cPiece = contentDeltaPiece, !cPiece.isEmpty {
-                let wasEmpty = accumulatedContent.isEmpty
-                accumulatedContent += cPiece
-                pendingSentenceChars += cPiece.count
+            if let piece = contentPiece, !piece.isEmpty {
+                let wasEmpty = (lastFlushedLength == 0)
+                accumulatedContent += piece
                 let now = CFAbsoluteTimeGetCurrent()
-                let elapsed = now - lastEmitTime
-                let hitSentenceBreak = isNaturalBreakSymbol(cPiece)
+                let elapsed = now - lastYieldTime
+                let pendingChars = accumulatedContent.count - lastFlushedLength
+                let hasSentenceOrLineBreak = Self.containsClauseOrLineBoundary(piece)
 
-                if wasEmpty || (hitSentenceBreak && elapsed >= 0.03) || pendingSentenceChars >= 14 || elapsed >= 0.06 {
-                    lastEmitTime = now
-                    pendingSentenceChars = 0
-                    await onDelta(accumulatedContent)
+                let shouldFlushFirstChunk = wasEmpty
+                let shouldFlushBoundary = (hasSentenceOrLineBreak && elapsed >= 0.035)
+                let shouldFlushMultiWord = (pendingChars >= 14 && elapsed >= 0.045)
+                let shouldFlushTimeWindow = (pendingChars >= 1 && elapsed >= 0.07)
+
+                if shouldFlushFirstChunk || shouldFlushBoundary || shouldFlushMultiWord || shouldFlushTimeWindow {
+                    lastYieldTime = now
+                    lastFlushedLength = accumulatedContent.count
+                    await onPartialUpdate?(accumulatedContent)
                 }
             }
 
@@ -463,8 +391,8 @@ class OpenAIService {
                 }
                 let rawLine = String(decoding: lineBuffer, as: UTF8.self)
                 lineBuffer.removeAll(keepingCapacity: true)
-                let shouldStop = try await processRawLine(rawLine)
-                if shouldStop { break }
+                let shouldBreak = try await processLine(rawLine)
+                if shouldBreak { break }
             } else {
                 lineBuffer.append(byte)
             }
@@ -476,95 +404,189 @@ class OpenAIService {
             }
             let rawLine = String(decoding: lineBuffer, as: UTF8.self)
             lineBuffer.removeAll()
-            _ = try await processRawLine(rawLine)
+            _ = try await processLine(rawLine)
         }
 
-        if !sawSSEData && !nonSSELines.isEmpty {
+        try Task.checkCancellation()
+
+        if !receivedSSEEvent && !nonSSELines.isEmpty {
             let joined = nonSSELines.joined(separator: "\n")
-            if let fallbackData = joined.data(using: .utf8),
-               let fallbackMsg = try? parseNonStreamingResponse(data: fallbackData) {
-                if let reasoning = fallbackMsg.reasoningContent, !reasoning.isEmpty {
-                    await onReasoningDelta?(reasoning)
+            if let data = joined.data(using: .utf8),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                let parsed = try parseNonStreamingJSON(json)
+                if let r = parsed.reasoning, !r.isEmpty {
+                    await onReasoningUpdate?(r)
                 }
-                if !fallbackMsg.content.isEmpty {
-                    await onDelta(fallbackMsg.content)
+                if let text = parsed.content, !text.isEmpty {
+                    await onPartialUpdate?(text)
                 }
-                return fallbackMsg
+                return parsed
             }
         }
 
-        if !accumulatedReasoning.isEmpty {
-            await onReasoningDelta?(accumulatedReasoning)
+        if !accumulatedReasoning.isEmpty && lastFlushedReasoningLength != accumulatedReasoning.count {
+            await onReasoningUpdate?(accumulatedReasoning)
         }
 
-        if !accumulatedContent.isEmpty {
-            await onDelta(accumulatedContent)
+        if !accumulatedContent.isEmpty && lastFlushedLength != accumulatedContent.count {
+            await onPartialUpdate?(accumulatedContent)
         }
 
-        let sortedKeys = partialToolCalls.keys.sorted()
-        let finalToolCalls: [ToolCallItem] = sortedKeys.compactMap { key in
-            guard let item = partialToolCalls[key],
-                  !item.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                return nil
+        var finalToolCalls: [ToolCallItem]? = nil
+        if !toolCallsByIndex.isEmpty {
+            let sortedIndices = toolCallsByIndex.keys.sorted()
+            var list: [ToolCallItem] = []
+            for idx in sortedIndices {
+                guard let item = toolCallsByIndex[idx], !item.name.isEmpty else { continue }
+                let callId = item.id.isEmpty ? "call_\(UUID().uuidString.prefix(8))" : item.id
+                let args = item.arguments.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "{}" : item.arguments
+                list.append(ToolCallItem(id: callId, name: item.name, arguments: args, result: nil, isExecuting: false, error: nil))
             }
-            return ToolCallItem(
-                id: item.id.isEmpty ? UUID().uuidString : item.id,
-                name: item.name,
-                arguments: item.arguments.isEmpty ? "{}" : item.arguments,
-                isExecuting: true
-            )
+            if !list.isEmpty {
+                finalToolCalls = list
+            }
         }
 
-        let finalReasoning = accumulatedReasoning.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        return ChatMessage(
-            role: .assistant,
-            content: accumulatedContent,
-            reasoningContent: finalReasoning.isEmpty ? nil : finalReasoning,
-            toolCalls: finalToolCalls.isEmpty ? nil : finalToolCalls
-        )
+        let trimmedReasoning = accumulatedReasoning.trimmingCharacters(in: .whitespacesAndNewlines)
+        let finalReasoning: String? = trimmedReasoning.isEmpty ? nil : trimmedReasoning
+        let finalContent: String? = accumulatedContent.isEmpty ? nil : accumulatedContent
+        return (finalContent, finalReasoning, finalToolCalls)
     }
 
-    private func parseNonStreamingResponse(data: Data) throws -> ChatMessage {
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw NSError(domain: "OpenAIService", code: -2, userInfo: [
-                NSLocalizedDescriptionKey: "无法解析响应 JSON"
+    private static func containsClauseOrLineBoundary(_ piece: String) -> Bool {
+        for ch in piece {
+            switch ch {
+            case "\n", "。", "！", "？", "；", "：", "，", "、", ".", "!", "?", ";", ":", ",", ")", "）", "】", "]":
+                return true
+            default:
+                continue
+            }
+        }
+        return false
+    }
+
+    private func buildOpenAIMessages(settings: OpenAISettings, messages: [ChatMessage]) -> [[String: Any]] {
+        var openAIMessages: [[String: Any]] = []
+        if !settings.systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            openAIMessages.append([
+                "role": "system",
+                "content": settings.systemPrompt
             ])
+        }
+
+        for msg in messages {
+            var combinedText = msg.content
+            let attachments = msg.attachments ?? []
+
+            for att in attachments {
+                switch att.kind {
+                case .longText:
+                    if let text = att.textContent, !text.isEmpty {
+                        if combinedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            combinedText = text
+                        } else {
+                            combinedText += "\n\n" + text
+                        }
+                    }
+                case .file:
+                    if let text = att.textContent, !text.isEmpty {
+                        let block = "--- 文件: \(att.fileName) ---\n\(text)\n--- 文件结束 ---"
+                        if combinedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            combinedText = block
+                        } else {
+                            combinedText += "\n\n" + block
+                        }
+                    }
+                case .image:
+                    break
+                }
+            }
+
+            let imageAttachments = attachments.filter { $0.kind == .image && ($0.imageDataBase64?.isEmpty == false) }
+
+            var m: [String: Any] = [
+                "role": msg.role.rawValue
+            ]
+
+            if !imageAttachments.isEmpty && msg.role == .user {
+                var contentParts: [[String: Any]] = []
+                let textBody = combinedText.trimmingCharacters(in: .whitespacesAndNewlines)
+                contentParts.append([
+                    "type": "text",
+                    "text": textBody.isEmpty ? "请分析上传的图片内容" : textBody
+                ])
+                for img in imageAttachments {
+                    if let b64 = img.imageDataBase64 {
+                        contentParts.append([
+                            "type": "image_url",
+                            "image_url": [
+                                "url": "data:\(img.mimeType);base64,\(b64)"
+                            ]
+                        ])
+                    }
+                }
+                m["content"] = contentParts
+            } else {
+                m["content"] = combinedText
+            }
+
+            if let toolCalls = msg.toolCalls, !toolCalls.isEmpty {
+                m["tool_calls"] = toolCalls.map { tc in
+                    [
+                        "id": tc.id,
+                        "type": "function",
+                        "function": [
+                            "name": tc.name,
+                            "arguments": tc.arguments
+                        ]
+                    ]
+                }
+            }
+            if let toolCallId = msg.toolCallId {
+                m["tool_call_id"] = toolCallId
+            }
+            openAIMessages.append(m)
+        }
+        return openAIMessages
+    }
+
+    private func parseNonStreamingJSON(_ json: [String: Any]) throws -> (content: String?, reasoning: String?, toolCalls: [ToolCallItem]?) {
+        if let errObj = json["error"] as? [String: Any],
+           let msg = errObj["message"] as? String {
+            throw NSError(domain: "OpenAIService", code: -1, userInfo: [NSLocalizedDescriptionKey: msg])
         }
 
         if let choices = json["choices"] as? [[String: Any]],
            let firstChoice = choices.first,
-           let message = firstChoice["message"] as? [String: Any] {
-            let content = (message["content"] as? String) ?? ""
-            let reasoning = (message["reasoning_content"] as? String)
-                ?? (message["reasoning"] as? String)
-                ?? (message["thinking"] as? String)
-            var parsedToolCalls: [ToolCallItem] = []
+           let choiceMsg = firstChoice["message"] as? [String: Any] {
+            let content = choiceMsg["content"] as? String
+            let reasoning = (choiceMsg["reasoning_content"] as? String)
+                ?? (choiceMsg["reasoning"] as? String)
+                ?? (choiceMsg["thinking"] as? String)
+            var parsedToolCalls: [ToolCallItem]? = nil
 
-            if let toolCalls = message["tool_calls"] as? [[String: Any]] {
-                for tc in toolCalls {
-                    if let id = tc["id"] as? String,
-                       let fn = tc["function"] as? [String: Any],
-                       let name = fn["name"] as? String {
-                        let args = (fn["arguments"] as? String) ?? "{}"
-                        parsedToolCalls.append(ToolCallItem(id: id, name: name, arguments: args, isExecuting: true))
-                    }
+            if let rawCalls = choiceMsg["tool_calls"] as? [[String: Any]] {
+                var items: [ToolCallItem] = []
+                for c in rawCalls {
+                    guard let id = c["id"] as? String,
+                          let fn = c["function"] as? [String: Any],
+                          let name = fn["name"] as? String else { continue }
+                    let args = (fn["arguments"] as? String) ?? "{}"
+                    items.append(ToolCallItem(id: id, name: name, arguments: args, result: nil, isExecuting: false, error: nil))
+                }
+                if !items.isEmpty {
+                    parsedToolCalls = items
                 }
             }
 
             let trimmedReasoning = reasoning?.trimmingCharacters(in: .whitespacesAndNewlines)
-            return ChatMessage(
-                role: .assistant,
-                content: content,
-                reasoningContent: (trimmedReasoning?.isEmpty == false) ? trimmedReasoning : nil,
-                toolCalls: parsedToolCalls.isEmpty ? nil : parsedToolCalls
-            )
+            return (content, (trimmedReasoning?.isEmpty == false) ? trimmedReasoning : nil, parsedToolCalls)
         }
 
         if let outputs = json["output"] as? [[String: Any]] {
             var contentParts: [String] = []
             var reasoningParts: [String] = []
-            var parsedToolCalls: [ToolCallItem] = []
+            var items: [ToolCallItem] = []
 
             for item in outputs {
                 let itemType = item["type"] as? String ?? ""
@@ -578,26 +600,24 @@ class OpenAIService {
                         reasoningParts.append(contentsOf: contents.compactMap { $0["text"] as? String })
                     }
                 } else if itemType == "function_call" || itemType == "custom_tool_call" {
-                    let id = (item["call_id"] as? String) ?? (item["id"] as? String) ?? UUID().uuidString
+                    let id = (item["call_id"] as? String) ?? (item["id"] as? String) ?? "call_\(items.count)"
                     let name = (item["name"] as? String) ?? ""
                     let args = (item["arguments"] as? String) ?? (item["input"] as? String) ?? "{}"
                     if !name.isEmpty {
-                        parsedToolCalls.append(ToolCallItem(id: id, name: name, arguments: args, isExecuting: true))
+                        items.append(ToolCallItem(id: id, name: name, arguments: args, result: nil, isExecuting: false, error: nil))
                     }
                 }
             }
 
+            let finalContent = contentParts.joined()
             let finalReasoning = reasoningParts.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-            return ChatMessage(
-                role: .assistant,
-                content: contentParts.joined(),
-                reasoningContent: finalReasoning.isEmpty ? nil : finalReasoning,
-                toolCalls: parsedToolCalls.isEmpty ? nil : parsedToolCalls
+            return (
+                finalContent.isEmpty ? nil : finalContent,
+                finalReasoning.isEmpty ? nil : finalReasoning,
+                items.isEmpty ? nil : items
             )
         }
 
-        throw NSError(domain: "OpenAIService", code: -2, userInfo: [
-            NSLocalizedDescriptionKey: "未找到有效的模型输出内容"
-        ])
+        throw NSError(domain: "OpenAIService", code: -1, userInfo: [NSLocalizedDescriptionKey: "无法解析返回内容"])
     }
 }
