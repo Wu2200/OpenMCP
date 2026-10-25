@@ -1199,6 +1199,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
             for delay in [0.08, 0.22, 0.45] {
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                     guard let self = self, self.isViewActive, self.autoFollowOutput else { return }
+                    self.attachedScrollView?.layoutIfNeeded()
                     self.scrollToBottom(animated: false)
                 }
             }
@@ -1233,12 +1234,11 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
                 }
 
                 let distanceToTarget = self.bottomOffset(for: sv) - sv.contentOffset.y
-                guard heightDelta >= 0.5 || (self.isGenerating && distanceToTarget > 1.0) else {
-                    self.lastObservedHeight = newHeight
-                    return
-                }
                 self.lastObservedHeight = newHeight
-                self.scheduleBottomFollow()
+                guard heightDelta >= 0.5 || (self.isGenerating && distanceToTarget > 1.0) else { return }
+                DispatchQueue.main.async { [weak self] in
+                    self?.scheduleBottomFollow()
+                }
             }
         }
 
