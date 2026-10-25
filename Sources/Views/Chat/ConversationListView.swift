@@ -7,6 +7,8 @@ struct ConversationListView: View {
     @State private var searchText: String = ""
     @State private var renamingConversation: Conversation? = nil
     @State private var renameText: String = ""
+    @State private var deletingConversation: Conversation? = nil
+    @State private var clearingConversation: Conversation? = nil
     @FocusState private var isSearchFocused: Bool
 
     private var theme: AppThemePalette {
@@ -115,6 +117,38 @@ struct ConversationListView: View {
                     }
                     renamingConversation = nil
                 }
+            }
+            .alert("确认删除对话？", isPresented: Binding(
+                get: { deletingConversation != nil },
+                set: { if !$0 { deletingConversation = nil } }
+            )) {
+                Button("取消", role: .cancel) {
+                    deletingConversation = nil
+                }
+                Button("删除对话", role: .destructive) {
+                    if let target = deletingConversation {
+                        storage.deleteConversation(id: target.id)
+                    }
+                    deletingConversation = nil
+                }
+            } message: {
+                Text("将永久删除「\(deletingConversation?.title ?? "该对话")」及其所有消息记录，此操作不可恢复。")
+            }
+            .alert("确认清空对话消息？", isPresented: Binding(
+                get: { clearingConversation != nil },
+                set: { if !$0 { clearingConversation = nil } }
+            )) {
+                Button("取消", role: .cancel) {
+                    clearingConversation = nil
+                }
+                Button("清空消息", role: .destructive) {
+                    if let target = clearingConversation {
+                        storage.clearConversationMessages(id: target.id)
+                    }
+                    clearingConversation = nil
+                }
+            } message: {
+                Text("将清空「\(clearingConversation?.title ?? "该对话")」中的所有消息内容，但保留此对话。")
             }
         }
     }
@@ -386,13 +420,13 @@ struct ConversationListView: View {
                 }
 
                 Button(action: {
-                    storage.clearConversationMessages(id: conv.id)
+                    clearingConversation = conv
                 }) {
                     Label("清空消息", systemImage: "eraser")
                 }
 
                 Button(role: .destructive, action: {
-                    storage.deleteConversation(id: conv.id)
+                    deletingConversation = conv
                 }) {
                     Label("删除对话", systemImage: "trash")
                 }
