@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import Security
 
 class DataStorage: ObservableObject {
     static let shared = DataStorage()
@@ -19,20 +20,23 @@ class DataStorage: ObservableObject {
             return String(data: data, encoding: .utf8)
         }
 
-        static func save(_ value: String, key: String) {
+        static func save(_ value: String, key: String) -> Bool {
             let query: [String: Any] = [
                 kSecClass as String: kSecClassGenericPassword,
                 kSecAttrService as String: Bundle.main.bundleIdentifier ?? "OpenMCP",
                 kSecAttrAccount as String: key
             ]
-            guard let data = value.data(using: .utf8) else { return }
+            guard let data = value.data(using: .utf8) else { return false }
             let attributes: [String: Any] = [kSecValueData as String: data]
             let status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
-            if status == errSecItemNotFound {
-                var insertQuery = query
-                insertQuery[kSecValueData as String] = data
-                SecItemAdd(insertQuery as CFDictionary, nil)
+            if status == errSecSuccess {
+                return true
             }
+            guard status == errSecItemNotFound else { return false }
+            var insertQuery = query
+            insertQuery[kSecValueData as String] = data
+            insertQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+            return SecItemAdd(insertQuery as CFDictionary, nil) == errSecSuccess
         }
 
         static func remove(key: String) {
@@ -64,8 +68,9 @@ class DataStorage: ObservableObject {
             var migratedSettings = decoded
             migrateSettingsCredentials(&migratedSettings)
             loadedSettings = migratedSettings
-            if migratedSettings != decoded,
-               let encoded = try? JSONEncoder().encode(migratedSettings) {
+            var persistedSettings = migratedSettings
+            saveSettingsCredentials(&persistedSettings)
+            if let encoded = try? JSONEncoder().encode(persistedSettings) {
                 UserDefaults.standard.set(encoded, forKey: settingsKey)
             }
         } else {
@@ -78,8 +83,9 @@ class DataStorage: ObservableObject {
             var migratedServers = decoded
             migrateServerCredentials(&migratedServers)
             self.servers = migratedServers
-            if migratedServers != decoded,
-               let encoded = try? JSONEncoder().encode(migratedServers) {
+            var persistedServers = migratedServers
+            saveServerCredentials(&persistedServers)
+            if let encoded = try? JSONEncoder().encode(persistedServers) {
                 UserDefaults.standard.set(encoded, forKey: serversKey)
             }
         } else {
@@ -130,12 +136,14 @@ class DataStorage: ObservableObject {
     }
 
     private func saveSettingsCredentials(_ value: inout OpenAISettings) {
-        SecureStore.save(value.apiKey, key: "settings.apiKey")
-        value.apiKey = ""
+        if SecureStore.save(value.apiKey, key: "settings.apiKey") {
+            value.apiKey = ""
+        }
         for index in value.providerProfiles.indices {
             let key = "profile.\(value.providerProfiles[index].id).apiKey"
-            SecureStore.save(value.providerProfiles[index].apiKey, key: key)
-            value.providerProfiles[index].apiKey = ""
+            if SecureStore.save(value.providerProfiles[index].apiKey, key: key) {
+                value.providerProfiles[index].apiKey = ""
+            }
         }
     }
 
@@ -159,8 +167,9 @@ class DataStorage: ObservableObject {
     private func saveServerCredentials(_ value: inout [MCPServer]) {
         for index in value.indices {
             let key = "server.\(value[index].id).token"
-            SecureStore.save(value[index].token, key: key)
-            value[index].token = ""
+            if SecureStore.save(value[index].token, key: key) {
+                value[index].token = ""
+            }
         }
     }
 
