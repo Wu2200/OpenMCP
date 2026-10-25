@@ -151,6 +151,7 @@ class OpenAIService {
         var nonSSELines: [String] = []
         var receivedSSEEvent = false
         var lastYieldTime = CFAbsoluteTimeGetCurrent()
+        var lastFlushedLength = 0
 
         for try await rawLine in bytes.lines {
             try Task.checkCancellation()
@@ -182,8 +183,18 @@ class OpenAIService {
                     if let piece = delta["content"] as? String, !piece.isEmpty {
                         accumulatedContent += piece
                         let now = CFAbsoluteTimeGetCurrent()
-                        if now - lastYieldTime >= 0.032 {
+                        let elapsed = now - lastYieldTime
+                        let pendingChars = accumulatedContent.count - lastFlushedLength
+                        let hasSentenceOrLineBreak = Self.containsClauseOrLineBoundary(piece)
+
+                        let shouldFlushFirstChunk = (lastFlushedLength == 0 && pendingChars >= 10)
+                        let shouldFlushBoundary = (hasSentenceOrLineBreak && pendingChars >= 8 && elapsed >= 0.055)
+                        let shouldFlushMultiWord = (pendingChars >= 22 && elapsed >= 0.075)
+                        let shouldFlushTimeWindow = (pendingChars >= 6 && elapsed >= 0.12)
+
+                        if shouldFlushFirstChunk || shouldFlushBoundary || shouldFlushMultiWord || shouldFlushTimeWindow {
                             lastYieldTime = now
+                            lastFlushedLength = accumulatedContent.count
                             await onPartialUpdate?(accumulatedContent)
                         }
                     }
@@ -209,6 +220,7 @@ class OpenAIService {
                 } else if let messageObj = firstChoice["message"] as? [String: Any] {
                     if let fullText = messageObj["content"] as? String, !fullText.isEmpty {
                         accumulatedContent = fullText
+                        lastFlushedLength = accumulatedContent.count
                         await onPartialUpdate?(accumulatedContent)
                     }
                     if let rawCalls = messageObj["tool_calls"] as? [[String: Any]] {
@@ -242,7 +254,7 @@ class OpenAIService {
             }
         }
 
-        if !accumulatedContent.isEmpty {
+        if !accumulatedContent.isEmpty && lastFlushedLength != accumulatedContent.count {
             await onPartialUpdate?(accumulatedContent)
         }
 
@@ -263,6 +275,18 @@ class OpenAIService {
 
         let finalContent: String? = accumulatedContent.isEmpty ? nil : accumulatedContent
         return (finalContent, finalToolCalls)
+    }
+
+    private static func containsClauseOrLineBoundary(_ piece: String) -> Bool {
+        for ch in piece {
+            switch ch {
+            case "\n", "。", "！", "？", "；", "：", "，", ".", "!", "?", ";":
+                return true
+            default:
+                continue
+            }
+        }
+        return false
     }
 
     private func buildOpenAIMessages(settings: OpenAISettings, messages: [ChatMessage]) -> [[String: Any]] {

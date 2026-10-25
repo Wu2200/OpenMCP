@@ -70,19 +70,21 @@ final class MarkdownRenderCache {
     func attributedString(
         for text: String,
         fontSize: CGFloat,
-        theme: AppThemePalette
+        theme: AppThemePalette,
+        isStreaming: Bool = false
     ) -> AttributedString {
-        let cacheKey = "\(theme.backgroundHex)-\(theme.accentHex)-\(Int(fontSize * 10))-\(text)" as NSString
+        let normalizedInput = isStreaming ? MarkdownParser.stabilizeStreamingInline(text) : text
+        let cacheKey = "\(theme.backgroundHex)-\(theme.accentHex)-\(Int(fontSize * 10))-\(normalizedInput)" as NSString
         if let cached = attrCache.object(forKey: cacheKey) {
             return cached.attr
         }
 
-        let prepared = MarkdownParser.enrichAutoLinksAndSpaces(text)
+        let prepared = MarkdownParser.enrichAutoLinksAndSpaces(normalizedInput)
         guard var attr = try? AttributedString(
             markdown: prepared,
             options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         ) else {
-            let fallback = AttributedString(text)
+            let fallback = AttributedString(normalizedInput)
             attrCache.setObject(AttrBox(fallback), forKey: cacheKey)
             return fallback
         }
@@ -256,12 +258,26 @@ struct MarkdownInlineText: View {
     var isStreaming: Bool = false
 
     var body: some View {
-        Text(MarkdownRenderCache.shared.attributedString(for: text, fontSize: fontSize, theme: theme))
-            .font(.system(size: fontSize, weight: weight))
-            .foregroundColor(isSecondary ? theme.secondaryText : theme.primaryText)
-            .tint(theme.accent)
-            .textSelection(.enabled)
-            .frame(maxWidth: .infinity, alignment: .leading)
+        let attr = MarkdownRenderCache.shared.attributedString(
+            for: text,
+            fontSize: fontSize,
+            theme: theme,
+            isStreaming: isStreaming
+        )
+        if isStreaming {
+            Text(attr)
+                .font(.system(size: fontSize, weight: weight))
+                .foregroundColor(isSecondary ? theme.secondaryText : theme.primaryText)
+                .tint(theme.accent)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            Text(attr)
+                .font(.system(size: fontSize, weight: weight))
+                .foregroundColor(isSecondary ? theme.secondaryText : theme.primaryText)
+                .tint(theme.accent)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 }
 
@@ -687,6 +703,40 @@ enum MarkdownParser {
         return safe.components(separatedBy: "|").map {
             $0.replacingOccurrences(of: placeholder, with: "|").trimmingCharacters(in: .whitespaces)
         }
+    }
+
+    static func stabilizeStreamingInline(_ input: String) -> String {
+        guard !input.isEmpty else { return input }
+        var lines = input.components(separatedBy: "\n")
+        guard let lastIdx = lines.indices.last else { return input }
+        var lastLine = lines[lastIdx]
+
+        if lastLine.hasSuffix("**") {
+            let withoutTrailing = String(lastLine.dropLast(2))
+            let previousPairs = withoutTrailing.components(separatedBy: "**").count - 1
+            if previousPairs % 2 == 0 {
+                lastLine = withoutTrailing
+            }
+        } else if lastLine.hasSuffix("*") && !lastLine.hasSuffix("**") {
+            lastLine.removeLast()
+        }
+
+        let boldCount = lastLine.components(separatedBy: "**").count - 1
+        if boldCount % 2 == 1 {
+            lastLine += "**"
+        }
+
+        let backtickCount = lastLine.filter { $0 == "`" }.count
+        if backtickCount % 2 == 1 {
+            if lastLine.hasSuffix("`") {
+                lastLine.removeLast()
+            } else {
+                lastLine += "`"
+            }
+        }
+
+        lines[lastIdx] = lastLine
+        return lines.joined(separator: "\n")
     }
 
     static func enrichAutoLinksAndSpaces(_ input: String) -> String {
