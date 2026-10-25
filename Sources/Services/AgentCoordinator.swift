@@ -79,7 +79,7 @@ class AgentCoordinator: ObservableObject {
         for server in servers where server.isEnabled {
             for tool in server.tools where tool.isEnabled {
                 let safeName = "\(server.id.prefix(6))_\(tool.name)".replacingOccurrences(of: "-", with: "_")
-                toolServerMap[safeName] = (server, tool.name)
+                toolServerMap[safeName] = (server, tool.rawName)
                 let schemaObj = (try? JSONSerialization.jsonObject(with: Data(tool.inputSchemaJSON.utf8))) as? [String: Any] ?? ["type": "object", "properties": [:]]
                 openAITools.append([
                     "type": "function",
@@ -126,12 +126,11 @@ class AgentCoordinator: ObservableObject {
 
                         var toolOutput = ""
                         if let mapping = toolServerMap[call.name] {
-                            let argsDict = (try? JSONSerialization.jsonObject(with: Data(call.arguments.utf8))) as? [String: Any] ?? [:]
                             do {
                                 toolOutput = try await MCPService.shared.callTool(
-                                    on: mapping.server,
-                                    toolName: mapping.originalToolName,
-                                    arguments: argsDict
+                                    server: mapping.server,
+                                    rawName: mapping.originalToolName,
+                                    argumentsJSON: call.arguments
                                 )
                                 executingCalls[i].result = toolOutput
                             } catch {
