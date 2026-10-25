@@ -15,6 +15,7 @@ struct ChatDetailView: View {
     @State private var selectedTurnId: String? = nil
     @State private var autoFollowOutput: Bool = true
     @State private var manualScrollTrigger: Int = 0
+    @State private var isChatVisible: Bool = true
     @FocusState private var isInputFocused: Bool
 
     init(conversationId: String) {
@@ -239,6 +240,7 @@ struct ChatDetailView: View {
                                     ChatScrollViewIntrospector(
                                         isGenerating: coordinator.isGenerating,
                                         autoFollowOutput: autoFollowOutput,
+                                        isViewActive: isChatVisible,
                                         manualScrollTrigger: manualScrollTrigger,
                                         onUserDragUp: {
                                             autoFollowOutput = false
@@ -291,6 +293,15 @@ struct ChatDetailView: View {
                 }
                 .frame(width: viewportWidth)
             }
+        }
+        .onAppear {
+            isChatVisible = true
+            if coordinator.isGenerating && autoFollowOutput {
+                manualScrollTrigger &+= 1
+            }
+        }
+        .onDisappear {
+            isChatVisible = false
         }
         .navigationTitle(currentConversation.title)
         .navigationBarTitleDisplayMode(.inline)
@@ -887,6 +898,7 @@ struct ChatDetailView: View {
 private struct ChatScrollViewIntrospector: UIViewRepresentable {
     var isGenerating: Bool
     var autoFollowOutput: Bool
+    var isViewActive: Bool
     var manualScrollTrigger: Int
     var onUserDragUp: () -> Void
     var onReachBottom: () -> Void
@@ -896,6 +908,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
         Coordinator(
             isGenerating: isGenerating,
             autoFollowOutput: autoFollowOutput,
+            isViewActive: isViewActive,
             manualScrollTrigger: manualScrollTrigger,
             onUserDragUp: onUserDragUp,
             onReachBottom: onReachBottom,
@@ -913,8 +926,10 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
     func updateUIView(_ uiView: UIView, context: Context) {
         let coord = context.coordinator
         let wasGenerating = coord.isGenerating
+        let wasViewActive = coord.isViewActive
         coord.isGenerating = isGenerating
         coord.autoFollowOutput = autoFollowOutput
+        coord.isViewActive = isViewActive
         coord.onUserDragUp = onUserDragUp
         coord.onReachBottom = onReachBottom
         coord.onScrollSettled = onScrollSettled
@@ -923,8 +938,12 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
 
         DispatchQueue.main.async {
             coord.attachIfNeeded(from: uiView)
-            if triggerChanged {
+            if !isViewActive {
+                coord.stopFollowing()
+            } else if triggerChanged {
                 coord.scrollToBottom(force: true)
+            } else if !wasViewActive && isGenerating && autoFollowOutput {
+                coord.startFollowing()
             } else if wasGenerating && !isGenerating {
                 coord.scrollToBottom()
             }
@@ -934,6 +953,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
     final class Coordinator: NSObject {
         var isGenerating: Bool
         var autoFollowOutput: Bool
+        var isViewActive: Bool
         var manualScrollTrigger: Int
         var onUserDragUp: () -> Void
         var onReachBottom: () -> Void
@@ -949,6 +969,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
         init(
             isGenerating: Bool,
             autoFollowOutput: Bool,
+            isViewActive: Bool,
             manualScrollTrigger: Int,
             onUserDragUp: @escaping () -> Void,
             onReachBottom: @escaping () -> Void,
@@ -956,6 +977,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
         ) {
             self.isGenerating = isGenerating
             self.autoFollowOutput = autoFollowOutput
+            self.isViewActive = isViewActive
             self.manualScrollTrigger = manualScrollTrigger
             self.onUserDragUp = onUserDragUp
             self.onReachBottom = onReachBottom
@@ -980,7 +1002,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
         }
 
         func scrollToBottom(force: Bool = false) {
-            guard let sv = attachedScrollView else { return }
+            guard isViewActive, let sv = attachedScrollView else { return }
             guard force || (autoFollowOutput && !userScrollActive && !sv.isTracking && !sv.isDragging && !sv.isDecelerating) else { return }
             if force {
                 userScrollActive = false
@@ -1016,7 +1038,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
         }
 
         @objc private func followBottomOnDisplayLink(_ link: CADisplayLink) {
-            guard let sv = attachedScrollView else {
+            guard isViewActive, let sv = attachedScrollView else {
                 stopFollowing()
                 return
             }
@@ -1061,7 +1083,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
                     return
                 }
 
-                guard self.autoFollowOutput, abs(delta) > 0.5 else { return }
+                guard self.isViewActive, self.autoFollowOutput, abs(delta) > 0.5 else { return }
                 self.startFollowing()
             }
         }
