@@ -244,6 +244,7 @@ struct ChatDetailView: View {
                                         manualScrollTrigger: manualScrollTrigger,
                                         onUserDragUp: {
                                             autoFollowOutput = false
+                                            coordinator.streamingState.setDisplayPaused(true)
                                         },
                                         onReachBottom: {
                                             autoFollowOutput = true
