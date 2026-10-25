@@ -6,6 +6,7 @@ struct MessageDisplayTurn: Identifiable, Equatable {
     var role: MessageRole
     var primaryMessageId: String
     var content: String
+    var attachments: [ChatAttachment]
     var toolCalls: [ToolCallItem]
     var createdAt: Date
     var underlyingMessageIds: [String]
@@ -18,6 +19,7 @@ struct MessageBubbleView: View {
     var isGenerating: Bool = false
     var isActiveGeneratingTurn: Bool = false
     var statusText: String = ""
+    var thinkingStartTime: Date? = nil
     var isSelected: Bool = false
     var onSelectToggle: (() -> Void)? = nil
     var onEditSave: ((String) -> Void)? = nil
@@ -28,44 +30,108 @@ struct MessageBubbleView: View {
     @State private var isCopied: Bool = false
     @State private var isEditing: Bool = false
     @State private var draftText: String = ""
+    @State private var previewingFileAttachment: ChatAttachment? = nil
+    @State private var previewingImageAttachment: ChatAttachment? = nil
     @FocusState private var isEditFieldFocused: Bool
 
     private var theme: AppThemePalette {
         storage.settings.currentTheme
     }
 
+    private var editableRawText: String {
+        if !turn.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return turn.content
+        }
+        if let longAtt = turn.attachments.first(where: { $0.kind == .longText }),
+           let text = longAtt.textContent {
+            return text
+        }
+        return turn.content
+    }
+
     var body: some View {
-        if turn.role == .user {
-            userTurnView
-        } else {
-            assistantTurnView
+        Group {
+            if turn.role == .user {
+                userTurnView
+            } else {
+                assistantTurnView
+            }
+        }
+        .sheet(item: $previewingFileAttachment) { fileAtt in
+            AttachmentFilePreviewSheet(attachment: fileAtt, theme: theme)
+        }
+        .sheet(item: $previewingImageAttachment) { imgAtt in
+            AttachmentImagePreviewSheet(attachment: imgAtt, theme: theme)
         }
     }
 
     private var userTurnView: some View {
-        VStack(alignment: .trailing, spacing: 6) {
+        let imageAtts = turn.attachments.filter { $0.kind == .image }
+        let fileAtts = turn.attachments.filter { $0.kind != .image }
+        let trimmed = turn.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        let autoPackagedLongText: ChatAttachment? = (!trimmed.isEmpty && ChatAttachment.shouldPackageAsLongText(trimmed))
+            ? ChatAttachment.makeLongTextAttachment(from: trimmed)
+            : nil
+
+        return VStack(alignment: .trailing, spacing: 6) {
             HStack(alignment: .top, spacing: 6) {
                 Spacer(minLength: 24)
 
                 if isEditing {
                     editEditorBox(allowResend: true)
                 } else {
-                    Text(turn.content)
-                        .font(.system(size: 15, weight: .regular))
-                        .foregroundColor(theme.primaryText)
-                        .lineSpacing(3.5)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 9)
-                        .background(theme.userMessageBackground)
-                        .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 15, style: .continuous)
-                                .stroke(isSelected ? theme.accent.opacity(0.45) : theme.accent.opacity(0.18), lineWidth: 1)
-                        )
-                        .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-                        .onTapGesture {
-                            onSelectToggle?()
+                    VStack(alignment: .trailing, spacing: 6) {
+                        if !imageAtts.isEmpty {
+                            AttachmentImageGridView(
+                                attachments: imageAtts,
+                                theme: theme,
+                                onSelectImage: { img in
+                                    previewingImageAttachment = img
+                                }
+                            )
                         }
+
+                        ForEach(fileAtts) { fileAtt in
+                            AttachmentFileCardView(
+                                attachment: fileAtt,
+                                theme: theme,
+                                onTap: {
+                                    previewingFileAttachment = fileAtt
+                                }
+                            )
+                        }
+
+                        if let packaged = autoPackagedLongText {
+                            AttachmentFileCardView(
+                                attachment: packaged,
+                                theme: theme,
+                                onTap: {
+                                    previewingFileAttachment = packaged
+                                }
+                            )
+                        } else if !trimmed.isEmpty {
+                            Text(turn.content)
+                                .font(.system(size: 15, weight: .regular))
+                                .foregroundColor(theme.primaryText)
+                                .lineSpacing(3.5)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 9)
+                                .background(theme.userMessageBackground)
+                                .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 15, style: .continuous)
+                                        .stroke(isSelected ? theme.accent.opacity(0.45) : theme.accent.opacity(0.18), lineWidth: 1)
+                                )
+                                .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                                .onTapGesture {
+                                    onSelectToggle?()
+                                }
+                        }
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        onSelectToggle?()
+                    }
                 }
 
                 compactAvatar(isUser: true)
@@ -84,6 +150,7 @@ struct MessageBubbleView: View {
 
     private var assistantTurnView: some View {
         let trimmed = turn.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isPureThinking = isActiveGeneratingTurn && trimmed.isEmpty && turn.toolCalls.isEmpty
 
         return VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .top, spacing: 6) {
@@ -94,6 +161,26 @@ struct MessageBubbleView: View {
 
                 if isEditing {
                     editEditorBox(allowResend: false)
+                } else if isPureThinking {
+                    ThinkingStatusView(
+                        statusText: statusText,
+                        startDate: thinkingStartTime ?? turn.createdAt,
+                        theme: theme
+                    )
+                    .padding(.horizontal, 13)
+                    .padding(.vertical, 9)
+                    .background(theme.cardBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 15, style: .continuous)
+                            .stroke(isSelected ? theme.accent.opacity(0.45) : theme.border, lineWidth: 1)
+                    )
+                    .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                    .onTapGesture {
+                        onSelectToggle?()
+                    }
+
+                    Spacer(minLength: 36)
                 } else {
                     VStack(alignment: .leading, spacing: 8) {
                         if !turn.toolCalls.isEmpty {
@@ -102,18 +189,13 @@ struct MessageBubbleView: View {
 
                         if !trimmed.isEmpty {
                             MarkdownDocumentView(content: trimmed, theme: theme)
-                        }
-
-                        if isActiveGeneratingTurn && trimmed.isEmpty && turn.toolCalls.isEmpty {
-                            HStack(spacing: 8) {
-                                ProgressView()
-                                    .scaleEffect(0.8)
-                                    .tint(theme.accent)
-                                Text(statusText.isEmpty ? "思考中..." : statusText)
-                                    .font(.system(size: 14, weight: .medium))
-                                    .foregroundColor(theme.secondaryText)
-                            }
-                            .padding(.vertical, 2)
+                        } else if isActiveGeneratingTurn {
+                            ThinkingStatusView(
+                                statusText: statusText,
+                                startDate: thinkingStartTime ?? turn.createdAt,
+                                theme: theme
+                            )
+                            .padding(.top, 2)
                         }
                     }
                     .padding(.horizontal, 12)
@@ -154,7 +236,9 @@ struct MessageBubbleView: View {
     }
 
     private var floatingActionPill: some View {
-        HStack(spacing: 4) {
+        let copyTarget = editableRawText
+
+        return HStack(spacing: 4) {
             Button(action: {
                 onRetry?()
             }) {
@@ -177,7 +261,7 @@ struct MessageBubbleView: View {
                 .overlay(theme.border)
 
             Button(action: {
-                draftText = turn.content
+                draftText = editableRawText
                 withAnimation(.easeInOut(duration: 0.15)) {
                     isEditing = true
                 }
@@ -197,13 +281,13 @@ struct MessageBubbleView: View {
             .buttonStyle(.plain)
             .disabled(isGenerating)
 
-            if !turn.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if !copyTarget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Divider()
                     .frame(height: 12)
                     .overlay(theme.border)
 
                 Button(action: {
-                    UIPasteboard.general.string = turn.content
+                    UIPasteboard.general.string = copyTarget
                     withAnimation { isCopied = true }
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                         withAnimation { isCopied = false }
@@ -345,6 +429,7 @@ struct CodeBlockCard: View {
     let theme: AppThemePalette
     @State private var copied: Bool = false
     @State private var isExpanded: Bool = false
+    @State private var showingFullViewer: Bool = false
 
     private let previewLineThreshold = 8
 
@@ -392,6 +477,19 @@ struct CodeBlockCard: View {
 
                 if isCollapsible {
                     Button(action: {
+                        showingFullViewer = true
+                    }) {
+                        HStack(spacing: 3) {
+                            Image(systemName: "doc.text.magnifyingglass")
+                                .font(.system(size: 10.5, weight: .semibold))
+                            Text("查看全文")
+                                .font(.system(size: 11, weight: .medium))
+                        }
+                        .foregroundColor(theme.secondaryText)
+                    }
+                    .buttonStyle(.plain)
+
+                    Button(action: {
                         withAnimation(.easeInOut(duration: 0.18)) {
                             isExpanded.toggle()
                         }
@@ -399,7 +497,7 @@ struct CodeBlockCard: View {
                         HStack(spacing: 3) {
                             Image(systemName: isExpanded ? "rectangle.compress.vertical" : "rectangle.expand.vertical")
                                 .font(.system(size: 10.5, weight: .semibold))
-                            Text(isExpanded ? "收起代码" : "展开全部")
+                            Text(isExpanded ? "收起" : "展开")
                                 .font(.system(size: 11, weight: .medium))
                         }
                         .foregroundColor(theme.accent)
@@ -417,7 +515,7 @@ struct CodeBlockCard: View {
                     HStack(spacing: 4) {
                         Image(systemName: copied ? "checkmark" : "doc.on.doc")
                             .font(.system(size: 10.5, weight: .semibold))
-                        Text(copied ? "已复制" : "复制代码")
+                        Text(copied ? "已复制" : "复制")
                             .font(.system(size: 11, weight: .medium))
                     }
                     .foregroundColor(copied ? theme.accent : theme.secondaryText)
@@ -472,5 +570,17 @@ struct CodeBlockCard: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(theme.border, lineWidth: 1)
         )
+        .sheet(isPresented: $showingFullViewer) {
+            AttachmentFilePreviewSheet(
+                attachment: ChatAttachment(
+                    kind: .file,
+                    fileName: "code.\(language.isEmpty ? "txt" : language.lowercased())",
+                    mimeType: "text/plain",
+                    fileSize: code.utf8.count,
+                    textContent: code
+                ),
+                theme: theme
+            )
+        }
     }
 }

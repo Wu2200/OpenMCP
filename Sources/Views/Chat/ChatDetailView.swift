@@ -6,8 +6,15 @@ struct ChatDetailView: View {
     let conversationId: String
     @StateObject private var coordinator = AgentCoordinator()
     @State private var inputText: String = ""
+    @State private var pendingAttachments: [ChatAttachment] = []
     @State private var showingToolsSheet: Bool = false
+    @State private var showingPhotoPicker: Bool = false
+    @State private var showingCameraPicker: Bool = false
+    @State private var showingDocumentPicker: Bool = false
+    @State private var previewingStagedAttachment: ChatAttachment? = nil
     @State private var selectedTurnId: String? = nil
+    @State private var autoFollowOutput: Bool = true
+    @State private var lastAutoScrollTime: TimeInterval = 0
     @FocusState private var isInputFocused: Bool
 
     private var theme: AppThemePalette {
@@ -31,6 +38,7 @@ struct ChatDetailView: View {
                         role: .user,
                         primaryMessageId: msg.id,
                         content: msg.content,
+                        attachments: msg.attachments ?? [],
                         toolCalls: [],
                         createdAt: msg.createdAt,
                         underlyingMessageIds: [msg.id]
@@ -58,6 +66,7 @@ struct ChatDetailView: View {
                             role: .assistant,
                             primaryMessageId: msg.id,
                             content: msg.content,
+                            attachments: msg.attachments ?? [],
                             toolCalls: msg.toolCalls ?? [],
                             createdAt: msg.createdAt,
                             underlyingMessageIds: [msg.id]
@@ -104,7 +113,7 @@ struct ChatDetailView: View {
             ScrollViewReader { proxy in
                 VStack(spacing: 0) {
                     ZStack(alignment: .bottomTrailing) {
-                        ScrollView {
+                        ScrollView(.vertical, showsIndicators: true) {
                             if displayTurns.isEmpty && !coordinator.isGenerating {
                                 emptyConversationHero
                                     .padding(.horizontal, 14)
@@ -114,7 +123,7 @@ struct ChatDetailView: View {
                                         handleBackgroundTap()
                                     }
                             } else {
-                                LazyVStack(spacing: 12) {
+                                VStack(spacing: 12) {
                                     let turns = displayTurns
                                     ForEach(Array(turns.enumerated()), id: \.element.id) { index, turn in
                                         let isLastAssistant = (index == turns.count - 1 && turn.role == .assistant)
@@ -124,6 +133,7 @@ struct ChatDetailView: View {
                                             isGenerating: coordinator.isGenerating,
                                             isActiveGeneratingTurn: coordinator.isGenerating && isLastAssistant,
                                             statusText: coordinator.statusText,
+                                            thinkingStartTime: coordinator.thinkingStartTime,
                                             isSelected: selectedTurnId == turn.id,
                                             onSelectToggle: {
                                                 if isInputFocused {
@@ -149,6 +159,7 @@ struct ChatDetailView: View {
                                             onEditAndResend: { newContent in
                                                 dismissKeyboard()
                                                 selectedTurnId = nil
+                                                autoFollowOutput = true
                                                 Task {
                                                     await coordinator.retryFromMessage(
                                                         conversationId: conversationId,
@@ -162,6 +173,7 @@ struct ChatDetailView: View {
                                             onRetry: {
                                                 dismissKeyboard()
                                                 selectedTurnId = nil
+                                                autoFollowOutput = true
                                                 Task {
                                                     await coordinator.retryFromMessage(
                                                         conversationId: conversationId,
@@ -196,7 +208,7 @@ struct ChatDetailView: View {
                                     }
 
                                     Color.clear
-                                        .frame(height: 4)
+                                        .frame(height: 2)
                                         .id("bottom_anchor")
                                 }
                                 .padding(.horizontal, 10)
@@ -211,30 +223,45 @@ struct ChatDetailView: View {
                                     handleBackgroundTap()
                                 }
                         )
+                        .simultaneousGesture(
+                            DragGesture(minimumDistance: 5)
+                                .onChanged { value in
+                                    if value.translation.height > 2 || coordinator.isGenerating {
+                                        autoFollowOutput = false
+                                    }
+                                }
+                        )
                         .scrollDismissesKeyboard(.interactively)
                         .onChange(of: currentConversation.messages.count) { _ in
-                            scrollToBottom(proxy: proxy)
+                            if autoFollowOutput {
+                                scrollToBottomImmediate(proxy: proxy)
+                            }
                         }
                         .onChange(of: currentConversation.messages.last?.content) { _ in
-                            scrollToBottom(proxy: proxy)
-                        }
-                        .onChange(of: coordinator.statusText) { _ in
-                            scrollToBottom(proxy: proxy)
+                            guard autoFollowOutput else { return }
+                            let now = CFAbsoluteTimeGetCurrent()
+                            if now - lastAutoScrollTime >= 0.08 {
+                                lastAutoScrollTime = now
+                                scrollToBottomImmediate(proxy: proxy)
+                            }
                         }
 
                         if !displayTurns.isEmpty {
                             Button(action: {
-                                scrollToBottom(proxy: proxy)
+                                autoFollowOutput = true
+                                withAnimation(.easeOut(duration: 0.2)) {
+                                    proxy.scrollTo("bottom_anchor", anchor: .bottom)
+                                }
                             }) {
                                 Image(systemName: "arrow.down")
                                     .font(.system(size: 13, weight: .bold))
-                                    .foregroundColor(theme.primaryText)
+                                    .foregroundColor(autoFollowOutput ? theme.primaryText : theme.accent)
                                     .frame(width: 32, height: 32)
                                     .background(theme.cardBackground)
                                     .clipShape(Circle())
                                     .overlay(
                                         Circle()
-                                            .stroke(theme.border, lineWidth: 1)
+                                            .stroke(autoFollowOutput ? theme.border : theme.accent.opacity(0.45), lineWidth: 1)
                                     )
                                     .shadow(color: Color.black.opacity(theme.isDark ? 0.28 : 0.08), radius: 5, x: 0, y: 2)
                             }
@@ -244,7 +271,7 @@ struct ChatDetailView: View {
                         }
                     }
 
-                    composerDock
+                    composerDock(proxy: proxy)
                 }
             }
         }
@@ -285,6 +312,38 @@ struct ChatDetailView: View {
         }
         .sheet(isPresented: $showingToolsSheet) {
             activeToolsSheet
+        }
+        .sheet(isPresented: $showingPhotoPicker) {
+            PhotoLibraryPicker { images in
+                for (idx, img) in images.enumerated() {
+                    if let att = AttachmentProcessor.processUIImage(img, index: pendingAttachments.count + idx + 1) {
+                        pendingAttachments.append(att)
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showingCameraPicker) {
+            CameraImagePicker { img in
+                if let att = AttachmentProcessor.processUIImage(img, index: pendingAttachments.count + 1) {
+                    pendingAttachments.append(att)
+                }
+            }
+        }
+        .sheet(isPresented: $showingDocumentPicker) {
+            DocumentFilePicker { urls in
+                for url in urls {
+                    if let att = AttachmentProcessor.processFileURL(url) {
+                        pendingAttachments.append(att)
+                    }
+                }
+            }
+        }
+        .sheet(item: $previewingStagedAttachment) { att in
+            if att.kind == .image {
+                AttachmentImagePreviewSheet(attachment: att, theme: theme)
+            } else {
+                AttachmentFilePreviewSheet(attachment: att, theme: theme)
+            }
         }
     }
 
@@ -374,23 +433,21 @@ struct ChatDetailView: View {
             }
             .padding(.top, 2)
 
-            HStack(spacing: 8) {
-                ProgressView()
-                    .scaleEffect(0.8)
-                    .tint(theme.accent)
-                Text(coordinator.statusText.isEmpty ? "思考中..." : coordinator.statusText)
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(theme.secondaryText)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            ThinkingStatusView(
+                statusText: coordinator.statusText,
+                startDate: coordinator.thinkingStartTime ?? Date(),
+                theme: theme
+            )
+            .padding(.horizontal, 13)
+            .padding(.vertical, 9)
             .background(theme.cardBackground)
             .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 15, style: .continuous)
                     .stroke(theme.border, lineWidth: 1)
             )
+
+            Spacer(minLength: 36)
         }
     }
 
@@ -408,6 +465,7 @@ struct ChatDetailView: View {
                 if let lastTurn = displayTurns.last {
                     Button(action: {
                         dismissKeyboard()
+                        autoFollowOutput = true
                         Task {
                             await coordinator.retryFromMessage(
                                 conversationId: conversationId,
@@ -442,10 +500,21 @@ struct ChatDetailView: View {
         .padding(.leading, 30)
     }
 
-    private var composerDock: some View {
-        let canSend = !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !coordinator.isGenerating
+    private func composerDock(proxy: ScrollViewProxy) -> some View {
+        let canSend = (!inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pendingAttachments.isEmpty) && !coordinator.isGenerating
 
-        return VStack(spacing: 8) {
+        return VStack(alignment: .leading, spacing: 8) {
+            if !pendingAttachments.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(pendingAttachments) { att in
+                            stagedAttachmentChip(att)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+            }
+
             HStack(alignment: .bottom, spacing: 10) {
                 TextField("在这里输入你的问题...", text: $inputText, axis: .vertical)
                     .lineLimit(1...6)
@@ -460,9 +529,21 @@ struct ChatDetailView: View {
                             isInputFocused = true
                         }
                     }
+                    .onChange(of: inputText) { newValue in
+                        if newValue.count >= 650 {
+                            let packaged = ChatAttachment.makeLongTextAttachment(
+                                from: newValue,
+                                index: pendingAttachments.filter { $0.kind == .longText }.count + 1
+                            )
+                            pendingAttachments.append(packaged)
+                            inputText = ""
+                        }
+                    }
                     .disabled(coordinator.isGenerating)
 
-                Button(action: sendMessage) {
+                Button(action: {
+                    sendMessage(proxy: proxy)
+                }) {
                     ZStack {
                         Circle()
                             .fill(canSend ? theme.accent : theme.elevatedBackground)
@@ -478,27 +559,29 @@ struct ChatDetailView: View {
 
             HStack(spacing: 12) {
                 Menu {
-                    Section("快捷提问模板") {
-                        ForEach(starterPrompts, id: \.title) { item in
-                            Button(action: {
-                                inputText = item.prompt
-                            }) {
-                                Label(item.title, systemImage: item.icon)
-                            }
-                        }
+                    Button(action: {
+                        dismissKeyboard()
+                        showingPhotoPicker = true
+                    }) {
+                        Label("上传图片", systemImage: "photo.on.rectangle.angled")
                     }
 
-                    Divider()
-
-                    Button(role: .destructive, action: {
-                        selectedTurnId = nil
-                        storage.clearConversationMessages(id: conversationId)
+                    Button(action: {
+                        dismissKeyboard()
+                        showingCameraPicker = true
                     }) {
-                        Label("清空当前对话", systemImage: "trash")
+                        Label("拍照上传", systemImage: "camera")
+                    }
+
+                    Button(action: {
+                        dismissKeyboard()
+                        showingDocumentPicker = true
+                    }) {
+                        Label("上传文件", systemImage: "doc.badge.plus")
                     }
                 } label: {
                     Image(systemName: "plus.circle")
-                        .font(.system(size: 17.5, weight: .medium))
+                        .font(.system(size: 18, weight: .medium))
                         .foregroundColor(theme.secondaryText)
                 }
 
@@ -582,6 +665,62 @@ struct ChatDetailView: View {
         .padding(.top, 4)
         .padding(.bottom, 6)
         .background(theme.background)
+    }
+
+    private func stagedAttachmentChip(_ att: ChatAttachment) -> some View {
+        HStack(spacing: 7) {
+            if att.kind == .image,
+               let b64 = att.imageDataBase64,
+               let data = Data(base64Encoded: b64),
+               let img = UIImage(data: data) {
+                Image(uiImage: img)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 34, height: 34)
+                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            } else {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(theme.accent.opacity(0.14))
+                        .frame(width: 32, height: 32)
+                    Image(systemName: att.iconName)
+                        .font(.system(size: 13.5, weight: .semibold))
+                        .foregroundColor(theme.accent)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(att.fileName)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(theme.primaryText)
+                    .lineLimit(1)
+                Text(att.metadataSummary)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(theme.secondaryText)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: 130, alignment: .leading)
+
+            Button(action: {
+                pendingAttachments.removeAll { $0.id == att.id }
+            }) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 15))
+                    .foregroundColor(theme.mutedText)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(theme.elevatedBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(theme.border, lineWidth: 1)
+        )
+        .onTapGesture {
+            previewingStagedAttachment = att
+        }
     }
 
     private var activeToolsSheet: some View {
@@ -669,16 +808,20 @@ struct ChatDetailView: View {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 
-    private func sendMessage() {
+    private func sendMessage(proxy: ScrollViewProxy) {
         let prompt = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !prompt.isEmpty else { return }
+        let attachmentsToSend = pendingAttachments
+        guard !prompt.isEmpty || !attachmentsToSend.isEmpty else { return }
         inputText = ""
+        pendingAttachments = []
         selectedTurnId = nil
+        autoFollowOutput = true
         dismissKeyboard()
         Task {
             await coordinator.sendMessage(
                 conversationId: conversationId,
                 userPrompt: prompt,
+                attachments: attachmentsToSend,
                 settings: storage.settings,
                 servers: storage.servers
             )
@@ -687,6 +830,7 @@ struct ChatDetailView: View {
 
     private func sendSpecificPrompt(_ prompt: String) {
         selectedTurnId = nil
+        autoFollowOutput = true
         dismissKeyboard()
         Task {
             await coordinator.sendMessage(
@@ -698,13 +842,11 @@ struct ChatDetailView: View {
         }
     }
 
-    private func scrollToBottom(proxy: ScrollViewProxy) {
-        withAnimation(.easeOut(duration: 0.2)) {
-            if let last = displayTurns.last {
-                proxy.scrollTo(last.id, anchor: .bottom)
-            } else if coordinator.isGenerating {
-                proxy.scrollTo("generating_status", anchor: .bottom)
-            }
+    private func scrollToBottomImmediate(proxy: ScrollViewProxy) {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            proxy.scrollTo("bottom_anchor", anchor: .bottom)
         }
     }
 }

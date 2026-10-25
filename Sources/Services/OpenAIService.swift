@@ -177,7 +177,7 @@ class OpenAIService {
                     if let piece = delta["content"] as? String, !piece.isEmpty {
                         accumulatedContent += piece
                         let now = CFAbsoluteTimeGetCurrent()
-                        if now - lastYieldTime >= 0.045 {
+                        if now - lastYieldTime >= 0.065 {
                             lastYieldTime = now
                             await onPartialUpdate?(accumulatedContent)
                         }
@@ -268,10 +268,61 @@ class OpenAIService {
         }
 
         for msg in messages {
+            var combinedText = msg.content
+            let attachments = msg.attachments ?? []
+
+            for att in attachments {
+                switch att.kind {
+                case .longText:
+                    if let text = att.textContent, !text.isEmpty {
+                        if combinedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            combinedText = text
+                        } else {
+                            combinedText += "\n\n" + text
+                        }
+                    }
+                case .file:
+                    if let text = att.textContent, !text.isEmpty {
+                        let block = "--- 文件: \(att.fileName) ---\n\(text)\n--- 文件结束 ---"
+                        if combinedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            combinedText = block
+                        } else {
+                            combinedText += "\n\n" + block
+                        }
+                    }
+                case .image:
+                    break
+                }
+            }
+
+            let imageAttachments = attachments.filter { $0.kind == .image && ($0.imageDataBase64?.isEmpty == false) }
+
             var m: [String: Any] = [
-                "role": msg.role.rawValue,
-                "content": msg.content
+                "role": msg.role.rawValue
             ]
+
+            if !imageAttachments.isEmpty && msg.role == .user {
+                var contentParts: [[String: Any]] = []
+                let textBody = combinedText.trimmingCharacters(in: .whitespacesAndNewlines)
+                contentParts.append([
+                    "type": "text",
+                    "text": textBody.isEmpty ? "请分析上传的图片内容" : textBody
+                ])
+                for img in imageAttachments {
+                    if let b64 = img.imageDataBase64 {
+                        contentParts.append([
+                            "type": "image_url",
+                            "image_url": [
+                                "url": "data:\(img.mimeType);base64,\(b64)"
+                            ]
+                        ])
+                    }
+                }
+                m["content"] = contentParts
+            } else {
+                m["content"] = combinedText
+            }
+
             if let toolCalls = msg.toolCalls, !toolCalls.isEmpty {
                 m["tool_calls"] = toolCalls.map { tc in
                     [

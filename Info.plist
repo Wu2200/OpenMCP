@@ -43,6 +43,10 @@
 	</array>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>需要使用音频权限以支持音频功能与后台持续运行</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>需要访问相册以选择并上传图片到对话中</string>
+	<key>NSCameraUsageDescription</key>
+	<string>需要使用相机以拍照并上传图片到对话中</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>

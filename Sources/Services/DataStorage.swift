@@ -117,7 +117,21 @@ class DataStorage: ObservableObject {
         guard !trimmed.isEmpty,
               let cIdx = conversations.firstIndex(where: { $0.id == conversationId }),
               let mIdx = conversations[cIdx].messages.firstIndex(where: { $0.id == messageId }) else { return }
-        conversations[cIdx].messages[mIdx].content = trimmed
+
+        if conversations[cIdx].messages[mIdx].role == .user {
+            let nonLongAttachments = (conversations[cIdx].messages[mIdx].attachments ?? []).filter { $0.kind != .longText }
+            if ChatAttachment.shouldPackageAsLongText(trimmed) {
+                var newAtts = nonLongAttachments
+                newAtts.append(ChatAttachment.makeLongTextAttachment(from: trimmed))
+                conversations[cIdx].messages[mIdx].content = ""
+                conversations[cIdx].messages[mIdx].attachments = newAtts
+            } else {
+                conversations[cIdx].messages[mIdx].content = trimmed
+                conversations[cIdx].messages[mIdx].attachments = nonLongAttachments.isEmpty ? nil : nonLongAttachments
+            }
+        } else {
+            conversations[cIdx].messages[mIdx].content = trimmed
+        }
         conversations[cIdx].updatedAt = Date()
         saveConversations()
     }

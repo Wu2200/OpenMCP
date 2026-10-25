@@ -7,22 +7,43 @@ class AgentCoordinator: ObservableObject {
     @Published var isGenerating: Bool = false
     @Published var statusText: String = ""
     @Published var errorMessage: String? = nil
+    @Published var thinkingStartTime: Date? = nil
 
     func sendMessage(
         conversationId: String,
         userPrompt: String,
+        attachments: [ChatAttachment] = [],
         settings: OpenAISettings,
         servers: [MCPServer]
     ) async {
         let trimmed = userPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty || !attachments.isEmpty else { return }
         guard var conversation = DataStorage.shared.conversations.first(where: { $0.id == conversationId }) else { return }
 
-        let userMsg = ChatMessage(role: .user, content: trimmed)
+        var finalContent = trimmed
+        var finalAttachments = attachments
+
+        if ChatAttachment.shouldPackageAsLongText(trimmed) {
+            let packaged = ChatAttachment.makeLongTextAttachment(from: trimmed)
+            finalAttachments.append(packaged)
+            finalContent = ""
+        }
+
+        let userMsg = ChatMessage(
+            role: .user,
+            content: finalContent,
+            attachments: finalAttachments.isEmpty ? nil : finalAttachments
+        )
         conversation.messages.append(userMsg)
         conversation.updatedAt = Date()
+
         if conversation.messages.filter({ $0.role == .user }).count == 1 && conversation.title == "新对话" {
-            conversation.title = String(trimmed.prefix(18))
+            if !trimmed.isEmpty {
+                let firstLine = trimmed.components(separatedBy: .newlines).first ?? trimmed
+                conversation.title = String(firstLine.prefix(18))
+            } else if let firstAtt = finalAttachments.first {
+                conversation.title = String(firstAtt.fileName.prefix(18))
+            }
         }
         DataStorage.shared.updateConversation(conversation)
 
@@ -41,7 +62,16 @@ class AgentCoordinator: ObservableObject {
 
         if conversation.messages[idx].role == .user {
             if let updated = newPrompt?.trimmingCharacters(in: .whitespacesAndNewlines), !updated.isEmpty {
-                conversation.messages[idx].content = updated
+                let nonLongAttachments = (conversation.messages[idx].attachments ?? []).filter { $0.kind != .longText }
+                if ChatAttachment.shouldPackageAsLongText(updated) {
+                    var newAtts = nonLongAttachments
+                    newAtts.append(ChatAttachment.makeLongTextAttachment(from: updated))
+                    conversation.messages[idx].content = ""
+                    conversation.messages[idx].attachments = newAtts
+                } else {
+                    conversation.messages[idx].content = updated
+                    conversation.messages[idx].attachments = nonLongAttachments.isEmpty ? nil : nonLongAttachments
+                }
             }
             if idx + 1 < conversation.messages.count {
                 conversation.messages.removeSubrange((idx + 1)..<conversation.messages.count)
@@ -71,7 +101,8 @@ class AgentCoordinator: ObservableObject {
 
         errorMessage = nil
         isGenerating = true
-        statusText = "思考中..."
+        thinkingStartTime = Date()
+        statusText = "思考中"
 
         var openAITools: [[String: Any]] = []
         var toolServerMap: [String: (server: MCPServer, originalToolName: String)] = [:]
@@ -113,7 +144,7 @@ class AgentCoordinator: ObservableObject {
                     tools: openAITools.isEmpty ? nil : openAITools,
                     onPartialUpdate: { [weak self] partialText in
                         guard let self = self else { return }
-                        self.statusText = "正在输出..."
+                        self.statusText = "思考中"
                         if msgIndex < conversation.messages.count {
                             conversation.messages[msgIndex].content = partialText
                             DataStorage.shared.updateConversation(conversation, persistImmediately: false)
@@ -134,7 +165,7 @@ class AgentCoordinator: ObservableObject {
 
                     for i in executingCalls.indices {
                         let call = executingCalls[i]
-                        statusText = "正在调用工具: \(call.name)..."
+                        statusText = "调用工具中"
 
                         var toolOutput = ""
                         if let mapping = toolServerMap[call.name] {
@@ -169,7 +200,7 @@ class AgentCoordinator: ObservableObject {
                         DataStorage.shared.updateConversation(conversation)
                     }
 
-                    statusText = "整理工具结果..."
+                    statusText = "思考中"
                 } else {
                     conversation.updatedAt = Date()
                     DataStorage.shared.updateConversation(conversation, persistImmediately: true)
@@ -188,6 +219,7 @@ class AgentCoordinator: ObservableObject {
         }
 
         isGenerating = false
+        thinkingStartTime = nil
         statusText = ""
     }
 }
