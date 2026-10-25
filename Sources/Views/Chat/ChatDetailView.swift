@@ -234,7 +234,7 @@ struct ChatDetailView: View {
                                 }
                                 .padding(.horizontal, 10)
                                 .padding(.top, 10)
-                                .padding(.bottom, 12)
+                                .padding(.bottom, 50)
                                 .frame(width: viewportWidth)
                                 .background(
                                     ChatScrollViewIntrospector(
@@ -244,7 +244,6 @@ struct ChatDetailView: View {
                                         manualScrollTrigger: manualScrollTrigger,
                                         onUserDragUp: {
                                             autoFollowOutput = false
-                                            coordinator.streamingState.setDisplayPaused(true)
                                         },
                                         onReachBottom: {
                                             autoFollowOutput = true
@@ -259,6 +258,19 @@ struct ChatDetailView: View {
                         }
                         .frame(width: viewportWidth)
                         .scrollDismissesKeyboard(.interactively)
+                        .overlay(alignment: .bottom) {
+                            LinearGradient(
+                                stops: [
+                                    .init(color: theme.background.opacity(0), location: 0),
+                                    .init(color: theme.background.opacity(0.72), location: 0.58),
+                                    .init(color: theme.background, location: 1)
+                                ],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                            .frame(height: 42)
+                            .allowsHitTesting(false)
+                        }
                         .onChange(of: currentConversation.messages.count) { _ in
                             if autoFollowOutput {
                                 manualScrollTrigger &+= 1
@@ -943,7 +955,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
             } else if triggerChanged {
                 coord.scrollToBottom(force: true)
             } else if !wasViewActive && isGenerating && autoFollowOutput {
-                coord.startFollowing()
+                coord.scheduleFollowUpdate(delay: 0.04)
             } else if wasGenerating && !isGenerating {
                 coord.scrollToBottom()
             }
@@ -962,6 +974,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
         private var contentSizeObservation: NSKeyValueObservation?
         private var lastObservedHeight: CGFloat = 0
         private var scrollSettleWorkItem: DispatchWorkItem?
+        private var followBatchWorkItem: DispatchWorkItem?
         private var displayLink: CADisplayLink?
         private var userScrollActive = false
         private var lastDisplayTimestamp: CFTimeInterval = 0
@@ -1023,6 +1036,32 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
             )
         }
 
+        func scheduleFollowUpdate(delay: TimeInterval = 0.1) {
+            guard isViewActive,
+                  autoFollowOutput,
+                  !userScrollActive,
+                  let sv = attachedScrollView,
+                  !sv.isTracking,
+                  !sv.isDragging,
+                  !sv.isDecelerating,
+                  followBatchWorkItem == nil else { return }
+
+            let item = DispatchWorkItem { [weak self] in
+                guard let self = self else { return }
+                self.followBatchWorkItem = nil
+                guard self.isViewActive,
+                      self.autoFollowOutput,
+                      !self.userScrollActive,
+                      let scrollView = self.attachedScrollView,
+                      !scrollView.isTracking,
+                      !scrollView.isDragging,
+                      !scrollView.isDecelerating else { return }
+                self.startFollowing()
+            }
+            followBatchWorkItem = item
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
+        }
+
         func startFollowing() {
             guard displayLink == nil else { return }
             lastDisplayTimestamp = 0
@@ -1032,6 +1071,8 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
         }
 
         func stopFollowing() {
+            followBatchWorkItem?.cancel()
+            followBatchWorkItem = nil
             displayLink?.invalidate()
             displayLink = nil
             lastDisplayTimestamp = 0
@@ -1063,7 +1104,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
                 ? link.duration
                 : min(max(link.timestamp - lastDisplayTimestamp, 1.0 / 120.0), 1.0 / 30.0)
             lastDisplayTimestamp = link.timestamp
-            let progress = 1 - exp(-elapsed / 0.065)
+            let progress = 1 - exp(-elapsed / 0.14)
             let nextY = sv.contentOffset.y + delta * progress
             sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: nextY), animated: false)
         }
@@ -1086,7 +1127,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
                 }
 
                 guard self.isViewActive, self.autoFollowOutput, abs(delta) > 0.5 else { return }
-                self.startFollowing()
+                self.scheduleFollowUpdate()
             }
         }
 
