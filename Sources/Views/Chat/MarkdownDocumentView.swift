@@ -273,51 +273,90 @@ final class StreamingRevealTracker {
     private(set) var segments: [Segment] = []
     private var lastLength: Int = 0
 
-    func register(length: Int, now: Date) -> Bool {
+    func register(length: Int, now: Date, isStreaming: Bool) -> [Segment] {
         if length < lastLength {
             segments.removeAll { $0.start >= length }
-        } else if length > lastLength {
+        } else if length > lastLength && isStreaming {
             segments.append(Segment(start: lastLength, date: now))
         }
         lastLength = length
         segments.removeAll { now.timeIntervalSince($0.date) >= Self.fadeDuration }
-        return !segments.isEmpty
+        return segments
     }
 
-    static func opacity(for segment: Segment, at date: Date) -> Double {
-        let progress = min(1, max(0, date.timeIntervalSince(segment.date) / fadeDuration))
+    struct RevealRun {
+        let range: Range<AttributedString.Index>
+        let color: Color
+        let date: Date
+    }
+
+    static func opacity(since start: Date, at date: Date) -> Double {
+        let progress = min(1, max(0, date.timeIntervalSince(start) / fadeDuration))
         let eased = 1 - pow(1 - progress, 3)
         return 0.06 + 0.94 * eased
     }
 
-    static func apply(
-        to attr: AttributedString,
+    static func revealRuns(
+        in attr: AttributedString,
         segments: [Segment],
-        at date: Date,
         baseColor: Color,
         linkColor: Color
-    ) -> AttributedString {
-        guard !segments.isEmpty else { return attr }
-        var result = attr
-        let total = result.characters.count
-        var pending: [(Range<AttributedString.Index>, Color)] = []
+    ) -> [RevealRun] {
+        guard !segments.isEmpty else { return [] }
+        let characters = attr.characters
+        let total = characters.count
+        var cursor = characters.startIndex
+        var cursorOffset = 0
+        var result: [RevealRun] = []
         for (offset, segment) in segments.enumerated() {
             let start = min(segment.start, total)
             let end = offset + 1 < segments.count ? min(segments[offset + 1].start, total) : total
-            guard end > start else { continue }
-            let alpha = opacity(for: segment, at: date)
-            guard alpha < 0.995 else { continue }
-            let lower = result.characters.index(result.startIndex, offsetBy: start)
-            let upper = result.characters.index(result.startIndex, offsetBy: end)
-            for run in result[lower..<upper].runs {
+            guard end > start, start >= cursorOffset else { continue }
+            let lower = characters.index(cursor, offsetBy: start - cursorOffset)
+            let upper = characters.index(lower, offsetBy: end - start)
+            cursor = upper
+            cursorOffset = end
+            for run in attr[lower..<upper].runs {
                 let color: Color = run.link != nil ? linkColor : baseColor
-                pending.append((run.range, color.opacity(alpha)))
+                result.append(RevealRun(range: run.range, color: color, date: segment.date))
             }
         }
-        for (range, color) in pending {
-            result[range].foregroundColor = color
+        return result
+    }
+
+    static func render(_ attr: AttributedString, runs: [RevealRun], at date: Date) -> AttributedString {
+        var result = attr
+        for run in runs {
+            let alpha = opacity(since: run.date, at: date)
+            guard alpha < 0.995 else { continue }
+            result[run.range].foregroundColor = run.color.opacity(alpha)
         }
         return result
+    }
+}
+
+struct StreamingRevealSchedule: TimelineSchedule {
+    let end: Date
+
+    func entries(from startDate: Date, mode: TimelineScheduleMode) -> Entries {
+        Entries(current: startDate, end: end)
+    }
+
+    struct Entries: Sequence, IteratorProtocol {
+        var current: Date
+        let end: Date
+        var finished = false
+
+        mutating func next() -> Date? {
+            guard !finished else { return nil }
+            if current >= end {
+                finished = true
+                return end
+            }
+            let value = current
+            current = current.addingTimeInterval(1.0 / 60.0)
+            return value
+        }
     }
 }
 
@@ -339,31 +378,33 @@ struct MarkdownInlineText: View {
             isStreaming: isStreaming
         )
         let baseColor: Color = isSecondary ? theme.secondaryText : theme.primaryText
-        if isStreaming {
-            let isRevealing = revealTracker.register(length: attr.characters.count, now: Date())
-            let segments = revealTracker.segments
-            TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: !isRevealing)) { context in
-                Text(
-                    StreamingRevealTracker.apply(
-                        to: attr,
-                        segments: segments,
-                        at: context.date,
-                        baseColor: baseColor,
-                        linkColor: theme.accent
-                    )
-                )
-                .font(.system(size: fontSize, weight: weight))
-                .foregroundColor(baseColor)
-                .tint(theme.accent)
-                .frame(maxWidth: .infinity, alignment: .leading)
+        let activeSegments = revealTracker.register(length: attr.characters.count, now: Date(), isStreaming: isStreaming)
+        if let lastSegment = activeSegments.last {
+            let runs = StreamingRevealTracker.revealRuns(
+                in: attr,
+                segments: activeSegments,
+                baseColor: baseColor,
+                linkColor: theme.accent
+            )
+            TimelineView(StreamingRevealSchedule(end: lastSegment.date.addingTimeInterval(StreamingRevealTracker.fadeDuration))) { context in
+                styledText(StreamingRevealTracker.render(attr, runs: runs, at: context.date), baseColor: baseColor)
             }
         } else {
-            Text(attr)
-                .font(.system(size: fontSize, weight: weight))
-                .foregroundColor(isSecondary ? theme.secondaryText : theme.primaryText)
-                .tint(theme.accent)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            styledText(attr, baseColor: baseColor)
+        }
+    }
+
+    @ViewBuilder
+    private func styledText(_ value: AttributedString, baseColor: Color) -> some View {
+        let text = Text(value)
+            .font(.system(size: fontSize, weight: weight))
+            .foregroundColor(baseColor)
+            .tint(theme.accent)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        if isStreaming {
+            text
+        } else {
+            text.textSelection(.enabled)
         }
     }
 }
