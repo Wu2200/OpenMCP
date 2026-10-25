@@ -1031,7 +1031,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
             displayLink = link
         }
 
-        private func stopFollowing() {
+        func stopFollowing() {
             displayLink?.invalidate()
             displayLink = nil
             lastDisplayTimestamp = 0
