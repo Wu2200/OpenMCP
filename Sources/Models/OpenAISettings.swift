@@ -183,11 +183,11 @@ struct OpenAISettings: Codable, Equatable {
         return result
     }
 
-    var chatSelectableModelEntries: [(profileId: String, profileName: String, model: String)] {
-        var entries: [(profileId: String, profileName: String, model: String)] = []
+    var chatSelectableModelEntries: [(id: String, profileId: String, profileName: String, model: String)] {
+        var entries: [(id: String, profileId: String, profileName: String, model: String)] = []
         for profile in providerProfiles {
             for model in profile.enabledModels where !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                entries.append((profile.id, profile.name, model))
+                entries.append(("\(profile.id)::\(model)", profile.id, profile.name, model))
             }
         }
         if entries.isEmpty {
@@ -195,7 +195,7 @@ struct OpenAISettings: Codable, Equatable {
             let fallbackName = activeProfile?.name ?? "默认配置"
             let trimmed = modelName.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty {
-                entries.append((fallbackId, fallbackName, trimmed))
+                entries.append(("\(fallbackId)::\(trimmed)", fallbackId, fallbackName, trimmed))
             }
         }
         return entries
@@ -212,23 +212,33 @@ struct OpenAISettings: Codable, Equatable {
             copy.apiKey = profile.apiKey
             copy.availableModels = profile.availableModels
             copy.enabledModels = profile.enabledModels
-            if let m = conv.selectedModelName, !m.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                copy.modelName = m
+            if let m = conv.selectedModelName?.trimmingCharacters(in: .whitespacesAndNewlines), !m.isEmpty {
+                if profile.enabledModels.isEmpty || profile.enabledModels.contains(m) || profile.availableModels.contains(m) {
+                    copy.modelName = m
+                } else if profile.enabledModels.contains(self.modelName) {
+                    copy.modelName = self.modelName
+                } else if let first = profile.enabledModels.first {
+                    copy.modelName = first
+                } else {
+                    copy.modelName = m
+                }
             } else if let first = profile.enabledModels.first {
                 copy.modelName = first
             }
             return copy
         }
 
-        if let m = conv.selectedModelName, !m.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if let m = conv.selectedModelName?.trimmingCharacters(in: .whitespacesAndNewlines), !m.isEmpty {
             if let matchedProfile = providerProfiles.first(where: { $0.enabledModels.contains(m) || $0.availableModels.contains(m) }) {
                 copy.activeProfileId = matchedProfile.id
                 copy.baseURL = matchedProfile.baseURL
                 copy.apiKey = matchedProfile.apiKey
                 copy.availableModels = matchedProfile.availableModels
                 copy.enabledModels = matchedProfile.enabledModels
+                copy.modelName = m
+            } else if chatSelectableModels.isEmpty || chatSelectableModels.contains(m) {
+                copy.modelName = m
             }
-            copy.modelName = m
         }
         return copy
     }
