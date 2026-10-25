@@ -17,33 +17,30 @@ struct ToolCallSummaryGroupView: View {
         return toolCalls.last
     }
 
-    private var hasExecuting: Bool {
-        toolCalls.contains(where: { $0.isExecuting })
-    }
-
-    private var hasError: Bool {
-        toolCalls.contains(where: { $0.error != nil })
-    }
-
     private var completedCount: Int {
         toolCalls.filter { !$0.isExecuting }.count
     }
 
     private var summaryStatusColor: Color {
-        if hasExecuting { return theme.accent }
-        if hasError { return .orange }
+        guard let latest = latestCall else { return .green }
+        if latest.isExecuting { return theme.accent }
+        if latest.error != nil { return .orange }
         return .green
     }
 
     private var summaryStatusIcon: String {
-        if hasError { return "exclamationmark.triangle.fill" }
+        guard let latest = latestCall else { return "checkmark.circle.fill" }
+        if latest.error != nil { return "exclamationmark.triangle.fill" }
         return "checkmark.circle.fill"
     }
 
     private var summaryHeadline: String {
         guard let latest = latestCall else { return "工具调用" }
-        if hasExecuting {
+        if latest.isExecuting {
             return "正在调用: \(latest.name)"
+        }
+        if latest.error != nil {
+            return "调用异常: \(latest.name)"
         }
         if toolCalls.count == 1 {
             return "已调用工具: \(latest.name)"
@@ -52,13 +49,14 @@ struct ToolCallSummaryGroupView: View {
     }
 
     private var summarySubtext: String {
-        if hasExecuting {
-            return "已完成 \(completedCount)/\(toolCalls.count) 次调用 · 点击展开全部"
+        guard let latest = latestCall else { return "" }
+        if latest.isExecuting {
+            return "进度 \(completedCount)/\(toolCalls.count) · 点击展开详情"
         }
-        if hasError {
-            return "共调用 \(toolCalls.count) 次工具（含异常）· 点击查看详情"
+        if let err = latest.error {
+            return "最新状态: \(err)"
         }
-        return "本轮共完成 \(toolCalls.count) 次工具调用 · 已折叠"
+        return "最新工具执行成功 · 共调用 \(toolCalls.count) 次"
     }
 
     var body: some View {
@@ -74,7 +72,7 @@ struct ToolCallSummaryGroupView: View {
                             .fill(summaryStatusColor.opacity(0.15))
                             .frame(width: 28, height: 28)
 
-                        if hasExecuting {
+                        if latestCall?.isExecuting == true {
                             ProgressView()
                                 .scaleEffect(0.68)
                                 .tint(theme.accent)

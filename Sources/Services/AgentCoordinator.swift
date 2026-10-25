@@ -95,18 +95,33 @@ class AgentCoordinator: ObservableObject {
         var maxIterations = 8
         while maxIterations > 0 {
             maxIterations -= 1
+            let contextMessages = conversation.messages
+
+            let placeholderMsg = ChatMessage(
+                role: .assistant,
+                content: "",
+                toolCalls: nil
+            )
+            conversation.messages.append(placeholderMsg)
+            let msgIndex = conversation.messages.count - 1
+            DataStorage.shared.updateConversation(conversation, persistImmediately: false)
+
             do {
-                let (content, toolCalls) = try await OpenAIService.shared.chatCompletion(
+                let (content, toolCalls) = try await OpenAIService.shared.streamChatCompletion(
                     settings: settings,
-                    messages: conversation.messages,
-                    tools: openAITools.isEmpty ? nil : openAITools
+                    messages: contextMessages,
+                    tools: openAITools.isEmpty ? nil : openAITools,
+                    onPartialUpdate: { [weak self] partialText in
+                        guard let self = self else { return }
+                        self.statusText = "正在输出..."
+                        if msgIndex < conversation.messages.count {
+                            conversation.messages[msgIndex].content = partialText
+                            DataStorage.shared.updateConversation(conversation, persistImmediately: false)
+                        }
+                    }
                 )
 
-                var assistantMsg = ChatMessage(
-                    role: .assistant,
-                    content: content ?? "",
-                    toolCalls: toolCalls
-                )
+                conversation.messages[msgIndex].content = content ?? ""
 
                 if let calls = toolCalls, !calls.isEmpty {
                     var executingCalls = calls.map { c -> ToolCallItem in
@@ -114,11 +129,8 @@ class AgentCoordinator: ObservableObject {
                         item.isExecuting = true
                         return item
                     }
-                    assistantMsg.toolCalls = executingCalls
-                    conversation.messages.append(assistantMsg)
+                    conversation.messages[msgIndex].toolCalls = executingCalls
                     DataStorage.shared.updateConversation(conversation)
-
-                    let msgIndex = conversation.messages.count - 1
 
                     for i in executingCalls.indices {
                         let call = executingCalls[i]
@@ -159,12 +171,17 @@ class AgentCoordinator: ObservableObject {
 
                     statusText = "整理工具结果..."
                 } else {
-                    conversation.messages.append(assistantMsg)
                     conversation.updatedAt = Date()
-                    DataStorage.shared.updateConversation(conversation)
+                    DataStorage.shared.updateConversation(conversation, persistImmediately: true)
                     break
                 }
             } catch {
+                if msgIndex < conversation.messages.count,
+                   conversation.messages[msgIndex].content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                   (conversation.messages[msgIndex].toolCalls ?? []).isEmpty {
+                    conversation.messages.remove(at: msgIndex)
+                }
+                DataStorage.shared.updateConversation(conversation, persistImmediately: true)
                 errorMessage = error.localizedDescription
                 break
             }

@@ -16,6 +16,8 @@ struct MessageBubbleView: View {
     let turn: MessageDisplayTurn
     var modelName: String = "Assistant"
     var isGenerating: Bool = false
+    var isActiveGeneratingTurn: Bool = false
+    var statusText: String = ""
     var isSelected: Bool = false
     var onSelectToggle: (() -> Void)? = nil
     var onEditSave: ((String) -> Void)? = nil
@@ -81,7 +83,9 @@ struct MessageBubbleView: View {
     }
 
     private var assistantTurnView: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        let trimmed = turn.content.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .top, spacing: 6) {
                 compactAvatar(isUser: false)
                     .onTapGesture {
@@ -96,9 +100,20 @@ struct MessageBubbleView: View {
                             ToolCallSummaryGroupView(toolCalls: turn.toolCalls)
                         }
 
-                        let trimmed = turn.content.trimmingCharacters(in: .whitespacesAndNewlines)
                         if !trimmed.isEmpty {
                             MarkdownDocumentView(content: trimmed, theme: theme)
+                        }
+
+                        if isActiveGeneratingTurn && trimmed.isEmpty && turn.toolCalls.isEmpty {
+                            HStack(spacing: 8) {
+                                ProgressView()
+                                    .scaleEffect(0.8)
+                                    .tint(theme.accent)
+                                Text(statusText.isEmpty ? "思考中..." : statusText)
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundColor(theme.secondaryText)
+                            }
+                            .padding(.vertical, 2)
                         }
                     }
                     .padding(.horizontal, 12)
@@ -329,14 +344,69 @@ struct CodeBlockCard: View {
     let code: String
     let theme: AppThemePalette
     @State private var copied: Bool = false
+    @State private var isExpanded: Bool = false
+
+    private let previewLineThreshold = 8
+
+    private var codeLines: [Substring] {
+        code.split(separator: "\n", omittingEmptySubsequences: false)
+    }
+
+    private var totalLines: Int {
+        max(1, codeLines.count)
+    }
+
+    private var isCollapsible: Bool {
+        totalLines > previewLineThreshold || code.count > 360
+    }
+
+    private var displayedCode: String {
+        if !isCollapsible || isExpanded {
+            return code
+        }
+        return codeLines.prefix(previewLineThreshold).joined(separator: "\n")
+    }
+
+    private var hiddenLineCount: Int {
+        max(1, totalLines - previewLineThreshold)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text(language.lowercased())
-                    .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
-                    .foregroundColor(theme.secondaryText)
+            HStack(spacing: 10) {
+                HStack(spacing: 6) {
+                    Text(language.lowercased())
+                        .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+                        .foregroundColor(theme.secondaryText)
+
+                    Text("\(totalLines) 行")
+                        .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                        .foregroundColor(theme.mutedText)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 1.5)
+                        .background(theme.cardBackground.opacity(0.7))
+                        .clipShape(Capsule())
+                }
+
                 Spacer()
+
+                if isCollapsible {
+                    Button(action: {
+                        withAnimation(.easeInOut(duration: 0.18)) {
+                            isExpanded.toggle()
+                        }
+                    }) {
+                        HStack(spacing: 3) {
+                            Image(systemName: isExpanded ? "rectangle.compress.vertical" : "rectangle.expand.vertical")
+                                .font(.system(size: 10.5, weight: .semibold))
+                            Text(isExpanded ? "收起代码" : "展开全部")
+                                .font(.system(size: 11, weight: .medium))
+                        }
+                        .foregroundColor(theme.accent)
+                    }
+                    .buttonStyle(.plain)
+                }
+
                 Button(action: {
                     UIPasteboard.general.string = code
                     withAnimation { copied = true }
@@ -363,12 +433,37 @@ struct CodeBlockCard: View {
                 .frame(height: 1)
 
             ScrollView(.horizontal, showsIndicators: true) {
-                Text(code)
+                Text(displayedCode)
                     .font(.system(size: 12.5, design: .monospaced))
                     .foregroundColor(theme.primaryText)
                     .lineSpacing(3)
                     .textSelection(.enabled)
                     .padding(10)
+            }
+
+            if isCollapsible {
+                Rectangle()
+                    .fill(theme.border.opacity(0.75))
+                    .frame(height: 1)
+
+                Button(action: {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        isExpanded.toggle()
+                    }
+                }) {
+                    HStack(spacing: 5) {
+                        Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 10.5, weight: .bold))
+                        Text(isExpanded ? "收起代码" : "展开剩余 \(hiddenLineCount) 行代码")
+                            .font(.system(size: 11.5, weight: .semibold))
+                    }
+                    .foregroundColor(theme.accent)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 7)
+                    .background(theme.elevatedBackground.opacity(0.6))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             }
         }
         .background(theme.cardBackground)

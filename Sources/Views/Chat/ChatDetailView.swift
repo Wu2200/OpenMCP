@@ -115,11 +115,15 @@ struct ChatDetailView: View {
                                     }
                             } else {
                                 LazyVStack(spacing: 12) {
-                                    ForEach(displayTurns) { turn in
+                                    let turns = displayTurns
+                                    ForEach(Array(turns.enumerated()), id: \.element.id) { index, turn in
+                                        let isLastAssistant = (index == turns.count - 1 && turn.role == .assistant)
                                         MessageBubbleView(
                                             turn: turn,
                                             modelName: storage.settings.modelName,
                                             isGenerating: coordinator.isGenerating,
+                                            isActiveGeneratingTurn: coordinator.isGenerating && isLastAssistant,
+                                            statusText: coordinator.statusText,
                                             isSelected: selectedTurnId == turn.id,
                                             onSelectToggle: {
                                                 if isInputFocused {
@@ -181,8 +185,8 @@ struct ChatDetailView: View {
                                         .id(turn.id)
                                     }
 
-                                    if coordinator.isGenerating {
-                                        generatingStatusBanner
+                                    if coordinator.isGenerating && (displayTurns.last?.role != .assistant) {
+                                        generatingStatusRow
                                             .id("generating_status")
                                     }
 
@@ -209,6 +213,9 @@ struct ChatDetailView: View {
                         )
                         .scrollDismissesKeyboard(.interactively)
                         .onChange(of: currentConversation.messages.count) { _ in
+                            scrollToBottom(proxy: proxy)
+                        }
+                        .onChange(of: currentConversation.messages.last?.content) { _ in
                             scrollToBottom(proxy: proxy)
                         }
                         .onChange(of: coordinator.statusText) { _ in
@@ -355,25 +362,36 @@ struct ChatDetailView: View {
         }
     }
 
-    private var generatingStatusBanner: some View {
-        HStack(spacing: 10) {
-            ProgressView()
-                .scaleEffect(0.85)
-                .tint(theme.accent)
-            Text(coordinator.statusText.isEmpty ? "正在思考..." : coordinator.statusText)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundColor(theme.secondaryText)
-            Spacer()
+    private var generatingStatusRow: some View {
+        HStack(alignment: .top, spacing: 6) {
+            ZStack {
+                Circle()
+                    .fill(theme.accent.opacity(0.14))
+                    .frame(width: 24, height: 24)
+                Image(systemName: "sparkles")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(theme.accent)
+            }
+            .padding(.top, 2)
+
+            HStack(spacing: 8) {
+                ProgressView()
+                    .scaleEffect(0.8)
+                    .tint(theme.accent)
+                Text(coordinator.statusText.isEmpty ? "思考中..." : coordinator.statusText)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(theme.secondaryText)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(theme.cardBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                    .stroke(theme.border, lineWidth: 1)
+            )
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(theme.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(theme.border, lineWidth: 1)
-        )
-        .padding(.leading, 30)
     }
 
     private func errorBanner(_ message: String) -> some View {
@@ -682,10 +700,10 @@ struct ChatDetailView: View {
 
     private func scrollToBottom(proxy: ScrollViewProxy) {
         withAnimation(.easeOut(duration: 0.2)) {
-            if coordinator.isGenerating {
+            if let last = displayTurns.last {
+                proxy.scrollTo(last.id, anchor: .bottom)
+            } else if coordinator.isGenerating {
                 proxy.scrollTo("generating_status", anchor: .bottom)
-            } else if displayTurns.last != nil {
-                proxy.scrollTo("bottom_anchor", anchor: .bottom)
             }
         }
     }

@@ -1,22 +1,22 @@
 import Foundation
-import Combine
+import SwiftUI
 
 class DataStorage: ObservableObject {
     static let shared = DataStorage()
 
     @Published var settings: OpenAISettings {
-        didSet {
-            saveSettings()
-        }
+        didSet { saveSettings() }
     }
-    @Published var servers: [MCPServer]
-    @Published var conversations: [Conversation]
+    @Published var servers: [MCPServer] {
+        didSet { saveServers() }
+    }
+    @Published var conversations: [Conversation] = []
 
-    private let settingsKey = "openmcp_settings"
-    private let serversKey = "openmcp_servers"
-    private let conversationsKey = "openmcp_conversations"
+    private let settingsKey = "OpenMCP_OpenAISettings"
+    private let serversKey = "OpenMCP_MCPServers"
+    private let conversationsKey = "OpenMCP_Conversations"
 
-    init() {
+    private init() {
         if let data = UserDefaults.standard.data(forKey: settingsKey),
            let decoded = try? JSONDecoder().decode(OpenAISettings.self, from: data) {
             self.settings = decoded
@@ -35,7 +35,7 @@ class DataStorage: ObservableObject {
            let decoded = try? JSONDecoder().decode([Conversation].self, from: data) {
             self.conversations = decoded
         } else {
-            self.conversations = []
+            self.conversations = [Conversation(title: "新对话")]
         }
     }
 
@@ -57,70 +57,75 @@ class DataStorage: ObservableObject {
         }
     }
 
-    func addOrUpdateServer(_ server: MCPServer) {
-        if let index = servers.firstIndex(where: { $0.id == server.id }) {
-            servers[index] = server
+    func updateConversation(_ conv: Conversation, persistImmediately: Bool = true) {
+        if let idx = conversations.firstIndex(where: { $0.id == conv.id }) {
+            conversations[idx] = conv
         } else {
-            servers.append(server)
+            conversations.insert(conv, at: 0)
         }
-        saveServers()
+        if persistImmediately {
+            saveConversations()
+        }
     }
 
-    func deleteServer(at indexSet: IndexSet) {
-        servers.remove(atOffsets: indexSet)
-        saveServers()
-    }
-
-    func deleteServer(id: String) {
-        servers.removeAll { $0.id == id }
-        saveServers()
-    }
-
-    func addConversation(title: String = "新对话") -> Conversation {
-        let conv = Conversation(title: title, messages: [])
+    func createNewConversation() -> Conversation {
+        let conv = Conversation(title: "新对话")
         conversations.insert(conv, at: 0)
         saveConversations()
         return conv
     }
 
-    func updateConversation(_ conversation: Conversation) {
-        if let index = conversations.firstIndex(where: { $0.id == conversation.id }) {
-            conversations[index] = conversation
-            saveConversations()
+    func deleteConversation(id: String) {
+        conversations.removeAll { $0.id == id }
+        if conversations.isEmpty {
+            conversations.append(Conversation(title: "新对话"))
         }
+        saveConversations()
+    }
+
+    func renameConversation(id: String, newTitle: String) {
+        let trimmed = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let idx = conversations.firstIndex(where: { $0.id == id }) else { return }
+        conversations[idx].title = trimmed
+        conversations[idx].updatedAt = Date()
+        saveConversations()
     }
 
     func clearConversationMessages(id: String) {
-        if let index = conversations.firstIndex(where: { $0.id == id }) {
-            conversations[index].messages.removeAll()
-            conversations[index].updatedAt = Date()
-            saveConversations()
-        }
-    }
-
-    func updateMessageContent(conversationId: String, messageId: String, newContent: String) {
-        guard let cIdx = conversations.firstIndex(where: { $0.id == conversationId }),
-              let mIdx = conversations[cIdx].messages.firstIndex(where: { $0.id == messageId }) else { return }
-        conversations[cIdx].messages[mIdx].content = newContent
-        conversations[cIdx].updatedAt = Date()
+        guard let idx = conversations.firstIndex(where: { $0.id == id }) else { return }
+        conversations[idx].messages.removeAll()
+        conversations[idx].updatedAt = Date()
         saveConversations()
     }
 
     func deleteMessageTurn(conversationId: String, messageIds: [String]) {
-        guard let cIdx = conversations.firstIndex(where: { $0.id == conversationId }) else { return }
+        guard let idx = conversations.firstIndex(where: { $0.id == conversationId }) else { return }
         let idSet = Set(messageIds)
-        conversations[cIdx].messages.removeAll { idSet.contains($0.id) }
+        conversations[idx].messages.removeAll { idSet.contains($0.id) }
+        conversations[idx].updatedAt = Date()
+        saveConversations()
+    }
+
+    func updateMessageContent(conversationId: String, messageId: String, newContent: String) {
+        let trimmed = newContent.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let cIdx = conversations.firstIndex(where: { $0.id == conversationId }),
+              let mIdx = conversations[cIdx].messages.firstIndex(where: { $0.id == messageId }) else { return }
+        conversations[cIdx].messages[mIdx].content = trimmed
         conversations[cIdx].updatedAt = Date()
         saveConversations()
     }
 
-    func deleteConversation(at indexSet: IndexSet) {
-        conversations.remove(atOffsets: indexSet)
-        saveConversations()
+    func addOrUpdateServer(_ server: MCPServer) {
+        if let idx = servers.firstIndex(where: { $0.id == server.id }) {
+            servers[idx] = server
+        } else {
+            servers.append(server)
+        }
     }
 
-    func deleteConversation(id: String) {
-        conversations.removeAll { $0.id == id }
-        saveConversations()
+    func deleteServer(id: String) {
+        servers.removeAll { $0.id == id }
     }
 }

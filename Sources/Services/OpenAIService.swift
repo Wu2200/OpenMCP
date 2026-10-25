@@ -62,10 +62,11 @@ class OpenAIService {
         return modelIds.sorted()
     }
 
-    func chatCompletion(
+    func streamChatCompletion(
         settings: OpenAISettings,
         messages: [ChatMessage],
-        tools: [[String: Any]]? = nil
+        tools: [[String: Any]]? = nil,
+        onPartialUpdate: (@MainActor (String) -> Void)? = nil
     ) async throws -> (content: String?, toolCalls: [ToolCallItem]?) {
         var base = settings.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         if base.hasSuffix("/") {
@@ -76,6 +77,188 @@ class OpenAIService {
             throw URLError(.badURL)
         }
 
+        let openAIMessages = buildOpenAIMessages(settings: settings, messages: messages)
+
+        var payload: [String: Any] = [
+            "model": settings.modelName,
+            "temperature": settings.temperature,
+            "messages": openAIMessages,
+            "stream": true
+        ]
+
+        if let tools = tools, !tools.isEmpty {
+            payload["tools"] = tools
+        }
+
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        if !settings.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let key = settings.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            req.setValue(key.hasPrefix("Bearer ") ? key : "Bearer \(key)", forHTTPHeaderField: "Authorization")
+        }
+        req.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        req.timeoutInterval = 120
+
+        let (bytes, response) = try await URLSession.shared.bytes(for: req)
+        guard let httpRes = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+
+        guard (200...299).contains(httpRes.statusCode) else {
+            var errorData = Data()
+            for try await byte in bytes {
+                errorData.append(byte)
+                if errorData.count > 4096 { break }
+            }
+            let errString = String(data: errorData, encoding: .utf8) ?? ""
+            if let json = try? JSONSerialization.jsonObject(with: errorData) as? [String: Any],
+               let errObj = json["error"] as? [String: Any],
+               let msg = errObj["message"] as? String {
+                throw NSError(domain: "OpenAIService", code: httpRes.statusCode, userInfo: [NSLocalizedDescriptionKey: msg])
+            }
+            throw NSError(domain: "OpenAIService", code: httpRes.statusCode, userInfo: [NSLocalizedDescriptionKey: "API 响应错误 (\(httpRes.statusCode)): \(errString.prefix(200))"])
+        }
+
+        let contentType = (httpRes.value(forHTTPHeaderField: "Content-Type") ?? "").lowercased()
+        if !contentType.contains("event-stream") {
+            var rawData = Data()
+            for try await byte in bytes {
+                rawData.append(byte)
+            }
+            if let json = try? JSONSerialization.jsonObject(with: rawData) as? [String: Any],
+               json["choices"] != nil {
+                let parsed = try parseNonStreamingJSON(json)
+                if let text = parsed.content, !text.isEmpty {
+                    await onPartialUpdate?(text)
+                }
+                return parsed
+            }
+        }
+
+        var accumulatedContent = ""
+        struct PartialToolCall {
+            var id: String = ""
+            var name: String = ""
+            var arguments: String = ""
+        }
+        var toolCallsByIndex: [Int: PartialToolCall] = [:]
+        var nonSSELines: [String] = []
+        var receivedSSEEvent = false
+        var lastYieldTime = CFAbsoluteTimeGetCurrent()
+
+        for try await rawLine in bytes.lines {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if line.isEmpty { continue }
+
+            if line.hasPrefix("data:") {
+                receivedSSEEvent = true
+                let dataStr = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+                if dataStr == "[DONE]" {
+                    break
+                }
+                guard let data = dataStr.data(using: .utf8),
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    continue
+                }
+
+                if let errObj = json["error"] as? [String: Any],
+                   let msg = errObj["message"] as? String {
+                    throw NSError(domain: "OpenAIService", code: -1, userInfo: [NSLocalizedDescriptionKey: msg])
+                }
+
+                guard let choices = json["choices"] as? [[String: Any]],
+                      let firstChoice = choices.first else {
+                    continue
+                }
+
+                if let delta = firstChoice["delta"] as? [String: Any] {
+                    if let piece = delta["content"] as? String, !piece.isEmpty {
+                        accumulatedContent += piece
+                        let now = CFAbsoluteTimeGetCurrent()
+                        if now - lastYieldTime >= 0.045 {
+                            lastYieldTime = now
+                            await onPartialUpdate?(accumulatedContent)
+                        }
+                    }
+
+                    if let rawToolCalls = delta["tool_calls"] as? [[String: Any]] {
+                        for (idx, tc) in rawToolCalls.enumerated() {
+                            let tcIndex = (tc["index"] as? Int) ?? idx
+                            var entry = toolCallsByIndex[tcIndex] ?? PartialToolCall()
+                            if let id = tc["id"] as? String, !id.isEmpty {
+                                entry.id = id
+                            }
+                            if let fn = tc["function"] as? [String: Any] {
+                                if let namePiece = fn["name"] as? String, !namePiece.isEmpty {
+                                    entry.name += namePiece
+                                }
+                                if let argPiece = fn["arguments"] as? String, !argPiece.isEmpty {
+                                    entry.arguments += argPiece
+                                }
+                            }
+                            toolCallsByIndex[tcIndex] = entry
+                        }
+                    }
+                } else if let messageObj = firstChoice["message"] as? [String: Any] {
+                    if let fullText = messageObj["content"] as? String, !fullText.isEmpty {
+                        accumulatedContent = fullText
+                        await onPartialUpdate?(accumulatedContent)
+                    }
+                    if let rawCalls = messageObj["tool_calls"] as? [[String: Any]] {
+                        for (idx, tc) in rawCalls.enumerated() {
+                            var entry = PartialToolCall()
+                            entry.id = (tc["id"] as? String) ?? "call_\(idx)"
+                            if let fn = tc["function"] as? [String: Any] {
+                                entry.name = (fn["name"] as? String) ?? ""
+                                entry.arguments = (fn["arguments"] as? String) ?? "{}"
+                            }
+                            toolCallsByIndex[idx] = entry
+                        }
+                    }
+                }
+            } else if !receivedSSEEvent {
+                nonSSELines.append(rawLine)
+            }
+        }
+
+        if !receivedSSEEvent && !nonSSELines.isEmpty {
+            let joined = nonSSELines.joined(separator: "\n")
+            if let data = joined.data(using: .utf8),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                let parsed = try parseNonStreamingJSON(json)
+                if let text = parsed.content, !text.isEmpty {
+                    await onPartialUpdate?(text)
+                }
+                return parsed
+            }
+        }
+
+        if !accumulatedContent.isEmpty {
+            await onPartialUpdate?(accumulatedContent)
+        }
+
+        var finalToolCalls: [ToolCallItem]? = nil
+        if !toolCallsByIndex.isEmpty {
+            let sortedIndices = toolCallsByIndex.keys.sorted()
+            var list: [ToolCallItem] = []
+            for idx in sortedIndices {
+                guard let item = toolCallsByIndex[idx], !item.name.isEmpty else { continue }
+                let callId = item.id.isEmpty ? "call_\(UUID().uuidString.prefix(8))" : item.id
+                let args = item.arguments.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "{}" : item.arguments
+                list.append(ToolCallItem(id: callId, name: item.name, arguments: args, result: nil, isExecuting: false, error: nil))
+            }
+            if !list.isEmpty {
+                finalToolCalls = list
+            }
+        }
+
+        let finalContent: String? = accumulatedContent.isEmpty ? nil : accumulatedContent
+        return (finalContent, finalToolCalls)
+    }
+
+    private func buildOpenAIMessages(settings: OpenAISettings, messages: [ChatMessage]) -> [[String: Any]] {
         var openAIMessages: [[String: Any]] = []
         if !settings.systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             openAIMessages.append([
@@ -106,44 +289,16 @@ class OpenAIService {
             }
             openAIMessages.append(m)
         }
+        return openAIMessages
+    }
 
-        var payload: [String: Any] = [
-            "model": settings.modelName,
-            "temperature": settings.temperature,
-            "messages": openAIMessages
-        ]
-
-        if let tools = tools, !tools.isEmpty {
-            payload["tools"] = tools
+    private func parseNonStreamingJSON(_ json: [String: Any]) throws -> (content: String?, toolCalls: [ToolCallItem]?) {
+        if let errObj = json["error"] as? [String: Any],
+           let msg = errObj["message"] as? String {
+            throw NSError(domain: "OpenAIService", code: -1, userInfo: [NSLocalizedDescriptionKey: msg])
         }
 
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if !settings.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let key = settings.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-            req.setValue(key.hasPrefix("Bearer ") ? key : "Bearer \(key)", forHTTPHeaderField: "Authorization")
-        }
-        req.httpBody = try JSONSerialization.data(withJSONObject: payload)
-        req.timeoutInterval = 90
-
-        let (data, response) = try await URLSession.shared.data(for: req)
-        guard let httpRes = response as? HTTPURLResponse else {
-            throw URLError(.badServerResponse)
-        }
-
-        guard (200...299).contains(httpRes.statusCode) else {
-            let errString = String(data: data, encoding: .utf8) ?? ""
-            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let errObj = json["error"] as? [String: Any],
-               let msg = errObj["message"] as? String {
-                throw NSError(domain: "OpenAIService", code: httpRes.statusCode, userInfo: [NSLocalizedDescriptionKey: msg])
-            }
-            throw NSError(domain: "OpenAIService", code: httpRes.statusCode, userInfo: [NSLocalizedDescriptionKey: "API 响应错误 (\(httpRes.statusCode)): \(errString.prefix(200))"])
-        }
-
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let choices = json["choices"] as? [[String: Any]],
+        guard let choices = json["choices"] as? [[String: Any]],
               let firstChoice = choices.first,
               let choiceMsg = firstChoice["message"] as? [String: Any] else {
             throw NSError(domain: "OpenAIService", code: -1, userInfo: [NSLocalizedDescriptionKey: "无法解析返回内容"])
