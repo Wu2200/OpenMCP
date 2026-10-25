@@ -105,172 +105,186 @@ struct ChatDetailView: View {
     ]
 
     var body: some View {
-        ZStack {
-            theme.background
-                .ignoresSafeArea()
+        GeometryReader { geo in
+            let viewportWidth = max(320, geo.size.width)
+            let rowAvailableWidth = max(280, viewportWidth - 20)
 
-            ScrollViewReader { proxy in
-                VStack(spacing: 0) {
-                    ZStack(alignment: .bottomTrailing) {
-                        ScrollView(.vertical, showsIndicators: true) {
-                            if displayTurns.isEmpty && !coordinator.isGenerating {
-                                emptyConversationHero
-                                    .padding(.horizontal, 14)
-                                    .padding(.top, 24)
-                                    .contentShape(Rectangle())
-                                    .onTapGesture {
-                                        handleBackgroundTap()
-                                    }
-                            } else {
-                                VStack(spacing: 12) {
-                                    let turns = displayTurns
-                                    ForEach(Array(turns.enumerated()), id: \.element.id) { index, turn in
-                                        let isLastAssistant = (index == turns.count - 1 && turn.role == .assistant)
-                                        let activeGenerating = coordinator.isGenerating && isLastAssistant
+            ZStack {
+                theme.background
+                    .ignoresSafeArea()
 
-                                        MessageBubbleView(
-                                            turn: turn,
-                                            theme: theme,
-                                            modelName: storage.settings.modelName,
-                                            isGenerating: coordinator.isGenerating,
-                                            isActiveGeneratingTurn: activeGenerating,
-                                            statusText: activeGenerating ? coordinator.statusText : "",
-                                            thinkingStartTime: activeGenerating ? coordinator.thinkingStartTime : nil,
-                                            streamingState: coordinator.streamingState,
-                                            isSelected: selectedTurnId == turn.id,
-                                            onSelectToggle: {
-                                                if isInputFocused {
+                ScrollViewReader { proxy in
+                    VStack(spacing: 0) {
+                        ZStack(alignment: .bottomTrailing) {
+                            ScrollView(.vertical, showsIndicators: true) {
+                                if displayTurns.isEmpty && !coordinator.isGenerating {
+                                    emptyConversationHero
+                                        .padding(.horizontal, 14)
+                                        .padding(.top, 24)
+                                        .frame(width: viewportWidth)
+                                        .contentShape(Rectangle())
+                                        .onTapGesture {
+                                            handleBackgroundTap()
+                                        }
+                                } else {
+                                    VStack(spacing: 12) {
+                                        let turns = displayTurns
+                                        ForEach(Array(turns.enumerated()), id: \.element.id) { index, turn in
+                                            let isLastAssistant = (index == turns.count - 1 && turn.role == .assistant)
+                                            let activeGenerating = coordinator.isGenerating && isLastAssistant
+
+                                            MessageBubbleView(
+                                                turn: turn,
+                                                theme: theme,
+                                                availableWidth: rowAvailableWidth,
+                                                modelName: storage.settings.modelName,
+                                                isGenerating: coordinator.isGenerating,
+                                                isActiveGeneratingTurn: activeGenerating,
+                                                statusText: activeGenerating ? coordinator.statusText : "",
+                                                thinkingStartTime: activeGenerating ? coordinator.thinkingStartTime : nil,
+                                                streamingState: coordinator.streamingState,
+                                                isSelected: selectedTurnId == turn.id,
+                                                onSelectToggle: {
+                                                    if isInputFocused {
+                                                        dismissKeyboard()
+                                                    }
+                                                    withAnimation(.easeInOut(duration: 0.15)) {
+                                                        if selectedTurnId == turn.id {
+                                                            selectedTurnId = nil
+                                                        } else {
+                                                            selectedTurnId = turn.id
+                                                        }
+                                                    }
+                                                },
+                                                onEditSave: { newContent in
                                                     dismissKeyboard()
-                                                }
-                                                withAnimation(.easeInOut(duration: 0.16)) {
+                                                    selectedTurnId = nil
+                                                    storage.updateMessageContent(
+                                                        conversationId: conversationId,
+                                                        messageId: turn.primaryMessageId,
+                                                        newContent: newContent
+                                                    )
+                                                },
+                                                onEditAndResend: { newContent in
+                                                    dismissKeyboard()
+                                                    selectedTurnId = nil
+                                                    autoFollowOutput = true
+                                                    coordinator.startRetryFromMessage(
+                                                        conversationId: conversationId,
+                                                        messageId: turn.primaryMessageId,
+                                                        newPrompt: newContent,
+                                                        settings: storage.settings,
+                                                        servers: storage.servers
+                                                    )
+                                                },
+                                                onRetry: {
+                                                    dismissKeyboard()
+                                                    selectedTurnId = nil
+                                                    autoFollowOutput = true
+                                                    coordinator.startRetryFromMessage(
+                                                        conversationId: conversationId,
+                                                        messageId: turn.primaryMessageId,
+                                                        settings: storage.settings,
+                                                        servers: storage.servers
+                                                    )
+                                                },
+                                                onDelete: {
+                                                    dismissKeyboard()
                                                     if selectedTurnId == turn.id {
                                                         selectedTurnId = nil
-                                                    } else {
-                                                        selectedTurnId = turn.id
                                                     }
+                                                    storage.deleteMessageTurn(
+                                                        conversationId: conversationId,
+                                                        messageIds: turn.underlyingMessageIds
+                                                    )
                                                 }
-                                            },
-                                            onEditSave: { newContent in
-                                                dismissKeyboard()
-                                                selectedTurnId = nil
-                                                storage.updateMessageContent(
-                                                    conversationId: conversationId,
-                                                    messageId: turn.primaryMessageId,
-                                                    newContent: newContent
-                                                )
-                                            },
-                                            onEditAndResend: { newContent in
-                                                dismissKeyboard()
-                                                selectedTurnId = nil
-                                                autoFollowOutput = true
-                                                coordinator.startRetryFromMessage(
-                                                    conversationId: conversationId,
-                                                    messageId: turn.primaryMessageId,
-                                                    newPrompt: newContent,
-                                                    settings: storage.settings,
-                                                    servers: storage.servers
-                                                )
-                                            },
-                                            onRetry: {
-                                                dismissKeyboard()
-                                                selectedTurnId = nil
-                                                autoFollowOutput = true
-                                                coordinator.startRetryFromMessage(
-                                                    conversationId: conversationId,
-                                                    messageId: turn.primaryMessageId,
-                                                    settings: storage.settings,
-                                                    servers: storage.servers
-                                                )
-                                            },
-                                            onDelete: {
-                                                dismissKeyboard()
-                                                if selectedTurnId == turn.id {
-                                                    selectedTurnId = nil
-                                                }
-                                                storage.deleteMessageTurn(
-                                                    conversationId: conversationId,
-                                                    messageIds: turn.underlyingMessageIds
-                                                )
+                                            )
+                                            .frame(width: rowAvailableWidth)
+                                            .id(turn.id)
+                                        }
+
+                                        if coordinator.isGenerating && (displayTurns.last?.role != .assistant) {
+                                            generatingStatusRow
+                                                .frame(width: rowAvailableWidth, alignment: .leading)
+                                                .id("generating_status")
+                                        }
+
+                                        if let err = coordinator.errorMessage {
+                                            errorBanner(err)
+                                                .frame(width: rowAvailableWidth)
+                                                .id("error_status")
+                                        }
+
+                                        StreamingScrollFollowerView(
+                                            streamingState: coordinator.streamingState,
+                                            isGenerating: coordinator.isGenerating,
+                                            autoFollowOutput: autoFollowOutput,
+                                            onScrollToBottom: {
+                                                scrollToBottomImmediate(proxy: proxy)
                                             }
                                         )
-                                        .id(turn.id)
+                                        .frame(height: 1)
+                                        .id("bottom_anchor")
                                     }
-
-                                    if coordinator.isGenerating && (displayTurns.last?.role != .assistant) {
-                                        generatingStatusRow
-                                            .id("generating_status")
-                                    }
-
-                                    if let err = coordinator.errorMessage {
-                                        errorBanner(err)
-                                            .id("error_status")
-                                    }
-
-                                    StreamingScrollFollowerView(
-                                        streamingState: coordinator.streamingState,
-                                        isGenerating: coordinator.isGenerating,
-                                        autoFollowOutput: autoFollowOutput,
-                                        onScrollToBottom: {
-                                            scrollToBottomImmediate(proxy: proxy)
-                                        }
-                                    )
-                                    .frame(height: 1)
-                                    .id("bottom_anchor")
-                                }
-                                .padding(.horizontal, 10)
-                                .padding(.top, 10)
-                                .padding(.bottom, 12)
-                                .background(
-                                    ChatScrollViewIntrospector(
-                                        isGenerating: coordinator.isGenerating,
-                                        autoFollowOutput: autoFollowOutput,
-                                        onUserDragUp: {
-                                            if autoFollowOutput {
-                                                autoFollowOutput = false
+                                    .padding(.horizontal, 10)
+                                    .padding(.top, 10)
+                                    .padding(.bottom, 12)
+                                    .frame(width: viewportWidth)
+                                    .background(
+                                        ChatScrollViewIntrospector(
+                                            isGenerating: coordinator.isGenerating,
+                                            autoFollowOutput: autoFollowOutput,
+                                            onUserDragUp: {
+                                                if autoFollowOutput {
+                                                    autoFollowOutput = false
+                                                }
+                                            },
+                                            onReachBottom: {
+                                                if !autoFollowOutput {
+                                                    autoFollowOutput = true
+                                                }
                                             }
-                                        },
-                                        onReachBottom: {
-                                            if !autoFollowOutput {
-                                                autoFollowOutput = true
-                                            }
-                                        }
+                                        )
                                     )
-                                )
-                            }
-                        }
-                        .scrollDismissesKeyboard(.interactively)
-                        .onChange(of: currentConversation.messages.count) { _ in
-                            if autoFollowOutput {
-                                scrollToBottomImmediate(proxy: proxy)
-                            }
-                        }
-
-                        if !displayTurns.isEmpty {
-                            Button(action: {
-                                autoFollowOutput = true
-                                withAnimation(.easeOut(duration: 0.2)) {
-                                    proxy.scrollTo("bottom_anchor", anchor: .bottom)
                                 }
-                            }) {
-                                Image(systemName: "arrow.down")
-                                    .font(.system(size: 13, weight: .bold))
-                                    .foregroundColor(autoFollowOutput ? theme.primaryText : theme.accent)
-                                    .frame(width: 32, height: 32)
-                                    .background(theme.cardBackground)
-                                    .clipShape(Circle())
-                                    .overlay(
-                                        Circle()
-                                            .stroke(autoFollowOutput ? theme.border : theme.accent.opacity(0.45), lineWidth: 1)
-                                    )
-                                    .shadow(color: Color.black.opacity(theme.isDark ? 0.28 : 0.08), radius: 5, x: 0, y: 2)
                             }
-                            .buttonStyle(.plain)
-                            .padding(.trailing, 14)
-                            .padding(.bottom, 8)
+                            .frame(width: viewportWidth)
+                            .scrollDismissesKeyboard(.interactively)
+                            .onChange(of: currentConversation.messages.count) { _ in
+                                if autoFollowOutput {
+                                    scrollToBottomImmediate(proxy: proxy)
+                                }
+                            }
+
+                            if !displayTurns.isEmpty {
+                                Button(action: {
+                                    autoFollowOutput = true
+                                    withAnimation(.easeOut(duration: 0.2)) {
+                                        proxy.scrollTo("bottom_anchor", anchor: .bottom)
+                                    }
+                                }) {
+                                    Image(systemName: "arrow.down")
+                                        .font(.system(size: 13, weight: .bold))
+                                        .foregroundColor(autoFollowOutput ? theme.primaryText : theme.accent)
+                                        .frame(width: 32, height: 32)
+                                        .background(theme.cardBackground)
+                                        .clipShape(Circle())
+                                        .overlay(
+                                            Circle()
+                                                .stroke(autoFollowOutput ? theme.border : theme.accent.opacity(0.45), lineWidth: 1)
+                                        )
+                                        .shadow(color: Color.black.opacity(theme.isDark ? 0.28 : 0.08), radius: 5, x: 0, y: 2)
+                                }
+                                .buttonStyle(.plain)
+                                .padding(.trailing, 14)
+                                .padding(.bottom, 8)
+                            }
                         }
+                        .frame(width: viewportWidth)
+
+                        composerDock(proxy: proxy, viewportWidth: viewportWidth)
                     }
-
-                    composerDock(proxy: proxy)
+                    .frame(width: viewportWidth)
                 }
             }
         }
@@ -500,7 +514,7 @@ struct ChatDetailView: View {
         .padding(.leading, 30)
     }
 
-    private func composerDock(proxy: ScrollViewProxy) -> some View {
+    private func composerDock(proxy: ScrollViewProxy, viewportWidth: CGFloat) -> some View {
         let hasInput = !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pendingAttachments.isEmpty
         let canSend = hasInput && !coordinator.isGenerating
 
@@ -554,7 +568,6 @@ struct ChatDetailView: View {
                         }
                     }
                     .buttonStyle(.plain)
-                    .transition(.scale.combined(with: .opacity))
                 } else {
                     Button(action: {
                         sendMessage(proxy: proxy)
@@ -570,18 +583,16 @@ struct ChatDetailView: View {
                         }
                     }
                     .disabled(!canSend)
-                    .transition(.scale.combined(with: .opacity))
                 }
             }
-            .animation(.easeInOut(duration: 0.16), value: coordinator.isGenerating)
 
             HStack(spacing: 12) {
                 Menu {
                     Button(action: {
                         dismissKeyboard()
-                        showingPhotoPicker = true
+                        showingDocumentPicker = true
                     }) {
-                        Label("图片上传", systemImage: "photo.on.rectangle.angled")
+                        Label("文件上传", systemImage: "doc.badge.plus")
                     }
 
                     Button(action: {
@@ -593,15 +604,16 @@ struct ChatDetailView: View {
 
                     Button(action: {
                         dismissKeyboard()
-                        showingDocumentPicker = true
+                        showingPhotoPicker = true
                     }) {
-                        Label("文件上传", systemImage: "doc.badge.plus")
+                        Label("图片上传", systemImage: "photo.on.rectangle.angled")
                     }
                 } label: {
                     Image(systemName: "plus.circle")
                         .font(.system(size: 18, weight: .medium))
                         .foregroundColor(theme.secondaryText)
                 }
+                .fixedSize()
 
                 Button(action: {
                     dismissKeyboard()
@@ -622,6 +634,7 @@ struct ChatDetailView: View {
                     .clipShape(Capsule())
                 }
                 .buttonStyle(.plain)
+                .fixedSize()
 
                 if isInputFocused {
                     Button(action: dismissKeyboard) {
@@ -634,9 +647,10 @@ struct ChatDetailView: View {
                         .foregroundColor(theme.secondaryText)
                     }
                     .buttonStyle(.plain)
+                    .fixedSize()
                 }
 
-                Spacer()
+                Spacer(minLength: 16)
 
                 Menu {
                     Section("切换对话模型") {
@@ -659,14 +673,18 @@ struct ChatDetailView: View {
                             .font(.system(size: 12.5, weight: .semibold))
                             .foregroundColor(theme.accent)
                         Text(storage.settings.modelName)
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.system(size: 12.5, weight: .medium))
                             .foregroundColor(theme.primaryText)
                             .lineLimit(1)
-                            .frame(maxWidth: 140, alignment: .trailing)
+                            .truncationMode(.tail)
                         Image(systemName: "chevron.down")
                             .font(.system(size: 9.5, weight: .semibold))
                             .foregroundColor(theme.secondaryText)
                     }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(theme.elevatedBackground.opacity(0.65))
+                    .clipShape(Capsule())
                 }
             }
         }
@@ -682,6 +700,7 @@ struct ChatDetailView: View {
         .padding(.horizontal, 10)
         .padding(.top, 4)
         .padding(.bottom, 6)
+        .frame(width: viewportWidth)
         .background(theme.background)
     }
 
@@ -816,7 +835,7 @@ struct ChatDetailView: View {
             dismissKeyboard()
         }
         if selectedTurnId != nil {
-            withAnimation(.easeInOut(duration: 0.16)) {
+            withAnimation(.easeInOut(duration: 0.15)) {
                 selectedTurnId = nil
             }
         }

@@ -112,6 +112,7 @@ final class MarkdownRenderCache {
 struct MarkdownDocumentView: View {
     let content: String
     let theme: AppThemePalette
+    var contentWidth: CGFloat? = nil
     var isStreaming: Bool = false
 
     var body: some View {
@@ -121,24 +122,26 @@ struct MarkdownDocumentView: View {
                 MarkdownBlockItemView(
                     block: block,
                     theme: theme,
+                    contentWidth: contentWidth,
                     isStreaming: isStreaming && (block.id == blocks.last?.id)
                 )
-                .transition(.opacity.combined(with: .offset(y: 3)))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .fixedSize(horizontal: false, vertical: true)
-        .animation(isStreaming ? .easeOut(duration: 0.24) : nil, value: blocks.count)
     }
 }
 
 struct MarkdownBlockItemView: View, Equatable {
     let block: MarkdownBlock
     let theme: AppThemePalette
+    let contentWidth: CGFloat?
     let isStreaming: Bool
 
     static func == (lhs: MarkdownBlockItemView, rhs: MarkdownBlockItemView) -> Bool {
-        lhs.block == rhs.block && lhs.theme == rhs.theme && lhs.isStreaming == rhs.isStreaming
+        lhs.block == rhs.block &&
+        lhs.theme == rhs.theme &&
+        lhs.contentWidth == rhs.contentWidth &&
+        lhs.isStreaming == rhs.isStreaming
     }
 
     var body: some View {
@@ -158,7 +161,6 @@ struct MarkdownBlockItemView: View, Equatable {
                 }
             }
             .padding(.vertical, 1)
-            .fixedSize(horizontal: false, vertical: true)
 
         case .blockquote(_, let text):
             MarkdownInlineText(text: text, fontSize: 14, weight: .regular, theme: theme, isSecondary: true, isStreaming: isStreaming)
@@ -167,7 +169,6 @@ struct MarkdownBlockItemView: View, Equatable {
                 .padding(.trailing, 10)
                 .padding(.vertical, 7)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .fixedSize(horizontal: false, vertical: true)
                 .background(theme.elevatedBackground.opacity(0.6))
                 .overlay(alignment: .leading) {
                     RoundedRectangle(cornerRadius: 2)
@@ -177,10 +178,10 @@ struct MarkdownBlockItemView: View, Equatable {
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
         case .codeBlock(_, let language, let code):
-            CodeBlockCard(language: language, code: code, theme: theme)
+            CodeBlockCard(language: language, code: code, theme: theme, cardWidth: contentWidth)
 
         case .table(_, let headers, let alignments, let rows):
-            MarkdownTableView(headers: headers, alignments: alignments, rows: rows, theme: theme)
+            MarkdownTableView(headers: headers, alignments: alignments, rows: rows, theme: theme, tableMaxWidth: contentWidth)
 
         case .divider:
             Rectangle()
@@ -212,7 +213,6 @@ struct MarkdownBlockItemView: View, Equatable {
             }
         }
         .padding(.top, level <= 2 ? 4 : 2)
-        .fixedSize(horizontal: false, vertical: true)
     }
 
     @ViewBuilder
@@ -244,7 +244,6 @@ struct MarkdownBlockItemView: View, Equatable {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.leading, CGFloat(normalizedIndent) * 14)
-        .fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -262,10 +261,7 @@ struct MarkdownInlineText: View {
             .foregroundColor(isSecondary ? theme.secondaryText : theme.primaryText)
             .tint(theme.accent)
             .textSelection(.enabled)
-            .contentTransition(.opacity)
-            .animation(isStreaming ? .easeInOut(duration: 0.18) : nil, value: text)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -274,6 +270,7 @@ struct MarkdownTableView: View {
     let alignments: [HorizontalAlignment]
     let rows: [[String]]
     let theme: AppThemePalette
+    var tableMaxWidth: CGFloat? = nil
 
     private var columnCount: Int {
         max(headers.count, rows.map { $0.count }.max() ?? 0)
@@ -303,7 +300,7 @@ struct MarkdownTableView: View {
             widths.append(calculated)
         }
 
-        let availableWidth = max(240, UIScreen.main.bounds.width - 78)
+        let availableWidth = tableMaxWidth ?? max(240, UIScreen.main.bounds.width - 78)
         let total = widths.reduce(0, +)
         if total > 0 && total < availableWidth {
             let scale = availableWidth / total
@@ -331,7 +328,6 @@ struct MarkdownTableView: View {
                     )
                 }
             }
-            .fixedSize(horizontal: true, vertical: true)
             .background(theme.cardBackground)
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay(
@@ -339,7 +335,7 @@ struct MarkdownTableView: View {
                     .stroke(theme.border, lineWidth: 1)
             )
         }
-        .fixedSize(horizontal: false, vertical: true)
+        .frame(width: tableMaxWidth, alignment: .leading)
     }
 
     @ViewBuilder
@@ -368,7 +364,6 @@ struct MarkdownTableView: View {
                     }
             }
         }
-        .fixedSize(horizontal: false, vertical: true)
         .background(
             isHeader
                 ? theme.elevatedBackground

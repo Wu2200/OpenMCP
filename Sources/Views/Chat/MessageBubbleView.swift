@@ -15,6 +15,7 @@ struct MessageDisplayTurn: Identifiable, Equatable {
 struct MessageBubbleView: View {
     let turn: MessageDisplayTurn
     let theme: AppThemePalette
+    var availableWidth: CGFloat = UIScreen.main.bounds.width - 20
     var modelName: String = "Assistant"
     var isGenerating: Bool = false
     var isActiveGeneratingTurn: Bool = false
@@ -35,6 +36,10 @@ struct MessageBubbleView: View {
     @State private var previewingImageAttachment: ChatAttachment? = nil
     @FocusState private var isEditFieldFocused: Bool
 
+    private var bubbleColumnWidth: CGFloat {
+        max(220, availableWidth - 30)
+    }
+
     private var editableRawText: String {
         if !turn.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return turn.content
@@ -54,6 +59,7 @@ struct MessageBubbleView: View {
                 assistantTurnView
             }
         }
+        .frame(width: availableWidth)
         .sheet(item: $previewingFileAttachment) { fileAtt in
             AttachmentFilePreviewSheet(attachment: fileAtt, theme: theme)
         }
@@ -75,6 +81,7 @@ struct MessageBubbleView: View {
 
             if isEditing {
                 editEditorBox(allowResend: true)
+                    .frame(width: bubbleColumnWidth)
             } else {
                 VStack(alignment: .trailing, spacing: 6) {
                     if !imageAtts.isEmpty {
@@ -122,7 +129,6 @@ struct MessageBubbleView: View {
                             .font(.system(size: 15, weight: .regular))
                             .foregroundColor(theme.primaryText)
                             .lineSpacing(3.5)
-                            .fixedSize(horizontal: false, vertical: true)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 9)
                             .background(theme.userMessageBackground)
@@ -139,10 +145,9 @@ struct MessageBubbleView: View {
 
                     if isSelected {
                         floatingActionPill
-                            .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .topTrailing)))
                     }
                 }
-                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: bubbleColumnWidth, alignment: .trailing)
             }
 
             compactAvatar(isUser: true)
@@ -150,6 +155,7 @@ struct MessageBubbleView: View {
                     onSelectToggle?()
                 }
         }
+        .frame(width: availableWidth, alignment: .trailing)
     }
 
     private var effectiveAssistantText: String {
@@ -173,6 +179,7 @@ struct MessageBubbleView: View {
     private var assistantTurnView: some View {
         let currentText = effectiveAssistantText
         let isPureThinking = isActiveGeneratingTurn && currentText.isEmpty && turn.toolCalls.isEmpty
+        let innerContentWidth = max(180, bubbleColumnWidth - 24)
 
         return HStack(alignment: .top, spacing: 6) {
             compactAvatar(isUser: false)
@@ -182,6 +189,7 @@ struct MessageBubbleView: View {
 
             if isEditing {
                 editEditorBox(allowResend: false)
+                    .frame(width: bubbleColumnWidth)
             } else {
                 VStack(alignment: .leading, spacing: 6) {
                     if isPureThinking {
@@ -206,14 +214,17 @@ struct MessageBubbleView: View {
                         VStack(alignment: .leading, spacing: 8) {
                             if !turn.toolCalls.isEmpty {
                                 ToolCallSummaryGroupView(toolCalls: turn.toolCalls, theme: theme)
+                                    .frame(width: innerContentWidth)
                             }
 
                             if !currentText.isEmpty {
                                 MarkdownDocumentView(
                                     content: currentText,
                                     theme: theme,
+                                    contentWidth: innerContentWidth,
                                     isStreaming: isActiveGeneratingTurn
                                 )
+                                .frame(width: innerContentWidth, alignment: .leading)
                             } else if isActiveGeneratingTurn {
                                 ThinkingStatusView(
                                     statusText: statusText,
@@ -225,8 +236,7 @@ struct MessageBubbleView: View {
                         }
                         .padding(.horizontal, 12)
                         .padding(.vertical, 10)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(width: bubbleColumnWidth, alignment: .leading)
                         .background(theme.cardBackground)
                         .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
                         .overlay(
@@ -241,13 +251,12 @@ struct MessageBubbleView: View {
 
                     if isSelected {
                         floatingActionPill
-                            .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .topLeading)))
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .fixedSize(horizontal: false, vertical: true)
+                .frame(width: bubbleColumnWidth, alignment: .leading)
             }
         }
+        .frame(width: availableWidth, alignment: .leading)
     }
 
     private func compactAvatar(isUser: Bool) -> some View {
@@ -275,7 +284,6 @@ struct MessageBubbleView: View {
                     .font(.system(size: 11.5, weight: .medium))
             }
             .foregroundColor(isGenerating ? theme.mutedText : theme.secondaryText)
-            .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
             .contentShape(Capsule())
@@ -295,7 +303,6 @@ struct MessageBubbleView: View {
                     .font(.system(size: 11.5, weight: .medium))
             }
             .foregroundColor(isGenerating ? theme.mutedText : theme.secondaryText)
-            .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
             .contentShape(Capsule())
@@ -320,7 +327,6 @@ struct MessageBubbleView: View {
                         .font(.system(size: 11.5, weight: .medium))
                 }
                 .foregroundColor(isCopied ? theme.accent : theme.secondaryText)
-                .fixedSize(horizontal: true, vertical: false)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 5)
                 .contentShape(Capsule())
@@ -344,7 +350,6 @@ struct MessageBubbleView: View {
                     .font(.system(size: 11.5, weight: .medium))
             }
             .foregroundColor(isGenerating ? theme.mutedText : Color.red.opacity(0.8))
-            .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
             .contentShape(Capsule())
@@ -441,7 +446,6 @@ struct MessageBubbleView: View {
                 }
             }
         }
-        .frame(maxWidth: .infinity)
     }
 }
 
@@ -449,6 +453,7 @@ struct CodeBlockCard: View {
     let language: String
     let code: String
     let theme: AppThemePalette
+    var cardWidth: CGFloat? = nil
     @State private var copied: Bool = false
     @State private var isExpanded: Bool = false
     @State private var showingFullViewer: Bool = false
@@ -486,76 +491,76 @@ struct CodeBlockCard: View {
                         .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
                         .foregroundColor(theme.secondaryText)
                         .lineLimit(1)
-                        .fixedSize(horizontal: true, vertical: false)
+                        .truncationMode(.tail)
 
                     Text("\(totalLines) 行")
                         .font(.system(size: 10, weight: .medium, design: .monospaced))
                         .foregroundColor(theme.mutedText)
                         .lineLimit(1)
-                        .fixedSize(horizontal: true, vertical: false)
                         .padding(.horizontal, 5)
                         .padding(.vertical, 1.5)
                         .background(theme.cardBackground.opacity(0.7))
                         .clipShape(Capsule())
+                        .layoutPriority(1)
                 }
 
                 Spacer(minLength: 4)
 
-                if isCollapsible {
-                    HStack(spacing: 3) {
-                        Image(systemName: "doc.text.magnifyingglass")
-                            .font(.system(size: 10.5, weight: .semibold))
-                        Text("全文")
-                            .font(.system(size: 11, weight: .medium))
-                            .lineLimit(1)
-                    }
-                    .foregroundColor(theme.secondaryText)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 3)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        showingFullViewer = true
+                HStack(spacing: 4) {
+                    if isCollapsible {
+                        HStack(spacing: 2.5) {
+                            Image(systemName: "doc.text.magnifyingglass")
+                                .font(.system(size: 10.5, weight: .semibold))
+                            Text("全文")
+                                .font(.system(size: 11, weight: .medium))
+                                .lineLimit(1)
+                        }
+                        .foregroundColor(theme.secondaryText)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 3)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            showingFullViewer = true
+                        }
+
+                        HStack(spacing: 2.5) {
+                            Image(systemName: isExpanded ? "rectangle.compress.vertical" : "rectangle.expand.vertical")
+                                .font(.system(size: 10.5, weight: .semibold))
+                            Text(isExpanded ? "收起" : "展开")
+                                .font(.system(size: 11, weight: .medium))
+                                .lineLimit(1)
+                        }
+                        .foregroundColor(theme.accent)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 3)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            withAnimation(.easeInOut(duration: 0.16)) {
+                                isExpanded.toggle()
+                            }
+                        }
                     }
 
-                    HStack(spacing: 3) {
-                        Image(systemName: isExpanded ? "rectangle.compress.vertical" : "rectangle.expand.vertical")
+                    HStack(spacing: 2.5) {
+                        Image(systemName: copied ? "checkmark" : "doc.on.doc")
                             .font(.system(size: 10.5, weight: .semibold))
-                        Text(isExpanded ? "收起" : "展开")
+                        Text(copied ? "已复制" : "复制")
                             .font(.system(size: 11, weight: .medium))
                             .lineLimit(1)
                     }
-                    .foregroundColor(theme.accent)
-                    .fixedSize(horizontal: true, vertical: false)
+                    .foregroundColor(copied ? theme.accent : theme.secondaryText)
                     .padding(.horizontal, 5)
                     .padding(.vertical, 3)
                     .contentShape(Rectangle())
                     .onTapGesture {
-                        withAnimation(.easeInOut(duration: 0.18)) {
-                            isExpanded.toggle()
+                        UIPasteboard.general.string = code
+                        withAnimation { copied = true }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                            withAnimation { copied = false }
                         }
                     }
                 }
-
-                HStack(spacing: 3) {
-                    Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                        .font(.system(size: 10.5, weight: .semibold))
-                    Text(copied ? "已复制" : "复制")
-                        .font(.system(size: 11, weight: .medium))
-                        .lineLimit(1)
-                }
-                .foregroundColor(copied ? theme.accent : theme.secondaryText)
-                .fixedSize(horizontal: true, vertical: false)
-                .padding(.horizontal, 5)
-                .padding(.vertical, 3)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    UIPasteboard.general.string = code
-                    withAnimation { copied = true }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                        withAnimation { copied = false }
-                    }
-                }
+                .layoutPriority(2)
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
@@ -574,7 +579,7 @@ struct CodeBlockCard: View {
                     .textSelection(.enabled)
                     .padding(10)
             }
-            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             if isCollapsible {
                 Rectangle()
@@ -593,13 +598,13 @@ struct CodeBlockCard: View {
                 .background(theme.elevatedBackground.opacity(0.6))
                 .contentShape(Rectangle())
                 .onTapGesture {
-                    withAnimation(.easeInOut(duration: 0.18)) {
+                    withAnimation(.easeInOut(duration: 0.16)) {
                         isExpanded.toggle()
                     }
                 }
             }
         }
-        .fixedSize(horizontal: false, vertical: true)
+        .frame(width: cardWidth)
         .background(theme.cardBackground)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(

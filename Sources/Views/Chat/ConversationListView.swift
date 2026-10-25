@@ -60,11 +60,6 @@ struct ConversationListView: View {
                     .padding(.bottom, 28)
                 }
                 .scrollDismissesKeyboard(.interactively)
-                .simultaneousGesture(
-                    TapGesture().onEnded {
-                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-                    }
-                )
             }
             .navigationTitle("AI 工作台")
             .navigationBarTitleDisplayMode(.large)
@@ -255,111 +250,120 @@ struct ConversationListView: View {
             return nil
         }()
 
-        return Button(action: {
-            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-            navigationPath.append(conv.id)
-        }) {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .center, spacing: 10) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(hasTools ? theme.accent.opacity(0.14) : theme.elevatedBackground)
-                            .frame(width: 34, height: 34)
-                        Image(systemName: hasTools ? "wrench.and.screwdriver.fill" : "text.bubble.fill")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundColor(hasTools ? theme.accent : theme.secondaryText)
+        return ZStack(alignment: .topTrailing) {
+            Button(action: {
+                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                navigationPath.append(conv.id)
+            }) {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(alignment: .center, spacing: 10) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(hasTools ? theme.accent.opacity(0.14) : theme.elevatedBackground)
+                                .frame(width: 34, height: 34)
+                            Image(systemName: hasTools ? "wrench.and.screwdriver.fill" : "text.bubble.fill")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundColor(hasTools ? theme.accent : theme.secondaryText)
+                        }
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(conv.title)
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(theme.primaryText)
+                                .lineLimit(1)
+
+                            Text(conv.updatedAt, format: .dateTime.month().day().hour().minute())
+                                .font(.system(size: 11))
+                                .foregroundColor(theme.mutedText)
+                        }
+
+                        Spacer()
+
+                        Color.clear
+                            .frame(width: 34, height: 32)
                     }
 
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(conv.title)
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundColor(theme.primaryText)
-                            .lineLimit(1)
-
-                        Text(conv.updatedAt, format: .dateTime.month().day().hour().minute())
-                            .font(.system(size: 11))
+                    if let preview = previewText {
+                        Text(preview)
+                            .font(.system(size: 13))
+                            .foregroundColor(theme.secondaryText)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        Text("空白会话 · 点击开始提问")
+                            .font(.system(size: 13))
                             .foregroundColor(theme.mutedText)
                     }
 
-                    Spacer()
-
-                    Menu {
-                        Button(action: {
-                            renameText = conv.title
-                            renamingConversation = conv
-                        }) {
-                            Label("重命名", systemImage: "pencil")
-                        }
-
-                        Button(action: {
-                            storage.clearConversationMessages(id: conv.id)
-                        }) {
-                            Label("清空消息", systemImage: "eraser")
-                        }
-
-                        Button(role: .destructive, action: {
-                            storage.deleteConversation(id: conv.id)
-                        }) {
-                            Label("删除对话", systemImage: "trash")
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundColor(theme.secondaryText)
-                            .frame(width: 30, height: 30)
-                            .background(theme.elevatedBackground)
-                            .clipShape(Circle())
-                    }
-                }
-
-                if let preview = previewText {
-                    Text(preview)
-                        .font(.system(size: 13))
-                        .foregroundColor(theme.secondaryText)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                } else {
-                    Text("空白会话 · 点击开始提问")
-                        .font(.system(size: 13))
-                        .foregroundColor(theme.mutedText)
-                }
-
-                HStack(spacing: 8) {
-                    Text("\(conv.messages.filter { $0.role != .tool }.count) 条对话")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(theme.secondaryText)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(theme.elevatedBackground)
-                        .clipShape(Capsule())
-
-                    if hasTools {
-                        Text("含工具调用")
+                    HStack(spacing: 8) {
+                        Text("\(conv.messages.filter { $0.role != .tool }.count) 条对话")
                             .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(theme.accent)
+                            .foregroundColor(theme.secondaryText)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 3)
-                            .background(theme.accent.opacity(0.12))
+                            .background(theme.elevatedBackground)
                             .clipShape(Capsule())
+
+                        if hasTools {
+                            Text("含工具调用")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(theme.accent)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(theme.accent.opacity(0.12))
+                                .clipShape(Capsule())
+                        }
+
+                        Spacer()
+
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(theme.mutedText)
                     }
-
-                    Spacer()
-
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(theme.mutedText)
                 }
+                .padding(14)
+                .background(theme.cardBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .stroke(theme.border, lineWidth: 1)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
             }
-            .padding(14)
-            .background(theme.cardBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(theme.border, lineWidth: 1)
-            )
+            .buttonStyle(.plain)
+
+            Menu {
+                Button(action: {
+                    renameText = conv.title
+                    renamingConversation = conv
+                }) {
+                    Label("重命名", systemImage: "pencil")
+                }
+
+                Button(action: {
+                    storage.clearConversationMessages(id: conv.id)
+                }) {
+                    Label("清空消息", systemImage: "eraser")
+                }
+
+                Button(role: .destructive, action: {
+                    storage.deleteConversation(id: conv.id)
+                }) {
+                    Label("删除对话", systemImage: "trash")
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(theme.secondaryText)
+                    .frame(width: 32, height: 32)
+                    .background(theme.elevatedBackground)
+                    .clipShape(Circle())
+                    .contentShape(Circle())
+            }
+            .padding(.top, 14)
+            .padding(.trailing, 14)
         }
-        .buttonStyle(.plain)
     }
 
     private func createAndOpenConversation() {
