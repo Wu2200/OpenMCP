@@ -497,7 +497,8 @@ struct ChatDetailView: View {
             ThinkingStatusView(
                 statusText: coordinator.statusText,
                 startDate: coordinator.thinkingStartTime ?? Date(),
-                theme: theme
+                theme: theme,
+                isPaused: coordinator.streamingState.isScrollInteracting
             )
             .padding(.horizontal, 13)
             .padding(.vertical, 9)
@@ -646,9 +647,9 @@ struct ChatDetailView: View {
                 Menu {
                     Button(action: {
                         dismissKeyboard()
-                        showingDocumentPicker = true
+                        showingPhotoPicker = true
                     }) {
-                        Label("文件上传", systemImage: "doc.badge.plus")
+                        Label("图片上传", systemImage: "photo.on.rectangle.angled")
                     }
 
                     Button(action: {
@@ -660,9 +661,9 @@ struct ChatDetailView: View {
 
                     Button(action: {
                         dismissKeyboard()
-                        showingPhotoPicker = true
+                        showingDocumentPicker = true
                     }) {
-                        Label("图片上传", systemImage: "photo.on.rectangle.angled")
+                        Label("文件上传", systemImage: "doc.badge.plus")
                     }
                 } label: {
                     Image(systemName: "plus.circle")
