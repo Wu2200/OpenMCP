@@ -128,6 +128,10 @@ struct ChatDetailView: View {
             ZStack {
                 theme.background
                     .ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        handleBackgroundTap()
+                    }
 
                 VStack(spacing: 0) {
                     ZStack(alignment: .bottomTrailing) {
@@ -136,7 +140,7 @@ struct ChatDetailView: View {
                                 emptyConversationHero
                                     .padding(.horizontal, 14)
                                     .padding(.top, 24)
-                                    .frame(width: viewportWidth)
+                                    .frame(width: viewportWidth, minHeight: max(300, geo.size.height - 130), alignment: .top)
                                     .contentShape(Rectangle())
                                     .onTapGesture {
                                         handleBackgroundTap()
@@ -170,6 +174,9 @@ struct ChatDetailView: View {
                                                         selectedTurnId = turn.id
                                                     }
                                                 }
+                                            },
+                                            onDismissSelection: {
+                                                handleBackgroundTap()
                                             },
                                             onEditSave: { newContent in
                                                 dismissKeyboard()
@@ -237,7 +244,14 @@ struct ChatDetailView: View {
                                 .padding(.horizontal, 10)
                                 .padding(.top, 10)
                                 .padding(.bottom, 54)
-                                .frame(width: viewportWidth)
+                                .frame(width: viewportWidth, minHeight: max(260, geo.size.height - 120), alignment: .top)
+                                .background(
+                                    Color.clear
+                                        .contentShape(Rectangle())
+                                        .onTapGesture {
+                                            handleBackgroundTap()
+                                        }
+                                )
                                 .background(
                                     ChatScrollViewIntrospector(
                                         isGenerating: coordinator.isGenerating,
@@ -277,7 +291,7 @@ struct ChatDetailView: View {
                                 startPoint: .top,
                                 endPoint: .bottom
                             )
-                            .frame(height: 44)
+                            .frame(height: 40)
                             .allowsHitTesting(false)
                         }
                         .onChange(of: currentConversation.messages.count) { _ in
@@ -503,6 +517,10 @@ struct ChatDetailView: View {
             )
 
             Spacer(minLength: 36)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    handleBackgroundTap()
+                }
         }
     }
 
@@ -581,6 +599,11 @@ struct ChatDetailView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
                     .onTapGesture {
+                        if selectedTurnId != nil {
+                            withAnimation(.easeInOut(duration: 0.15)) {
+                                selectedTurnId = nil
+                            }
+                        }
                         isInputFocused = true
                     }
                     .onChange(of: inputText) { newValue in
@@ -692,6 +715,10 @@ struct ChatDetailView: View {
                 }
 
                 Spacer(minLength: 16)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        handleBackgroundTap()
+                    }
 
                 Menu {
                     Section("切换对话模型") {
@@ -742,7 +769,13 @@ struct ChatDetailView: View {
         .padding(.top, 4)
         .padding(.bottom, 6)
         .frame(width: viewportWidth)
-        .background(theme.background)
+        .background(
+            theme.background
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    handleBackgroundTap()
+                }
+        )
     }
 
     private func stagedAttachmentChip(_ att: ChatAttachment) -> some View {
@@ -837,8 +870,8 @@ struct ChatDetailView: View {
                                                 storage.addOrUpdateServer(s)
                                             }
                                         ))
-                                        .labelsHidden()
-                                        .tint(theme.accent)
+                        .labelsHidden()
+                        .tint(theme.accent)
                                     }
 
                                     Text("\(server.tools.filter { $0.isEnabled }.count) / \(server.tools.count) 个工具已开启")
@@ -969,15 +1002,13 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
         DispatchQueue.main.async {
             coord.attachIfNeeded(from: uiView)
             if !isViewActive {
-                coord.stopFollowing()
+                coord.cancelActiveAnimation()
             } else if triggerChanged {
                 coord.scrollToBottom(force: true)
             } else if !wasViewActive && isGenerating && autoFollowOutput {
-                coord.startFollowing()
-            } else if isGenerating && autoFollowOutput {
-                coord.startFollowing()
+                coord.scrollToBottom(animated: false)
             } else if wasGenerating && !isGenerating && autoFollowOutput {
-                coord.startFollowing()
+                coord.scrollToBottom(animated: true)
             }
         }
     }
@@ -995,10 +1026,10 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
         private var contentSizeObservation: NSKeyValueObservation?
         private var lastObservedHeight: CGFloat = 0
         private var scrollSettleWorkItem: DispatchWorkItem?
-        private var displayLink: CADisplayLink?
+        private var followAnimator: UIViewPropertyAnimator?
+        private var animatedTargetY: CGFloat = 0
         private var userScrollActive = false
         private var panInitialOffsetY: CGFloat = 0
-        private var lastDisplayTimestamp: CFTimeInterval = 0
 
         init(
             isGenerating: Bool,
@@ -1037,79 +1068,62 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
             }
         }
 
-        func scrollToBottom(force: Bool = false) {
+        func cancelActiveAnimation() {
+            followAnimator?.stopAnimation(true)
+            followAnimator = nil
+        }
+
+        func scrollToBottom(force: Bool = false, animated: Bool = true) {
             guard isViewActive, let sv = attachedScrollView else { return }
             guard force || (autoFollowOutput && !userScrollActive && !sv.isTracking && !sv.isDragging && !sv.isDecelerating) else { return }
+
+            let targetY = bottomOffset(for: sv)
             if force {
                 userScrollActive = false
-                stopFollowing()
-                let targetY = bottomOffset(for: sv)
-                if abs(sv.contentOffset.y - targetY) > 0.5 {
+                cancelActiveAnimation()
+                animatedTargetY = targetY
+                if abs(sv.contentOffset.y - targetY) > 1.0 {
                     sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: targetY), animated: false)
-                }
-                if isGenerating {
-                    startFollowing()
                 }
                 return
             }
-            startFollowing()
+
+            let delta = targetY - sv.contentOffset.y
+            guard delta > 1.5 else { return }
+
+            if !animated {
+                cancelActiveAnimation()
+                animatedTargetY = targetY
+                sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: targetY), animated: false)
+                return
+            }
+
+            if followAnimator?.isRunning == true && abs(targetY - animatedTargetY) < 4.0 {
+                return
+            }
+
+            animatedTargetY = targetY
+            cancelActiveAnimation()
+
+            let duration = min(0.24, max(0.14, Double(delta) / 900.0))
+            let animator = UIViewPropertyAnimator(duration: duration, curve: .easeOut) { [weak sv] in
+                guard let sv = sv else { return }
+                sv.contentOffset = CGPoint(x: sv.contentOffset.x, y: targetY)
+            }
+            animator.addCompletion { [weak self] _ in
+                self?.followAnimator = nil
+            }
+            followAnimator = animator
+            animator.startAnimation()
         }
 
         private func bottomOffset(for scrollView: UIScrollView) -> CGFloat {
-            max(
+            let scale = UIScreen.main.scale
+            let raw = max(
                 -scrollView.adjustedContentInset.top,
                 scrollView.contentSize.height - scrollView.bounds.height + scrollView.adjustedContentInset.bottom
             )
-        }
-
-        func startFollowing() {
-            guard isViewActive, autoFollowOutput, !userScrollActive else { return }
-            guard displayLink == nil else { return }
-            lastDisplayTimestamp = 0
-            let link = CADisplayLink(target: self, selector: #selector(followBottomOnDisplayLink(_:)))
-            link.add(to: .main, forMode: .common)
-            displayLink = link
-        }
-
-        func stopFollowing() {
-            displayLink?.invalidate()
-            displayLink = nil
-            lastDisplayTimestamp = 0
-        }
-
-        @objc private func followBottomOnDisplayLink(_ link: CADisplayLink) {
-            guard isViewActive, let sv = attachedScrollView else {
-                stopFollowing()
-                return
-            }
-            guard autoFollowOutput, !userScrollActive, !sv.isTracking, !sv.isDragging, !sv.isDecelerating else {
-                stopFollowing()
-                return
-            }
-
-            let targetY = bottomOffset(for: sv)
-            let delta = targetY - sv.contentOffset.y
-            if delta <= 0.4 {
-                if delta > 0.05 {
-                    sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: targetY), animated: false)
-                }
-                if !isGenerating {
-                    stopFollowing()
-                }
-                return
-            }
-
-            let dt = lastDisplayTimestamp == 0
-                ? link.duration
-                : min(max(link.timestamp - lastDisplayTimestamp, 1.0 / 120.0), 1.0 / 30.0)
-            lastDisplayTimestamp = link.timestamp
-
-            let tau: Double = delta > 140 ? 0.12 : 0.22
-            let proportionalStep = delta * CGFloat(1.0 - exp(-dt / tau))
-            let minGlideStep = CGFloat(68.0 * dt)
-            let step = min(delta, max(proportionalStep, minGlideStep))
-            let nextY = sv.contentOffset.y + step
-            sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: nextY), animated: false)
+            return round(raw * scale) / scale
         }
 
         private func observeContentSize(of scrollView: UIScrollView) {
@@ -1118,15 +1132,21 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
             contentSizeObservation = scrollView.observe(\.contentSize, options: [.new]) { [weak self] sv, _ in
                 guard let self = self else { return }
                 let newHeight = sv.contentSize.height
-                let delta = newHeight - self.lastObservedHeight
-                self.lastObservedHeight = newHeight
+                let heightDelta = newHeight - self.lastObservedHeight
 
                 if self.userScrollActive || sv.isTracking || sv.isDragging || sv.isDecelerating {
+                    self.lastObservedHeight = newHeight
                     return
                 }
 
-                guard self.isViewActive, self.autoFollowOutput, delta > 0.5 else { return }
-                self.startFollowing()
+                guard self.isViewActive, self.autoFollowOutput else {
+                    self.lastObservedHeight = newHeight
+                    return
+                }
+
+                guard heightDelta >= 6.0 else { return }
+                self.lastObservedHeight = newHeight
+                self.scrollToBottom(force: false, animated: true)
             }
         }
 
@@ -1138,7 +1158,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
                 scrollSettleWorkItem?.cancel()
                 userScrollActive = true
                 panInitialOffsetY = sv.contentOffset.y
-                stopFollowing()
+                cancelActiveAnimation()
                 onUserTouchBegan()
             case .changed:
                 let translationY = recognizer.translation(in: sv).y
@@ -1167,9 +1187,6 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
                 let distanceFromBottom = self.bottomOffset(for: sv) - sv.contentOffset.y
                 if distanceFromBottom < 36 {
                     self.onReachBottom()
-                    if self.isGenerating {
-                        self.startFollowing()
-                    }
                 }
             }
             scrollSettleWorkItem = item

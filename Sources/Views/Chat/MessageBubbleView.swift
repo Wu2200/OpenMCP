@@ -121,6 +121,7 @@ struct MessageBubbleView: View {
     @ObservedObject var streamingState: StreamingTurnState
     var isSelected: Bool = false
     var onSelectToggle: (() -> Void)? = nil
+    var onDismissSelection: (() -> Void)? = nil
     var onEditSave: ((String) -> Void)? = nil
     var onEditAndResend: ((String) -> Void)? = nil
     var onRetry: (() -> Void)? = nil
@@ -175,6 +176,10 @@ struct MessageBubbleView: View {
 
         return HStack(alignment: .top, spacing: 6) {
             Spacer(minLength: 24)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    onDismissSelection?()
+                }
 
             if isEditing {
                 editEditorBox(allowResend: true)
@@ -309,22 +314,30 @@ struct MessageBubbleView: View {
             } else {
                 VStack(alignment: .leading, spacing: 6) {
                     if isPureThinking {
-                        ThinkingStatusView(
-                            statusText: statusText,
-                            startDate: thinkingStartTime ?? turn.createdAt,
-                            theme: theme
-                        )
-                        .padding(.horizontal, 13)
-                        .padding(.vertical, 9)
-                        .background(theme.cardBackground)
-                        .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 15, style: .continuous)
-                                .stroke(isSelected ? theme.accent.opacity(0.45) : theme.border, lineWidth: 1)
-                        )
-                        .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-                        .onTapGesture {
-                            onSelectToggle?()
+                        HStack(spacing: 0) {
+                            ThinkingStatusView(
+                                statusText: statusText,
+                                startDate: thinkingStartTime ?? turn.createdAt,
+                                theme: theme
+                            )
+                            .padding(.horizontal, 13)
+                            .padding(.vertical, 9)
+                            .background(theme.cardBackground)
+                            .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                                    .stroke(isSelected ? theme.accent.opacity(0.45) : theme.border, lineWidth: 1)
+                            )
+                            .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                            .onTapGesture {
+                                onSelectToggle?()
+                            }
+
+                            Spacer(minLength: 16)
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    onDismissSelection?()
+                                }
                         }
                     } else {
                         VStack(alignment: .leading, spacing: 8) {
@@ -598,10 +611,6 @@ struct CodeBlockCard: View {
         totalLines > previewLineThreshold || code.count > 360
     }
 
-    private var remainingLines: Int {
-        max(1, totalLines - previewLineThreshold)
-    }
-
     private var displayedCode: String {
         if !isCollapsible {
             return code
@@ -797,7 +806,7 @@ struct CodeBlockCard: View {
                 HStack(spacing: 5) {
                     Image(systemName: "arrow.up.left.and.arrow.down.right")
                         .font(.system(size: 10.5, weight: .semibold))
-                    Text(isStreaming ? "查看完整代码（已生成 \(totalLines) 行）" : "展开查看剩余 \(remainingLines) 行代码（共 \(totalLines) 行）")
+                    Text("查看全部 \(totalLines.formatted()) 行完整代码")
                         .font(.system(size: 11.5, weight: .semibold))
                         .lineLimit(1)
                 }

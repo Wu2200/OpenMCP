@@ -41,7 +41,7 @@ final class StreamingTurnState: ObservableObject {
         guard !isDisplayPaused else { return }
 
         if displayedText.isEmpty {
-            let initialEnd = advanceIndex(in: targetText, from: targetText.startIndex, maxChars: min(16, targetText.count))
+            let initialEnd = advanceIndex(in: targetText, from: targetText.startIndex, maxChars: min(28, targetText.count))
             commitDisplayed(text: String(targetText[..<initialEnd]), reasoning: nil)
         }
         ensureDrainTimer()
@@ -59,7 +59,7 @@ final class StreamingTurnState: ObservableObject {
 
     private func ensureDrainTimer() {
         guard drainTimer == nil, !isDisplayPaused else { return }
-        let timer = Timer(timeInterval: 0.025, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: 0.055, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.tickDrain()
             }
@@ -97,17 +97,17 @@ final class StreamingTurnState: ObservableObject {
                 if remainingCount > 0 {
                     let stepChars: Int
                     if isStreamComplete {
-                        stepChars = max(14, (remainingCount + 2) / 3)
-                    } else if remainingCount > 240 {
-                        stepChars = max(24, remainingCount / 5)
-                    } else if remainingCount > 90 {
-                        stepChars = max(12, remainingCount / 6)
-                    } else if remainingCount > 32 {
-                        stepChars = max(6, remainingCount / 6)
-                    } else if remainingCount > 10 {
-                        stepChars = 4
+                        stepChars = max(36, (remainingCount + 1) / 2)
+                    } else if remainingCount > 300 {
+                        stepChars = max(60, remainingCount / 3)
+                    } else if remainingCount > 120 {
+                        stepChars = max(32, remainingCount / 3)
+                    } else if remainingCount > 40 {
+                        stepChars = max(16, remainingCount / 3)
+                    } else if remainingCount > 12 {
+                        stepChars = 10
                     } else {
-                        stepChars = min(remainingCount, 2)
+                        stepChars = remainingCount
                     }
                     let nextIdx = advanceIndex(in: targetText, from: currentEnd, maxChars: min(remainingCount, stepChars))
                     nextText = String(targetText[..<nextIdx])
