@@ -235,7 +235,7 @@ struct ChatDetailView: View {
                                 }
                                 .padding(.horizontal, 10)
                                 .padding(.top, 10)
-                                .padding(.bottom, 16)
+                                .padding(.bottom, 56)
                                 .frame(width: viewportWidth)
                                 .background(
                                     Color.clear
@@ -1103,6 +1103,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
         private var contentSizeObservation: NSKeyValueObservation?
         private var lastObservedHeight: CGFloat = 0
         private var scrollSettleWorkItem: DispatchWorkItem?
+        private var bottomFollowWorkItem: DispatchWorkItem?
         private var followAnimator: UIViewPropertyAnimator?
         private var animatedTargetY: CGFloat = 0
         private var userScrollActive = false
@@ -1195,14 +1196,14 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
         }
 
         func scheduleBottomFollow() {
-            scrollToBottom(animated: false)
-            for delay in [0.08, 0.22, 0.45] {
-                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                    guard let self = self, self.isViewActive, self.autoFollowOutput else { return }
-                    self.attachedScrollView?.layoutIfNeeded()
-                    self.scrollToBottom(animated: false)
-                }
+            bottomFollowWorkItem?.cancel()
+            let item = DispatchWorkItem { [weak self] in
+                guard let self = self, self.isViewActive, self.autoFollowOutput else { return }
+                self.attachedScrollView?.layoutIfNeeded()
+                self.scrollToBottom(animated: false)
             }
+            bottomFollowWorkItem = item
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.04, execute: item)
         }
 
         private func bottomOffset(for scrollView: UIScrollView) -> CGFloat {
@@ -1235,10 +1236,8 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
 
                 let distanceToTarget = self.bottomOffset(for: sv) - sv.contentOffset.y
                 self.lastObservedHeight = newHeight
-                guard heightDelta >= 0.5 || (self.isGenerating && distanceToTarget > 1.0) else { return }
-                DispatchQueue.main.async { [weak self] in
-                    self?.scheduleBottomFollow()
-                }
+                guard abs(heightDelta) >= 0.5 || (self.isGenerating && distanceToTarget > 1.0) else { return }
+                self.scheduleBottomFollow()
             }
         }
 
