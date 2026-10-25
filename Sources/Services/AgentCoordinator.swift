@@ -150,6 +150,21 @@ class AgentCoordinator: ObservableObject {
     private var activeConversationId: String? = nil
     private var currentRunGeneratedMessageIds: Set<String> = []
     private var isCancelledByUser: Bool = false
+    private static var activeCoordinators: [String: AgentCoordinator] = [:]
+
+    static func coordinator(for conversationId: String) -> AgentCoordinator {
+        activeCoordinators[conversationId] ?? AgentCoordinator()
+    }
+
+    private func retainForActiveGeneration(_ conversationId: String) {
+        Self.activeCoordinators[conversationId] = self
+    }
+
+    private func releaseAfterGeneration(_ conversationId: String?) {
+        guard let conversationId = conversationId,
+              Self.activeCoordinators[conversationId] === self else { return }
+        Self.activeCoordinators.removeValue(forKey: conversationId)
+    }
 
     func startSendMessage(
         conversationId: String,
@@ -158,7 +173,11 @@ class AgentCoordinator: ObservableObject {
         settings: OpenAISettings,
         servers: [MCPServer]
     ) {
+        let trimmed = userPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty || !attachments.isEmpty else { return }
+        guard DataStorage.shared.conversations.contains(where: { $0.id == conversationId }) else { return }
         generationTask?.cancel()
+        retainForActiveGeneration(conversationId)
         generationTask = Task { @MainActor in
             await sendMessage(
                 conversationId: conversationId,
@@ -177,7 +196,10 @@ class AgentCoordinator: ObservableObject {
         settings: OpenAISettings,
         servers: [MCPServer]
     ) {
+        guard let conversation = DataStorage.shared.conversations.first(where: { $0.id == conversationId }),
+              conversation.messages.contains(where: { $0.id == messageId }) else { return }
         generationTask?.cancel()
+        retainForActiveGeneration(conversationId)
         generationTask = Task { @MainActor in
             await retryFromMessage(
                 conversationId: conversationId,
@@ -209,6 +231,8 @@ class AgentCoordinator: ObservableObject {
             statusText = ""
             errorMessage = nil
         }
+        releaseAfterGeneration(convId)
+        activeConversationId = nil
     }
 
     func sendMessage(
@@ -460,6 +484,8 @@ class AgentCoordinator: ObservableObject {
             thinkingStartTime = nil
             statusText = ""
             currentRunGeneratedMessageIds.removeAll()
+            releaseAfterGeneration(activeConversationId)
+            activeConversationId = nil
         }
     }
 }
