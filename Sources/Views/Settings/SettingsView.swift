@@ -12,6 +12,7 @@ struct SettingsView: View {
     @State private var customModelInput: String = ""
     @State private var showingAddProfileAlert: Bool = false
     @State private var newProfileName: String = ""
+    @State private var isThemeSectionExpanded: Bool = false
 
     private enum SettingsField: Hashable {
         case profileName
