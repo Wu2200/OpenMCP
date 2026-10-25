@@ -150,7 +150,7 @@ final class AppLogManager: ObservableObject {
         details: String? = nil,
         conversationTitle: String? = nil
     ) {
-        guard isLoggingEnabled, let idx = logs.firstIndex(where: { $0.id == id }) else { return }
+        guard let idx = logs.firstIndex(where: { $0.id == id }) else { return }
         if let category = category {
             logs[idx].category = category
         }
