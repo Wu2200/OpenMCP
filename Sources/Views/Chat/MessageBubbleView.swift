@@ -101,7 +101,7 @@ struct ReasoningFoldCardView: View {
                 let displayReasoning = reasoningText.count > 12000
                     ? "...(仅显示末尾思考内容)\n" + String(reasoningText.suffix(12000))
                     : reasoningText
-                let maxWindowHeight = min(280, max(180, UIScreen.main.bounds.height * 0.34))
+                let maxWindowHeight = min(320, max(200, UIScreen.main.bounds.height * 0.38))
 
                 ScrollView(.vertical, showsIndicators: true) {
                     reasoningBodyText(displayReasoning)
