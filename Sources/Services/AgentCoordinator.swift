@@ -459,18 +459,13 @@ class AgentCoordinator: ObservableObject {
             }
         }
 
-        let maxToolSteps = 25
-        var remainingSteps = maxToolSteps
         var stepIndex = 0
-        var lastStepEndedWithToolCalls = false
 
-        while remainingSteps > 0 {
+        while true {
             if isCancelledByUser || Task.isCancelled {
                 return
             }
-            remainingSteps -= 1
             stepIndex += 1
-            lastStepEndedWithToolCalls = false
             let contextMessages = conversation.messages
 
             let placeholderMsg = ChatMessage(
@@ -619,7 +614,6 @@ class AgentCoordinator: ObservableObject {
                     }
 
                     DataStorage.shared.saveConversations()
-                    lastStepEndedWithToolCalls = true
                     statusText = "思考中"
                 } else {
                     if finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && stepIndex > 1 {
@@ -672,81 +666,6 @@ class AgentCoordinator: ObservableObject {
                 DataStorage.shared.updateConversation(conversation, persistImmediately: true)
                 errorMessage = error.localizedDescription
                 break
-            }
-        }
-
-        if lastStepEndedWithToolCalls && !isCancelledByUser && !Task.isCancelled {
-            stepIndex += 1
-            statusText = "汇总回答中"
-            AppLogManager.shared.log(
-                category: .aiTruncated,
-                level: .warning,
-                title: "工具调用达到单轮步数上限 (\(maxToolSteps) 步)",
-                summary: "已连续调用 \(maxToolSteps) 步工具，自动发起最终正文总结请求以避免无正文结束",
-                details: "单轮对话工具循环已达 \(maxToolSteps) 步上限，系统自动禁用工具并请求模型基于已获取的上下文直接生成最终回答正文。",
-                conversationId: conversationId,
-                conversationTitle: conversation.title,
-                turnId: turnId,
-                turnPrompt: turnPrompt,
-                stepIndex: stepIndex
-            )
-
-            let finalMsg = ChatMessage(
-                role: .assistant,
-                content: "",
-                reasoningContent: nil,
-                toolCalls: nil
-            )
-            currentRunGeneratedMessageIds.insert(finalMsg.id)
-            streamingState.begin(messageId: finalMsg.id)
-            conversation.messages.append(finalMsg)
-            let finalMsgIndex = conversation.messages.count - 1
-            DataStorage.shared.updateConversation(conversation, persistImmediately: false)
-
-            var summaryContext = Array(conversation.messages.dropLast())
-            summaryContext.append(
-                ChatMessage(
-                    role: .user,
-                    content: "工具调用步数已达上限，请立即基于目前已经收集到的所有工具结果，输出完整、详尽的最终回答正文。"
-                )
-            )
-
-            do {
-                let (content, reasoning, _) = try await OpenAIService.shared.streamChatCompletion(
-                    settings: effectiveSettings,
-                    messages: summaryContext,
-                    tools: nil,
-                    conversationId: conversationId,
-                    conversationTitle: conversation.title,
-                    turnId: turnId,
-                    turnPrompt: turnPrompt,
-                    stepIndex: stepIndex,
-                    onPartialUpdate: { [weak self] partialText in
-                        guard let self = self, !self.isCancelledByUser, !Task.isCancelled else { return }
-                        self.streamingState.pushPartialText(partialText)
-                    },
-                    onReasoningUpdate: { [weak self] partialReasoning in
-                        guard let self = self, !self.isCancelledByUser, !Task.isCancelled else { return }
-                        self.streamingState.pushPartialReasoning(partialReasoning)
-                    }
-                )
-                if !isCancelledByUser && !Task.isCancelled {
-                    let finalText = content ?? ""
-                    streamingState.finishImmediate(with: finalText, finalReasoning: reasoning)
-                    conversation.messages[finalMsgIndex].content = finalText
-                    conversation.messages[finalMsgIndex].reasoningContent = reasoning
-                    conversation.updatedAt = Date()
-                    DataStorage.shared.updateConversation(conversation, persistImmediately: true)
-                }
-            } catch {
-                if !isCancelledByUser && !Task.isCancelled {
-                    if finalMsgIndex < conversation.messages.count,
-                       conversation.messages[finalMsgIndex].content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        conversation.messages.remove(at: finalMsgIndex)
-                    }
-                    DataStorage.shared.updateConversation(conversation, persistImmediately: true)
-                    errorMessage = error.localizedDescription
-                }
             }
         }
 
