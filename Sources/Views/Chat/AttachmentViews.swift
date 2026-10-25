@@ -8,32 +8,41 @@ struct ThinkingStatusView: View {
     let statusText: String
     let startDate: Date
     let theme: AppThemePalette
+    var isPaused: Bool = false
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 0.04)) { context in
-            let elapsed = max(0, context.date.timeIntervalSince(startDate))
-
-            HStack(spacing: 7) {
-                Text(statusText.isEmpty ? "思考中" : statusText)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(theme.primaryText)
-
-                HStack(spacing: 4) {
-                    ForEach(0..<3, id: \.self) { index in
-                        let wave = (sin(elapsed * 2.5 - Double(index) * 0.9) + 1.0) * 0.5
-                        Circle()
-                            .fill(theme.accent.opacity(0.28 + 0.72 * wave))
-                            .frame(width: 5, height: 5)
-                            .scaleEffect(0.84 + 0.30 * wave)
-                    }
+        Group {
+            if isPaused {
+                statusContent(elapsed: max(0, Date().timeIntervalSince(startDate)))
+            } else {
+                TimelineView(.periodic(from: .now, by: 0.1)) { context in
+                    statusContent(elapsed: max(0, context.date.timeIntervalSince(startDate)))
                 }
-
-                Text(Self.formatElapsed(elapsed))
-                    .font(.system(size: 13, weight: .medium, design: .rounded).monospacedDigit())
-                    .foregroundColor(theme.secondaryText)
             }
-            .fixedSize(horizontal: true, vertical: false)
         }
+    }
+
+    private func statusContent(elapsed: TimeInterval) -> some View {
+        HStack(spacing: 7) {
+            Text(statusText.isEmpty ? "思考中" : statusText)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(theme.primaryText)
+
+            HStack(spacing: 4) {
+                ForEach(0..<3, id: \.self) { index in
+                    let wave = (sin(elapsed * 2.5 - Double(index) * 0.9) + 1.0) * 0.5
+                    Circle()
+                        .fill(theme.accent.opacity(0.28 + 0.72 * wave))
+                        .frame(width: 5, height: 5)
+                        .scaleEffect(0.84 + 0.30 * wave)
+                }
+            }
+
+            Text(Self.formatElapsed(elapsed))
+                .font(.system(size: 13, weight: .medium, design: .rounded).monospacedDigit())
+                .foregroundColor(theme.secondaryText)
+        }
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     static func formatElapsed(_ seconds: TimeInterval) -> String {
