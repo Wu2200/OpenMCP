@@ -280,7 +280,8 @@ struct MarkdownTableView: View {
                 cellContent(text: cellText, isHeader: isHeader, alignment: align)
                     .padding(.horizontal, 11)
                     .padding(.vertical, isHeader ? 11 : 10)
-                    .frame(width: width, maxHeight: .infinity, alignment: frameAlignment(for: align))
+                    .frame(width: width, alignment: frameAlignment(for: align))
+                    .frame(maxHeight: .infinity, alignment: frameAlignment(for: align))
 
                 if col < columnCount - 1 {
                     Rectangle()
