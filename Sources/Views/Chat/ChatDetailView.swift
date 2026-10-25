@@ -236,14 +236,15 @@ struct ChatDetailView: View {
                                         autoFollowOutput: autoFollowOutput,
                                         manualScrollTrigger: manualScrollTrigger,
                                         onUserDragUp: {
-                                            if autoFollowOutput {
-                                                autoFollowOutput = false
-                                            }
+                                            autoFollowOutput = false
+                                            coordinator.streamingState.setDisplayPaused(true)
                                         },
                                         onReachBottom: {
-                                            if !autoFollowOutput {
-                                                autoFollowOutput = true
-                                            }
+                                            autoFollowOutput = true
+                                            coordinator.streamingState.setDisplayPaused(false)
+                                        },
+                                        onScrollSettled: {
+                                            coordinator.streamingState.setDisplayPaused(false)
                                         }
                                     )
                                 )
@@ -884,6 +885,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
     var manualScrollTrigger: Int
     var onUserDragUp: () -> Void
     var onReachBottom: () -> Void
+    var onScrollSettled: () -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -891,7 +893,8 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
             autoFollowOutput: autoFollowOutput,
             manualScrollTrigger: manualScrollTrigger,
             onUserDragUp: onUserDragUp,
-            onReachBottom: onReachBottom
+            onReachBottom: onReachBottom,
+            onScrollSettled: onScrollSettled
         )
     }
 
@@ -908,6 +911,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
         coord.autoFollowOutput = autoFollowOutput
         coord.onUserDragUp = onUserDragUp
         coord.onReachBottom = onReachBottom
+        coord.onScrollSettled = onScrollSettled
         let triggerChanged = (coord.manualScrollTrigger != manualScrollTrigger)
         coord.manualScrollTrigger = manualScrollTrigger
 
@@ -925,22 +929,26 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
         var manualScrollTrigger: Int
         var onUserDragUp: () -> Void
         var onReachBottom: () -> Void
+        var onScrollSettled: () -> Void
         private weak var attachedScrollView: UIScrollView?
         private var contentSizeObservation: NSKeyValueObservation?
         private var lastObservedHeight: CGFloat = 0
+        private var scrollSettleWorkItem: DispatchWorkItem?
 
         init(
             isGenerating: Bool,
             autoFollowOutput: Bool,
             manualScrollTrigger: Int,
             onUserDragUp: @escaping () -> Void,
-            onReachBottom: @escaping () -> Void
+            onReachBottom: @escaping () -> Void,
+            onScrollSettled: @escaping () -> Void
         ) {
             self.isGenerating = isGenerating
             self.autoFollowOutput = autoFollowOutput
             self.manualScrollTrigger = manualScrollTrigger
             self.onUserDragUp = onUserDragUp
             self.onReachBottom = onReachBottom
+            self.onScrollSettled = onScrollSettled
         }
 
         func attachIfNeeded(from view: UIView) {
@@ -1003,20 +1011,37 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
 
         @objc private func handlePan(_ recognizer: UIPanGestureRecognizer) {
             guard let sv = attachedScrollView else { return }
-            let translation = recognizer.translation(in: sv)
-            let velocity = recognizer.velocity(in: sv)
 
-            if recognizer.state == .began || recognizer.state == .changed {
-                let distanceFromBottom = sv.contentSize.height - sv.contentOffset.y - sv.bounds.height
-                if translation.y > 1 || velocity.y > 30 || distanceFromBottom > 36 {
-                    onUserDragUp()
+            switch recognizer.state {
+            case .began:
+                scrollSettleWorkItem?.cancel()
+                onUserDragUp()
+            case .changed:
+                break
+            case .ended, .cancelled, .failed:
+                scheduleScrollSettleCheck()
+            default:
+                break
+            }
+        }
+
+        private func scheduleScrollSettleCheck() {
+            scrollSettleWorkItem?.cancel()
+            let item = DispatchWorkItem { [weak self] in
+                guard let self = self, let sv = self.attachedScrollView else { return }
+                guard !sv.isTracking && !sv.isDragging && !sv.isDecelerating else {
+                    self.scheduleScrollSettleCheck()
+                    return
                 }
-            } else if recognizer.state == .ended || recognizer.state == .cancelled {
+
+                self.onScrollSettled()
                 let distanceFromBottom = sv.contentSize.height - sv.contentOffset.y - sv.bounds.height
-                if distanceFromBottom < 20 && velocity.y <= 0 {
-                    onReachBottom()
+                if distanceFromBottom < 20 {
+                    self.onReachBottom()
                 }
             }
+            scrollSettleWorkItem = item
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08, execute: item)
         }
     }
 }
