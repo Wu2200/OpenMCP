@@ -613,7 +613,7 @@ struct CodeBlockCard: View {
             return Self.extractFirstLines(from: code, maxLines: maxInlineExpandLines, maxChars: maxInlineExpandChars)
         }
         if isStreaming {
-            return Self.extractLastLines(from: code, maxLines: previewLineThreshold, maxChars: 1400)
+            return Self.extractLastLinesStable(from: code, exactLines: previewLineThreshold, maxChars: 1400)
         }
         return Self.extractFirstLines(from: code, maxLines: previewLineThreshold, maxChars: 1400)
     }
@@ -645,8 +645,8 @@ struct CodeBlockCard: View {
         return String(text[..<idx])
     }
 
-    private static func extractLastLines(from text: String, maxLines: Int, maxChars: Int) -> String {
-        guard !text.isEmpty, maxLines > 0 else { return "" }
+    private static func extractLastLinesStable(from text: String, exactLines: Int, maxChars: Int) -> String {
+        guard !text.isEmpty, exactLines > 0 else { return "" }
         var idx = text.endIndex
         let start = text.startIndex
         var newlinesFound = 0
@@ -656,7 +656,7 @@ struct CodeBlockCard: View {
             let prev = text.index(before: idx)
             if text[prev] == "\n" {
                 newlinesFound += 1
-                if newlinesFound >= maxLines {
+                if newlinesFound >= exactLines {
                     idx = text.index(after: prev)
                     break
                 }
@@ -667,10 +667,26 @@ struct CodeBlockCard: View {
                 break
             }
         }
-        return String(text[idx...])
+
+        let rawSlice = String(text[idx...])
+        var lines = rawSlice.components(separatedBy: "\n")
+        if lines.count > exactLines {
+            lines = Array(lines.suffix(exactLines))
+        }
+        let cleaned = lines.map { line -> String in
+            let safeLine = line.isEmpty ? " " : (line.count > 160 ? String(line.prefix(160)) : line)
+            return safeLine
+        }
+        if cleaned.count < exactLines {
+            let pad = Array(repeating: " ", count: exactLines - cleaned.count)
+            return (pad + cleaned).joined(separator: "\n")
+        }
+        return cleaned.joined(separator: "\n")
     }
 
     var body: some View {
+        let isStreamingCollapsedWindow = isStreaming && isCollapsible && !isExpanded
+
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
                 HStack(spacing: 5) {
@@ -680,7 +696,7 @@ struct CodeBlockCard: View {
                         .lineLimit(1)
                         .truncationMode(.tail)
 
-                    Text(isStreaming && isCollapsible && !isExpanded ? "实时跟随 · \(totalLines) 行" : "\(totalLines) 行")
+                    Text(isStreamingCollapsedWindow ? "实时跟随 · \(totalLines) 行" : "\(totalLines) 行")
                         .font(.system(size: 10, weight: .medium, design: .monospaced))
                         .foregroundColor(isStreaming ? theme.accent : theme.mutedText)
                         .lineLimit(1)
@@ -759,15 +775,23 @@ struct CodeBlockCard: View {
                 .fill(theme.border)
                 .frame(height: 1)
 
-            ScrollView(.horizontal, showsIndicators: true) {
-                if isStreaming {
-                    Text(displayedCode)
-                        .font(.system(size: 12.5, design: .monospaced))
-                        .foregroundColor(theme.primaryText)
-                        .lineSpacing(3)
-                        .fixedSize(horizontal: true, vertical: true)
-                        .padding(10)
-                } else {
+            if isStreaming {
+                Text(displayedCode)
+                    .font(.system(size: 12.5, design: .monospaced))
+                    .foregroundColor(theme.primaryText)
+                    .lineSpacing(3)
+                    .lineLimit(isStreamingCollapsedWindow ? previewLineThreshold : nil)
+                    .truncationMode(.tail)
+                    .padding(10)
+                    .frame(
+                        maxWidth: .infinity,
+                        minHeight: isStreamingCollapsedWindow ? 164 : nil,
+                        maxHeight: isStreamingCollapsedWindow ? 164 : nil,
+                        alignment: .topLeading
+                    )
+                    .clipped()
+            } else {
+                ScrollView(.horizontal, showsIndicators: true) {
                     Text(displayedCode)
                         .font(.system(size: 12.5, design: .monospaced))
                         .foregroundColor(theme.primaryText)
@@ -776,8 +800,8 @@ struct CodeBlockCard: View {
                         .textSelection(.enabled)
                         .padding(10)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
 
             if isCollapsible {
                 Rectangle()

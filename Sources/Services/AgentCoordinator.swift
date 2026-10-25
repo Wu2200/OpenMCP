@@ -8,33 +8,92 @@ final class StreamingTurnState: ObservableObject {
     @Published var displayedText: String = ""
     @Published var displayedReasoning: String = ""
 
+    private var pendingText: String? = nil
+    private var pendingReasoning: String? = nil
+    private var lastTextCommitTime: CFAbsoluteTime = 0
+    private var lastReasoningCommitTime: CFAbsoluteTime = 0
+    private var coalesceWorkItem: DispatchWorkItem? = nil
+
     func begin(messageId: String) {
+        coalesceWorkItem?.cancel()
+        coalesceWorkItem = nil
+        pendingText = nil
+        pendingReasoning = nil
+        lastTextCommitTime = 0
+        lastReasoningCommitTime = 0
         activeMessageId = messageId
         displayedText = ""
         displayedReasoning = ""
     }
 
     func pushPartialText(_ newText: String) {
-        if displayedText != newText {
-            var transaction = Transaction()
-            transaction.disablesAnimations = true
-            withTransaction(transaction) {
-                displayedText = newText
-            }
+        guard displayedText != newText else { return }
+        pendingText = newText
+
+        let now = CFAbsoluteTimeGetCurrent()
+        let elapsed = now - lastTextCommitTime
+        let minInterval: CFAbsoluteTime = 0.055
+
+        if displayedText.isEmpty || elapsed >= minInterval {
+            commitPendingUpdates(at: now)
+        } else {
+            scheduleCoalescedCommit(delay: minInterval - elapsed)
         }
     }
 
     func pushPartialReasoning(_ newReasoning: String) {
-        if displayedReasoning != newReasoning {
-            var transaction = Transaction()
-            transaction.disablesAnimations = true
-            withTransaction(transaction) {
-                displayedReasoning = newReasoning
+        guard displayedReasoning != newReasoning else { return }
+        pendingReasoning = newReasoning
+
+        let now = CFAbsoluteTimeGetCurrent()
+        let elapsed = now - lastReasoningCommitTime
+        let minInterval: CFAbsoluteTime = 0.065
+
+        if displayedReasoning.isEmpty || elapsed >= minInterval {
+            commitPendingUpdates(at: now)
+        } else {
+            scheduleCoalescedCommit(delay: minInterval - elapsed)
+        }
+    }
+
+    private func scheduleCoalescedCommit(delay: TimeInterval) {
+        guard coalesceWorkItem == nil else { return }
+        let item = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            self.coalesceWorkItem = nil
+            self.commitPendingUpdates(at: CFAbsoluteTimeGetCurrent())
+        }
+        coalesceWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0.016, delay), execute: item)
+    }
+
+    private func commitPendingUpdates(at timestamp: CFAbsoluteTime) {
+        coalesceWorkItem?.cancel()
+        coalesceWorkItem = nil
+
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            if let text = pendingText, text != displayedText {
+                displayedText = text
+                lastTextCommitTime = timestamp
             }
+            pendingText = nil
+
+            if let reasoning = pendingReasoning, reasoning != displayedReasoning {
+                displayedReasoning = reasoning
+                lastReasoningCommitTime = timestamp
+            }
+            pendingReasoning = nil
         }
     }
 
     func finishImmediate(with finalText: String, finalReasoning: String? = nil) {
+        coalesceWorkItem?.cancel()
+        coalesceWorkItem = nil
+        pendingText = nil
+        pendingReasoning = nil
+
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) {
@@ -46,6 +105,11 @@ final class StreamingTurnState: ObservableObject {
     }
 
     func reset() {
+        coalesceWorkItem?.cancel()
+        coalesceWorkItem = nil
+        pendingText = nil
+        pendingReasoning = nil
+
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) {

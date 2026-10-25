@@ -962,7 +962,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
 
         func scrollToBottom(force: Bool = false) {
             guard let sv = attachedScrollView else { return }
-            guard force || (autoFollowOutput && !sv.isTracking && !sv.isDragging) else { return }
+            guard force || (autoFollowOutput && !sv.isTracking && !sv.isDragging && !sv.isDecelerating) else { return }
             let bottomInset = sv.adjustedContentInset.bottom
             let topInset = sv.adjustedContentInset.top
             let targetY = max(-topInset, sv.contentSize.height - sv.bounds.height + bottomInset)
@@ -980,17 +980,22 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
                 let delta = newHeight - self.lastObservedHeight
                 self.lastObservedHeight = newHeight
 
-                guard self.autoFollowOutput,
-                      !sv.isTracking,
-                      !sv.isDragging,
-                      delta > 0.5 else {
+                if sv.isTracking || sv.isDragging || sv.isDecelerating {
+                    let distanceFromBottom = newHeight - sv.contentOffset.y - sv.bounds.height
+                    if distanceFromBottom > 48 && self.autoFollowOutput {
+                        self.onUserDragUp()
+                    }
+                    return
+                }
+
+                guard self.autoFollowOutput, abs(delta) > 0.5 else {
                     return
                 }
 
                 let bottomInset = sv.adjustedContentInset.bottom
                 let topInset = sv.adjustedContentInset.top
                 let targetY = max(-topInset, newHeight - sv.bounds.height + bottomInset)
-                if targetY > sv.contentOffset.y {
+                if abs(targetY - sv.contentOffset.y) > 0.5 {
                     sv.setContentOffset(CGPoint(x: 0, y: targetY), animated: false)
                 }
             }
@@ -999,14 +1004,16 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
         @objc private func handlePan(_ recognizer: UIPanGestureRecognizer) {
             guard let sv = attachedScrollView else { return }
             let translation = recognizer.translation(in: sv)
+            let velocity = recognizer.velocity(in: sv)
 
             if recognizer.state == .began || recognizer.state == .changed {
-                if translation.y > 2 {
+                let distanceFromBottom = sv.contentSize.height - sv.contentOffset.y - sv.bounds.height
+                if translation.y > 1 || velocity.y > 30 || distanceFromBottom > 36 {
                     onUserDragUp()
                 }
             } else if recognizer.state == .ended || recognizer.state == .cancelled {
                 let distanceFromBottom = sv.contentSize.height - sv.contentOffset.y - sv.bounds.height
-                if distanceFromBottom < 28 {
+                if distanceFromBottom < 20 && velocity.y <= 0 {
                     onReachBottom()
                 }
             }
