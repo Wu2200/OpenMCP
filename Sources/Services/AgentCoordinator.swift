@@ -482,7 +482,7 @@ class AgentCoordinator: ObservableObject {
             do {
                 let (content, reasoning, toolCalls) = try await OpenAIService.shared.streamChatCompletion(
                     settings: effectiveSettings,
-                    messages: contextMessages,
+                    messages: conversation.messages,
                     tools: openAITools.isEmpty ? nil : openAITools,
                     conversationId: conversationId,
                     conversationTitle: conversation.title,
