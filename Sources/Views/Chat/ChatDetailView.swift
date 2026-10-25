@@ -235,9 +235,8 @@ struct ChatDetailView: View {
                                 }
                                 .padding(.horizontal, 10)
                                 .padding(.top, 10)
-                                .padding(.bottom, 86)
+                                .padding(.bottom, 16)
                                 .frame(width: viewportWidth)
-                                .frame(minHeight: max(260, geo.size.height - 120), alignment: .top)
                                 .background(
                                     Color.clear
                                         .contentShape(Rectangle())
@@ -1083,12 +1082,10 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
                         coord.scrollToBottom(force: false, animated: true)
                     }
                 }
-            } else if !wasViewActive && isGenerating && autoFollowOutput {
-                coord.scrollToBottom(animated: false)
-            } else if !wasGenerating && isGenerating && autoFollowOutput {
-                coord.scrollToBottom(force: false, animated: true)
-            } else if wasGenerating && !isGenerating && autoFollowOutput {
-                coord.scrollToBottom(animated: true)
+            } else if wasViewActive != isViewActive && isViewActive && autoFollowOutput {
+                scheduleBottomFollow(coord)
+            } else if wasGenerating != isGenerating && autoFollowOutput {
+                scheduleBottomFollow(coord)
             }
         }
     }
@@ -1199,12 +1196,12 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
 
         private func bottomOffset(for scrollView: UIScrollView) -> CGFloat {
             let scale = UIScreen.main.scale
-            let extraBottomBreathingRoom: CGFloat = 24
-            let raw = max(
-                -scrollView.adjustedContentInset.top,
-                scrollView.contentSize.height - scrollView.bounds.height + scrollView.adjustedContentInset.bottom + extraBottomBreathingRoom
+            let minOffset = -scrollView.adjustedContentInset.top
+            let maxOffset = max(
+                minOffset,
+                scrollView.contentSize.height - scrollView.bounds.height + scrollView.adjustedContentInset.bottom
             )
-            return round(raw * scale) / scale
+            return round(maxOffset * scale) / scale
         }
 
         private func observeContentSize(of scrollView: UIScrollView) {
