@@ -140,7 +140,8 @@ struct ChatDetailView: View {
                                 emptyConversationHero
                                     .padding(.horizontal, 14)
                                     .padding(.top, 24)
-                                    .frame(width: viewportWidth, minHeight: max(300, geo.size.height - 130), alignment: .top)
+                                    .frame(width: viewportWidth)
+                                    .frame(minHeight: max(300, geo.size.height - 130), alignment: .top)
                                     .contentShape(Rectangle())
                                     .onTapGesture {
                                         handleBackgroundTap()
@@ -244,7 +245,8 @@ struct ChatDetailView: View {
                                 .padding(.horizontal, 10)
                                 .padding(.top, 10)
                                 .padding(.bottom, 54)
-                                .frame(width: viewportWidth, minHeight: max(260, geo.size.height - 120), alignment: .top)
+                                .frame(width: viewportWidth)
+                                .frame(minHeight: max(260, geo.size.height - 120), alignment: .top)
                                 .background(
                                     Color.clear
                                         .contentShape(Rectangle())
