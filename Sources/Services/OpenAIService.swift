@@ -67,6 +67,10 @@ class OpenAIService {
         messages: [ChatMessage],
         tools: [[String: Any]]? = nil,
         conversationId: String? = nil,
+        conversationTitle: String? = nil,
+        turnId: String? = nil,
+        turnPrompt: String? = nil,
+        stepIndex: Int? = nil,
         onPartialUpdate: (@MainActor (String) -> Void)? = nil,
         onReasoningUpdate: (@MainActor (String) -> Void)? = nil
     ) async throws -> (content: String?, reasoning: String?, toolCalls: [ToolCallItem]?) {
@@ -96,15 +100,21 @@ class OpenAIService {
         let payloadData = try JSONSerialization.data(withJSONObject: payload)
         let profileName = settings.activeProfile?.name ?? "默认配置"
         let toolCount = tools?.count ?? 0
+        let stepPrefix = stepIndex.map { "第 \($0) 步 · " } ?? ""
+        let requestHeaderDetails = "Endpoint: \(fullEndpoint)\nProfile: \(profileName)\nModel: \(settings.modelName)\nTemperature: \(settings.temperature)\nMessages Count: \(openAIMessages.count)\nTools Enabled: \(toolCount)\nPayload Bytes: \(payloadData.count)"
 
-        await MainActor.run {
+        let requestLogId = await MainActor.run {
             AppLogManager.shared.log(
                 category: .aiRequest,
                 level: .info,
-                title: "发起 AI 请求 [\(settings.modelName)]",
+                title: "\(stepPrefix)发起 AI 请求 [\(settings.modelName)]",
                 summary: "配置: \(profileName) · 消息数: \(openAIMessages.count) · 工具数: \(toolCount) · 请求体: \(payloadData.count) B",
-                details: "Endpoint: \(fullEndpoint)\nModel: \(settings.modelName)\nTemperature: \(settings.temperature)\nMessages Count: \(openAIMessages.count)\nTools Enabled: \(toolCount)",
-                conversationId: conversationId
+                details: requestHeaderDetails,
+                conversationId: conversationId,
+                conversationTitle: conversationTitle,
+                turnId: turnId,
+                turnPrompt: turnPrompt,
+                stepIndex: stepIndex
             )
         }
 
@@ -127,13 +137,13 @@ class OpenAIService {
         } catch {
             let nsErr = error as NSError
             await MainActor.run {
-                AppLogManager.shared.log(
+                AppLogManager.shared.updateLog(
+                    id: requestLogId,
                     category: .error,
                     level: .error,
-                    title: "AI 请求连接失败 [\(settings.modelName)]",
+                    title: "\(stepPrefix)AI 请求连接失败 [\(settings.modelName)]",
                     summary: "\(nsErr.localizedDescription) (Code: \(nsErr.code))",
-                    details: "Endpoint: \(fullEndpoint)\nDomain: \(nsErr.domain)\nCode: \(nsErr.code)\nDescription: \(nsErr.localizedDescription)",
-                    conversationId: conversationId
+                    details: "\(requestHeaderDetails)\n\nError Domain: \(nsErr.domain)\nCode: \(nsErr.code)\nDescription: \(nsErr.localizedDescription)"
                 )
             }
             throw error
@@ -156,13 +166,13 @@ class OpenAIService {
             }
             let errString = String(data: errorData, encoding: .utf8) ?? ""
             await MainActor.run {
-                AppLogManager.shared.log(
+                AppLogManager.shared.updateLog(
+                    id: requestLogId,
                     category: .error,
                     level: .error,
-                    title: "上游返回 HTTP \(httpRes.statusCode) [\(settings.modelName)]",
+                    title: "\(stepPrefix)上游返回 HTTP \(httpRes.statusCode) [\(settings.modelName)]",
                     summary: "状态码: \(httpRes.statusCode) · 响应前 200 字符: \(errString.prefix(200))",
-                    details: "Endpoint: \(fullEndpoint)\nHTTP Status: \(httpRes.statusCode)\nContent-Type: \(contentType)\nBody:\n\(errString)",
-                    conversationId: conversationId
+                    details: "\(requestHeaderDetails)\n\nHTTP Status: \(httpRes.statusCode)\nContent-Type: \(contentType)\nBody:\n\(errString)"
                 )
             }
             if let json = try? JSONSerialization.jsonObject(with: errorData) as? [String: Any],
@@ -190,13 +200,13 @@ class OpenAIService {
                 }
                 let elapsed = String(format: "%.2fs", CFAbsoluteTimeGetCurrent() - startTime)
                 await MainActor.run {
-                    AppLogManager.shared.log(
+                    AppLogManager.shared.updateLog(
+                        id: requestLogId,
                         category: .aiStop,
                         level: finishReason == "length" ? .warning : .info,
-                        title: "非流式 JSON 响应完成 [\(settings.modelName)]",
-                        summary: "耗时: \(elapsed) · finish_reason: \(finishReason) · 正文: \(parsed.content?.count ?? 0) 字 · 思考: \(parsed.reasoning?.count ?? 0) 字",
-                        details: "HTTP Status: \(httpRes.statusCode)\nContent-Type: \(contentType)\nFinish Reason: \(finishReason)\nRaw Bytes: \(rawData.count)",
-                        conversationId: conversationId
+                        title: "\(stepPrefix)非流式响应完成 [\(settings.modelName)]",
+                        summary: "耗时: \(elapsed) · finish_reason: \(finishReason) · 正文: \(parsed.content?.count ?? 0) 字 · 工具调用: \(parsed.toolCalls?.count ?? 0)",
+                        details: "\(requestHeaderDetails)\n\nHTTP Status: \(httpRes.statusCode)\nContent-Type: \(contentType)\nFinish Reason: \(finishReason)\nRaw Bytes: \(rawData.count)"
                     )
                 }
                 return parsed
@@ -255,13 +265,13 @@ class OpenAIService {
             if let errObj = json["error"] as? [String: Any],
                let msg = errObj["message"] as? String {
                 await MainActor.run {
-                    AppLogManager.shared.log(
+                    AppLogManager.shared.updateLog(
+                        id: requestLogId,
                         category: .error,
                         level: .error,
-                        title: "SSE 流内返回错误 [\(settings.modelName)]",
+                        title: "\(stepPrefix)SSE 流内返回错误 [\(settings.modelName)]",
                         summary: msg,
-                        details: "SSE Frame #\(sseChunkCount)\nRaw Data: \(dataStr)",
-                        conversationId: conversationId
+                        details: "\(requestHeaderDetails)\n\nSSE Frame #\(sseChunkCount)\nRaw Data: \(dataStr)"
                     )
                 }
                 throw NSError(domain: "OpenAIService", code: -1, userInfo: [NSLocalizedDescriptionKey: msg])
@@ -503,13 +513,13 @@ class OpenAIService {
             if !(error is CancellationError) && (error as NSError).code != NSURLErrorCancelled {
                 let elapsed = String(format: "%.2fs", CFAbsoluteTimeGetCurrent() - startTime)
                 await MainActor.run {
-                    AppLogManager.shared.log(
+                    AppLogManager.shared.updateLog(
+                        id: requestLogId,
                         category: .aiStop,
                         level: .error,
-                        title: "流式读取中途异常断开 [\(settings.modelName)]",
+                        title: "\(stepPrefix)流式读取中途异常断开 [\(settings.modelName)]",
                         summary: "耗时: \(elapsed) · 已收帧: \(sseChunkCount) · 已生成: \(accumulatedContent.count) 字 · 错误: \(error.localizedDescription)",
-                        details: "Error: \(error.localizedDescription)\nReceived [DONE]: \(receivedDoneMarker)\nLast Finish Reason: \(lastFinishReason ?? "nil")\nContent Chars: \(accumulatedContent.count)\nReasoning Chars: \(accumulatedReasoning.count)\nLast Raw SSE Line:\n\(lastRawDataLine)",
-                        conversationId: conversationId
+                        details: "\(requestHeaderDetails)\n\nError: \(error.localizedDescription)\nReceived [DONE]: \(receivedDoneMarker)\nLast Finish Reason: \(lastFinishReason ?? "nil")\nContent Chars: \(accumulatedContent.count)\nReasoning Chars: \(accumulatedReasoning.count)\nLast Raw SSE Line:\n\(lastRawDataLine)"
                     )
                 }
             }
@@ -528,6 +538,17 @@ class OpenAIService {
                 }
                 if let text = parsed.content, !text.isEmpty {
                     await onPartialUpdate?(text)
+                }
+                let elapsed = String(format: "%.2fs", CFAbsoluteTimeGetCurrent() - startTime)
+                await MainActor.run {
+                    AppLogManager.shared.updateLog(
+                        id: requestLogId,
+                        category: .aiStop,
+                        level: .info,
+                        title: "\(stepPrefix)AI 响应完成 [\(settings.modelName)]",
+                        summary: "耗时: \(elapsed) · 正文: \(parsed.content?.count ?? 0) 字 · 工具调用: \(parsed.toolCalls?.count ?? 0)",
+                        details: "\(requestHeaderDetails)\n\nMode: Non-SSE JSON fallback"
+                    )
                 }
                 return parsed
             }
@@ -569,14 +590,16 @@ class OpenAIService {
         }
 
         let tailPreview = String(accumulatedContent.suffix(160))
+        let toolCallCountResult = finalToolCalls?.count ?? 0
+        let summarySuffix = toolCallCountResult > 0 ? " · 触发工具: \(toolCallCountResult) 个" : ""
         await MainActor.run {
-            AppLogManager.shared.log(
+            AppLogManager.shared.updateLog(
+                id: requestLogId,
                 category: .aiStop,
                 level: isAbnormalTruncation ? .warning : .info,
-                title: isAbnormalTruncation ? "流式输出疑似截断 [\(settings.modelName)]" : "流式输出完成 [\(settings.modelName)]",
-                summary: "耗时: \(elapsedStr) · 结束原因: \(fr) · [DONE]: \(receivedDoneMarker ? "是" : "否") · 正文: \(accumulatedContent.count) 字 · 帧数: \(sseChunkCount)",
-                details: "\(diagnosisNote)\nModel: \(settings.modelName)\nSSE Frames: \(sseChunkCount)\nFinish Reason: \(fr)\nReceived [DONE]: \(receivedDoneMarker)\nUsage: \(usageSummary.isEmpty ? "未返回" : usageSummary)\nContent Length: \(accumulatedContent.count) chars\nReasoning Length: \(accumulatedReasoning.count) chars\nTool Calls: \(finalToolCalls?.count ?? 0)\nContent Tail (最后160字):\n\(tailPreview)\n\nLast SSE Data Frame:\n\(lastRawDataLine)",
-                conversationId: conversationId
+                title: isAbnormalTruncation ? "\(stepPrefix)流式输出疑似截断 [\(settings.modelName)]" : "\(stepPrefix)AI 响应完成 [\(settings.modelName)]",
+                summary: "耗时: \(elapsedStr) · 原因: \(fr) · [DONE]: \(receivedDoneMarker ? "是" : "否") · 正文: \(accumulatedContent.count) 字 · 帧数: \(sseChunkCount)\(summarySuffix)",
+                details: "\(diagnosisNote)\n\n--- 请求参数 ---\n\(requestHeaderDetails)\n\n--- 流式响应统计 ---\nSSE Frames: \(sseChunkCount)\nFinish Reason: \(fr)\nReceived [DONE]: \(receivedDoneMarker)\nUsage: \(usageSummary.isEmpty ? "未返回" : usageSummary)\nContent Length: \(accumulatedContent.count) chars\nReasoning Length: \(accumulatedReasoning.count) chars\nTool Calls: \(toolCallCountResult)\nContent Tail (最后160字):\n\(tailPreview)\n\nLast SSE Data Frame:\n\(lastRawDataLine)"
             )
         }
 
