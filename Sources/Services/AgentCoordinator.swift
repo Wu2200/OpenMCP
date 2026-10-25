@@ -147,6 +147,7 @@ class AgentCoordinator: ObservableObject {
     let streamingState = StreamingTurnState()
 
     private var generationTask: Task<Void, Never>? = nil
+    private var activeGenerationToken: UUID? = nil
     private var activeConversationId: String? = nil
     private var currentRunGeneratedMessageIds: Set<String> = []
     private var isCancelledByUser: Bool = false
@@ -166,6 +167,15 @@ class AgentCoordinator: ObservableObject {
         Self.activeCoordinators.removeValue(forKey: conversationId)
     }
 
+    private func completeGenerationTask(token: UUID, conversationId: String) {
+        guard activeGenerationToken == token else { return }
+        activeGenerationToken = nil
+        generationTask = nil
+        if !isGenerating {
+            releaseAfterGeneration(conversationId)
+        }
+    }
+
     func startSendMessage(
         conversationId: String,
         userPrompt: String,
@@ -176,9 +186,12 @@ class AgentCoordinator: ObservableObject {
         let trimmed = userPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !attachments.isEmpty else { return }
         guard DataStorage.shared.conversations.contains(where: { $0.id == conversationId }) else { return }
-        generationTask?.cancel()
+        guard activeGenerationToken == nil, !isGenerating else { return }
+        let token = UUID()
+        activeGenerationToken = token
         retainForActiveGeneration(conversationId)
         generationTask = Task { @MainActor in
+            defer { completeGenerationTask(token: token, conversationId: conversationId) }
             await sendMessage(
                 conversationId: conversationId,
                 userPrompt: userPrompt,
@@ -198,9 +211,12 @@ class AgentCoordinator: ObservableObject {
     ) {
         guard let conversation = DataStorage.shared.conversations.first(where: { $0.id == conversationId }),
               conversation.messages.contains(where: { $0.id == messageId }) else { return }
-        generationTask?.cancel()
+        guard activeGenerationToken == nil, !isGenerating else { return }
+        let token = UUID()
+        activeGenerationToken = token
         retainForActiveGeneration(conversationId)
         generationTask = Task { @MainActor in
+            defer { completeGenerationTask(token: token, conversationId: conversationId) }
             await retryFromMessage(
                 conversationId: conversationId,
                 messageId: messageId,
@@ -214,6 +230,7 @@ class AgentCoordinator: ObservableObject {
     func stopGeneration() {
         guard isGenerating else { return }
         isCancelledByUser = true
+        activeGenerationToken = nil
         generationTask?.cancel()
         generationTask = nil
 
