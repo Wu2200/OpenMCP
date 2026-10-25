@@ -1052,6 +1052,16 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
         return view
     }
 
+    private func scheduleBottomFollow(_ coordinator: Coordinator) {
+        coordinator.scrollToBottom(animated: false)
+        for delay in [0.08, 0.22, 0.45] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                guard coordinator.isViewActive && coordinator.autoFollowOutput else { return }
+                coordinator.scrollToBottom(animated: false)
+            }
+        }
+    }
+
     func updateUIView(_ uiView: UIView, context: Context) {
         let coord = context.coordinator
         let wasGenerating = coord.isGenerating
