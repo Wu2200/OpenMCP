@@ -98,18 +98,19 @@ struct ReasoningFoldCardView: View {
                     .fill(theme.border.opacity(0.75))
                     .frame(height: 1)
 
-                let displayReasoning = reasoningText.count > 4000
-                    ? "...(仅显示末尾思考内容)\n" + String(reasoningText.suffix(4000))
+                let displayReasoning = reasoningText.count > 12000
+                    ? "...(仅显示末尾思考内容)\n" + String(reasoningText.suffix(12000))
                     : reasoningText
+                let maxWindowHeight = min(220, max(160, UIScreen.main.bounds.height * 0.26))
 
-                Text(displayReasoning)
-                    .font(.system(size: 12.5))
-                    .foregroundColor(theme.secondaryText)
-                    .lineSpacing(3)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
+                ViewThatFits(in: .vertical) {
+                    reasoningBodyText(displayReasoning)
+
+                    ScrollView(.vertical, showsIndicators: true) {
+                        reasoningBodyText(displayReasoning)
+                    }
+                    .frame(height: maxWindowHeight)
+                }
             }
         }
         .frame(width: width, alignment: .leading)
@@ -119,6 +120,19 @@ struct ReasoningFoldCardView: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(theme.border, lineWidth: 1)
         )
+    }
+
+    @ViewBuilder
+    private func reasoningBodyText(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 12.5))
+            .foregroundColor(theme.secondaryText)
+            .lineSpacing(3)
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
     }
 }
 
