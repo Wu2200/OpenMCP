@@ -4,7 +4,7 @@ import UIKit
 struct ChatDetailView: View {
     @EnvironmentObject var storage: DataStorage
     let conversationId: String
-    @StateObject private var coordinator = AgentCoordinator()
+    @ObservedObject private var coordinator: AgentCoordinator
     @State private var inputText: String = ""
     @State private var pendingAttachments: [ChatAttachment] = []
     @State private var showingToolsSheet: Bool = false
@@ -16,6 +16,11 @@ struct ChatDetailView: View {
     @State private var autoFollowOutput: Bool = true
     @State private var manualScrollTrigger: Int = 0
     @FocusState private var isInputFocused: Bool
+
+    init(conversationId: String) {
+        self.conversationId = conversationId
+        self._coordinator = ObservedObject(wrappedValue: AgentCoordinator.coordinator(for: conversationId))
+    }
 
     private var theme: AppThemePalette {
         storage.settings.currentTheme
@@ -907,6 +912,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
 
     func updateUIView(_ uiView: UIView, context: Context) {
         let coord = context.coordinator
+        let wasGenerating = coord.isGenerating
         coord.isGenerating = isGenerating
         coord.autoFollowOutput = autoFollowOutput
         coord.onUserDragUp = onUserDragUp
@@ -919,6 +925,8 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
             coord.attachIfNeeded(from: uiView)
             if triggerChanged {
                 coord.scrollToBottom(force: true)
+            } else if wasGenerating && !isGenerating {
+                coord.scrollToBottom()
             }
         }
     }
@@ -934,6 +942,9 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
         private var contentSizeObservation: NSKeyValueObservation?
         private var lastObservedHeight: CGFloat = 0
         private var scrollSettleWorkItem: DispatchWorkItem?
+        private var displayLink: CADisplayLink?
+        private var userScrollActive = false
+        private var lastDisplayTimestamp: CFTimeInterval = 0
 
         init(
             isGenerating: Bool,
@@ -970,13 +981,67 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
 
         func scrollToBottom(force: Bool = false) {
             guard let sv = attachedScrollView else { return }
-            guard force || (autoFollowOutput && !sv.isTracking && !sv.isDragging && !sv.isDecelerating) else { return }
-            let bottomInset = sv.adjustedContentInset.bottom
-            let topInset = sv.adjustedContentInset.top
-            let targetY = max(-topInset, sv.contentSize.height - sv.bounds.height + bottomInset)
-            if abs(sv.contentOffset.y - targetY) > 0.5 {
-                sv.setContentOffset(CGPoint(x: 0, y: targetY), animated: false)
+            guard force || (autoFollowOutput && !userScrollActive && !sv.isTracking && !sv.isDragging && !sv.isDecelerating) else { return }
+            if force {
+                userScrollActive = false
+                stopFollowing()
+                let targetY = bottomOffset(for: sv)
+                if abs(sv.contentOffset.y - targetY) > 0.5 {
+                    sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: targetY), animated: false)
+                }
+                return
             }
+            startFollowing()
+        }
+
+        private func bottomOffset(for scrollView: UIScrollView) -> CGFloat {
+            max(
+                -scrollView.adjustedContentInset.top,
+                scrollView.contentSize.height - scrollView.bounds.height + scrollView.adjustedContentInset.bottom
+            )
+        }
+
+        private func startFollowing() {
+            guard displayLink == nil else { return }
+            lastDisplayTimestamp = 0
+            let link = CADisplayLink(target: self, selector: #selector(followBottomOnDisplayLink(_:)))
+            link.add(to: .main, forMode: .common)
+            displayLink = link
+        }
+
+        private func stopFollowing() {
+            displayLink?.invalidate()
+            displayLink = nil
+            lastDisplayTimestamp = 0
+        }
+
+        @objc private func followBottomOnDisplayLink(_ link: CADisplayLink) {
+            guard let sv = attachedScrollView else {
+                stopFollowing()
+                return
+            }
+            guard autoFollowOutput, !userScrollActive, !sv.isTracking, !sv.isDragging, !sv.isDecelerating else {
+                stopFollowing()
+                return
+            }
+
+            let targetY = bottomOffset(for: sv)
+            let delta = targetY - sv.contentOffset.y
+            if abs(delta) < 0.7 {
+                if abs(delta) > 0.1 {
+                    sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: targetY), animated: false)
+                }
+                stopFollowing()
+                return
+            }
+
+            let elapsed = lastDisplayTimestamp == 0
+                ? link.duration
+                : min(max(link.timestamp - lastDisplayTimestamp, 1.0 / 120.0), 1.0 / 30.0)
+            lastDisplayTimestamp = link.timestamp
+            let progress = 1 - exp(-elapsed / 0.065)
+            let nextY = sv.contentOffset.y + delta * progress
+            sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: nextY), animated: false)
         }
 
         private func observeContentSize(of scrollView: UIScrollView) {
@@ -988,7 +1053,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
                 let delta = newHeight - self.lastObservedHeight
                 self.lastObservedHeight = newHeight
 
-                if sv.isTracking || sv.isDragging || sv.isDecelerating {
+                if self.userScrollActive || sv.isTracking || sv.isDragging || sv.isDecelerating {
                     let distanceFromBottom = newHeight - sv.contentOffset.y - sv.bounds.height
                     if distanceFromBottom > 48 && self.autoFollowOutput {
                         self.onUserDragUp()
@@ -996,16 +1061,8 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
                     return
                 }
 
-                guard self.autoFollowOutput, abs(delta) > 0.5 else {
-                    return
-                }
-
-                let bottomInset = sv.adjustedContentInset.bottom
-                let topInset = sv.adjustedContentInset.top
-                let targetY = max(-topInset, newHeight - sv.bounds.height + bottomInset)
-                if abs(targetY - sv.contentOffset.y) > 0.5 {
-                    sv.setContentOffset(CGPoint(x: 0, y: targetY), animated: false)
-                }
+                guard self.autoFollowOutput, abs(delta) > 0.5 else { return }
+                self.startFollowing()
             }
         }
 
@@ -1015,6 +1072,8 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
             switch recognizer.state {
             case .began:
                 scrollSettleWorkItem?.cancel()
+                userScrollActive = true
+                stopFollowing()
                 onUserDragUp()
             case .changed:
                 break
@@ -1034,10 +1093,14 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
                     return
                 }
 
+                self.userScrollActive = false
                 self.onScrollSettled()
                 let distanceFromBottom = sv.contentSize.height - sv.contentOffset.y - sv.bounds.height
                 if distanceFromBottom < 20 {
                     self.onReachBottom()
+                    if self.isGenerating {
+                        self.startFollowing()
+                    }
                 }
             }
             scrollSettleWorkItem = item
