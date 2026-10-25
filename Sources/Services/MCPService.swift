@@ -1,7 +1,113 @@
 import Foundation
 
-class MCPService {
+actor MCPService {
     static let shared = MCPService()
+
+    private struct Session {
+        var protocolVersion: String
+        var sessionId: String?
+        var url: URL
+        var token: String
+    }
+
+    private let supportedProtocolVersion = "2024-11-05"
+    private var sessions: [String: Session] = [:]
+
+    private func session(for server: MCPServer, url: URL) async throws -> Session {
+        let token = server.token.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let existing = sessions[server.id], existing.url == url, existing.token == token {
+            return existing
+        }
+        sessions.removeValue(forKey: server.id)
+
+        let requestId = UUID().uuidString
+        let initBody: [String: Any] = [
+            "jsonrpc": "2.0",
+            "id": requestId,
+            "method": "initialize",
+            "params": [
+                "protocolVersion": supportedProtocolVersion,
+                "capabilities": [String: Any](),
+                "clientInfo": [
+                    "name": "OpenMCP-iOS",
+                    "version": "1.0.0"
+                ]
+            ]
+        ]
+        let initRequest = try makeRequest(server: server, url: url, body: initBody, session: nil, timeout: 15)
+        let (initData, initResponse) = try await send(initRequest)
+        let parsedInit = try parseResponse(data: initData, expectedID: requestId)
+        guard let initObject = parsedInit as? [String: Any] else {
+            throw NSError(domain: "MCPService", code: -1, userInfo: [NSLocalizedDescriptionKey: "MCP 初始化响应格式无效"])
+        }
+        if let error = initObject["error"] as? [String: Any], let message = error["message"] as? String {
+            throw NSError(domain: "MCPService", code: -1, userInfo: [NSLocalizedDescriptionKey: message])
+        }
+        guard let result = initObject["result"] as? [String: Any] else {
+            throw NSError(domain: "MCPService", code: -1, userInfo: [NSLocalizedDescriptionKey: "MCP 初始化响应缺少 result"])
+        }
+
+        let newSession = Session(
+            protocolVersion: result["protocolVersion"] as? String ?? supportedProtocolVersion,
+            sessionId: initResponse.value(forHTTPHeaderField: "Mcp-Session-Id"),
+            url: url,
+            token: token
+        )
+        let notification: [String: Any] = [
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized"
+        ]
+        let notificationRequest = try makeRequest(server: server, url: url, body: notification, session: newSession, timeout: 10)
+        _ = try await send(notificationRequest, serverId: server.id)
+        sessions[server.id] = newSession
+        return newSession
+    }
+
+    private func makeRequest(
+        server: MCPServer,
+        url: URL,
+        body: [String: Any],
+        session: Session?,
+        timeout: TimeInterval
+    ) throws -> URLRequest {
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
+        request.setValue("OpenMCP-iOS/1.0", forHTTPHeaderField: "User-Agent")
+        let token = server.token.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !token.isEmpty {
+            request.setValue(token.hasPrefix("Bearer ") ? token : "Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        if let session = session {
+            request.setValue(session.protocolVersion, forHTTPHeaderField: "MCP-Protocol-Version")
+            if let sessionId = session.sessionId {
+                request.setValue(sessionId, forHTTPHeaderField: "Mcp-Session-Id")
+            }
+        }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        request.timeoutInterval = timeout
+        return request
+    }
+
+    private func send(_ request: URLRequest, serverId: String? = nil) async throws -> (Data, HTTPURLResponse) {
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            if httpResponse.statusCode == 404, let serverId = serverId {
+                sessions.removeValue(forKey: serverId)
+            }
+            let responseText = String(data: data, encoding: .utf8) ?? ""
+            throw NSError(
+                domain: "MCPService",
+                code: httpResponse.statusCode,
+                userInfo: [NSLocalizedDescriptionKey: "MCP 请求失败 (HTTP \(httpResponse.statusCode)): \(responseText.prefix(200))"]
+            )
+        }
+        return (data, httpResponse)
+    }
 
     func fetchTools(from server: MCPServer) async throws -> [MCPTool] {
         guard let url = URL(string: server.url.trimmingCharacters(in: .whitespacesAndNewlines)) else {
@@ -19,65 +125,18 @@ class MCPService {
             headers["Authorization"] = token.hasPrefix("Bearer ") ? token : "Bearer \(token)"
         }
 
-        let initBody: [String: Any] = [
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": [
-                "protocolVersion": "2024-11-05",
-                "capabilities": [String: Any](),
-                "clientInfo": [
-                    "name": "OpenMCP-iOS",
-                    "version": "1.0.0"
-                ]
-            ]
-        ]
-
-        var initReq = URLRequest(url: url)
-        initReq.httpMethod = "POST"
-        for (k, v) in headers {
-            initReq.setValue(v, forHTTPHeaderField: k)
-        }
-        initReq.httpBody = try? JSONSerialization.data(withJSONObject: initBody)
-        initReq.timeoutInterval = 15
-
-        _ = try? await URLSession.shared.data(for: initReq)
-
-        let notifBody: [String: Any] = [
-            "jsonrpc": "2.0",
-            "method": "notifications/initialized"
-        ]
-        var notifReq = URLRequest(url: url)
-        notifReq.httpMethod = "POST"
-        for (k, v) in headers {
-            notifReq.setValue(v, forHTTPHeaderField: k)
-        }
-        notifReq.httpBody = try? JSONSerialization.data(withJSONObject: notifBody)
-        notifReq.timeoutInterval = 10
-        _ = try? await URLSession.shared.data(for: notifReq)
-
+        _ = headers
+        let activeSession = try await session(for: server, url: url)
+        let requestId = UUID().uuidString
         let listBody: [String: Any] = [
             "jsonrpc": "2.0",
-            "id": 2,
+            "id": requestId,
             "method": "tools/list",
             "params": [String: Any]()
         ]
-
-        var listReq = URLRequest(url: url)
-        listReq.httpMethod = "POST"
-        for (k, v) in headers {
-            listReq.setValue(v, forHTTPHeaderField: k)
-        }
-        listReq.httpBody = try JSONSerialization.data(withJSONObject: listBody)
-        listReq.timeoutInterval = 25
-
-        let (data, response) = try await URLSession.shared.data(for: listReq)
-        guard let httpRes = response as? HTTPURLResponse, (200...299).contains(httpRes.statusCode) else {
-            let resText = String(data: data, encoding: .utf8) ?? ""
-            throw NSError(domain: "MCPService", code: (response as? HTTPURLResponse)?.statusCode ?? 500, userInfo: [NSLocalizedDescriptionKey: "MCP 请求失败: \(resText.prefix(200))"])
-        }
-
-        let parsedJSON = try parseResponse(data: data)
+        let listRequest = try makeRequest(server: server, url: url, body: listBody, session: activeSession, timeout: 25)
+        let (data, _) = try await send(listRequest, serverId: server.id)
+        let parsedJSON = try parseResponse(data: data, expectedID: requestId)
         guard let dict = parsedJSON as? [String: Any] else {
             throw NSError(domain: "MCPService", code: -1, userInfo: [NSLocalizedDescriptionKey: "MCP 返回数据格式无效"])
         }
@@ -118,49 +177,26 @@ class MCPService {
             throw URLError(.badURL)
         }
 
-        var headers: [String: String] = [
-            "Content-Type": "application/json",
-            "Accept": "application/json, text/event-stream",
-            "User-Agent": "OpenMCP-iOS/1.0"
-        ]
-
-        if !server.token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let token = server.token.trimmingCharacters(in: .whitespacesAndNewlines)
-            headers["Authorization"] = token.hasPrefix("Bearer ") ? token : "Bearer \(token)"
-        }
-
+        let activeSession = try await session(for: server, url: url)
         var parsedArgs: Any = [String: Any]()
         if let argsData = argumentsJSON.data(using: .utf8),
            let obj = try? JSONSerialization.jsonObject(with: argsData) {
             parsedArgs = obj
         }
 
+        let requestId = UUID().uuidString
         let callPayload: [String: Any] = [
             "jsonrpc": "2.0",
-            "id": Int(Date().timeIntervalSince1970),
+            "id": requestId,
             "method": "tools/call",
             "params": [
                 "name": rawName,
                 "arguments": parsedArgs
             ]
         ]
-
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        for (k, v) in headers {
-            req.setValue(v, forHTTPHeaderField: k)
-        }
-        req.httpBody = try JSONSerialization.data(withJSONObject: callPayload)
-        req.timeoutInterval = 60
-
-        let (data, response) = try await URLSession.shared.data(for: req)
-        let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 500
-        guard let httpRes = response as? HTTPURLResponse, (200...299).contains(httpRes.statusCode) else {
-            let errText = String(data: data, encoding: .utf8) ?? ""
-            throw NSError(domain: "MCPService", code: statusCode, userInfo: [NSLocalizedDescriptionKey: "HTTP \(statusCode): \(errText.prefix(200))"])
-        }
-
-        let parsedJSON = try parseResponse(data: data)
+        let request = try makeRequest(server: server, url: url, body: callPayload, session: activeSession, timeout: 60)
+        let (data, _) = try await send(request, serverId: server.id)
+        let parsedJSON = try parseResponse(data: data, expectedID: requestId)
         guard let dict = parsedJSON as? [String: Any] else {
             return String(data: data, encoding: .utf8) ?? "{}"
         }
@@ -173,24 +209,56 @@ class MCPService {
         return extractContent(from: resultObj)
     }
 
-    private func parseResponse(data: Data) throws -> Any {
-        if let json = try? JSONSerialization.jsonObject(with: data) {
+    private func parseResponse(data: Data, expectedID: String? = nil) throws -> Any {
+        if let json = try? JSONSerialization.jsonObject(with: data), responseMatches(json, expectedID: expectedID) {
             return json
         }
-        if let text = String(data: data, encoding: .utf8) {
-            let lines = text.components(separatedBy: "\n")
-            for line in lines {
-                let trimmed = line.trimmingCharacters(in: .whitespaces)
-                if trimmed.hasPrefix("data:") {
-                    let payload = String(trimmed.dropFirst(5)).trimmingCharacters(in: .whitespaces)
-                    if let payloadData = payload.data(using: .utf8),
-                       let obj = try? JSONSerialization.jsonObject(with: payloadData) {
-                        return obj
-                    }
+        guard let text = String(data: data, encoding: .utf8) else {
+            throw NSError(domain: "MCPService", code: -1, userInfo: [NSLocalizedDescriptionKey: "无法解析 MCP 响应"])
+        }
+
+        var dataLines: [String] = []
+        var matchedResponse: Any? = nil
+        func flushEvent() {
+            guard !dataLines.isEmpty else { return }
+            let payload = dataLines.joined(separator: "\n")
+            dataLines.removeAll(keepingCapacity: true)
+            guard payload != "[DONE]",
+                  let payloadData = payload.data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: payloadData),
+                  responseMatches(object, expectedID: expectedID) else { return }
+            matchedResponse = object
+        }
+
+        for rawLine in text.components(separatedBy: .newlines) {
+            let line = rawLine.trimmingCharacters(in: CharacterSet(charactersIn: "\r"))
+            if line.isEmpty {
+                flushEvent()
+                continue
+            }
+            if line.hasPrefix(":" ) { continue }
+            if line.hasPrefix("data:") {
+                var value = String(line.dropFirst(5))
+                if value.first == " " {
+                    value.removeFirst()
                 }
+                dataLines.append(value)
             }
         }
-        throw NSError(domain: "MCPService", code: -1, userInfo: [NSLocalizedDescriptionKey: "无法解析 MCP 响应"])
+        flushEvent()
+
+        if let matchedResponse = matchedResponse {
+            return matchedResponse
+        }
+        let description = expectedID == nil ? "无法解析 MCP 响应" : "未找到与请求 ID 匹配的 MCP 响应"
+        throw NSError(domain: "MCPService", code: -1, userInfo: [NSLocalizedDescriptionKey: description])
+    }
+
+    private func responseMatches(_ object: Any, expectedID: String?) -> Bool {
+        guard let expectedID = expectedID else { return true }
+        guard let dictionary = object as? [String: Any],
+              let responseID = dictionary["id"] as? String else { return false }
+        return responseID == expectedID
     }
 
     private func extractContent(from object: Any) -> String {
