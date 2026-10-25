@@ -16,6 +16,7 @@ struct MessageDisplayTurn: Identifiable, Equatable {
 struct ReasoningFoldCardView: View {
     let reasoningText: String
     let isStreamingReasoning: Bool
+    let isScrollInteracting: Bool
     let startDate: Date
     let theme: AppThemePalette
     var width: CGFloat
@@ -40,8 +41,8 @@ struct ReasoningFoldCardView: View {
                     .foregroundColor(theme.accent)
 
                 if isStreamingReasoning {
-                    TimelineView(.periodic(from: .now, by: 0.1)) { context in
-                        let elapsed = max(0, context.date.timeIntervalSince(startDate))
+                    if isScrollInteracting {
+                        let elapsed = max(0, Date().timeIntervalSince(startDate))
                         HStack(spacing: 5) {
                             Text("深度思考中")
                                 .font(.system(size: 12, weight: .semibold))
@@ -49,6 +50,18 @@ struct ReasoningFoldCardView: View {
                             Text(ThinkingStatusView.formatElapsed(elapsed))
                                 .font(.system(size: 11.5, weight: .medium, design: .rounded).monospacedDigit())
                                 .foregroundColor(theme.secondaryText)
+                        }
+                    } else {
+                        TimelineView(.periodic(from: .now, by: 0.1)) { context in
+                            let elapsed = max(0, context.date.timeIntervalSince(startDate))
+                            HStack(spacing: 5) {
+                                Text("深度思考中")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundColor(theme.primaryText)
+                                Text(ThinkingStatusView.formatElapsed(elapsed))
+                                    .font(.system(size: 11.5, weight: .medium, design: .rounded).monospacedDigit())
+                                    .foregroundColor(theme.secondaryText)
+                            }
                         }
                     }
                 } else {
@@ -301,6 +314,7 @@ struct MessageBubbleView: View {
         let currentReasoning = effectiveReasoningText
         let isPureThinking = isActiveGeneratingTurn && currentText.isEmpty && currentReasoning.isEmpty && turn.toolCalls.isEmpty
         let innerContentWidth = max(180, bubbleColumnWidth - 24)
+        let scrollInteracting = streamingState.isScrollInteracting
 
         return HStack(alignment: .top, spacing: 6) {
             compactAvatar(isUser: false)
@@ -318,7 +332,8 @@ struct MessageBubbleView: View {
                             ThinkingStatusView(
                                 statusText: statusText,
                                 startDate: thinkingStartTime ?? turn.createdAt,
-                                theme: theme
+                                theme: theme,
+                                isPaused: scrollInteracting
                             )
                             .padding(.horizontal, 13)
                             .padding(.vertical, 9)
@@ -350,6 +365,7 @@ struct MessageBubbleView: View {
                                 ReasoningFoldCardView(
                                     reasoningText: currentReasoning,
                                     isStreamingReasoning: isActiveGeneratingTurn && currentText.isEmpty,
+                                    isScrollInteracting: scrollInteracting,
                                     startDate: thinkingStartTime ?? turn.createdAt,
                                     theme: theme,
                                     width: innerContentWidth
@@ -361,14 +377,16 @@ struct MessageBubbleView: View {
                                     content: currentText,
                                     theme: theme,
                                     contentWidth: innerContentWidth,
-                                    isStreaming: isActiveGeneratingTurn
+                                    isStreaming: isActiveGeneratingTurn,
+                                    isScrollInteracting: scrollInteracting
                                 )
                                 .frame(width: innerContentWidth, alignment: .leading)
                             } else if isActiveGeneratingTurn && currentReasoning.isEmpty {
                                 ThinkingStatusView(
                                     statusText: statusText,
                                     startDate: thinkingStartTime ?? turn.createdAt,
-                                    theme: theme
+                                    theme: theme,
+                                    isPaused: scrollInteracting
                                 )
                                 .padding(.top, 2)
                             }

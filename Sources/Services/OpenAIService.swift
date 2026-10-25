@@ -66,9 +66,11 @@ class OpenAIService {
         settings: OpenAISettings,
         messages: [ChatMessage],
         tools: [[String: Any]]? = nil,
+        conversationId: String? = nil,
         onPartialUpdate: (@MainActor (String) -> Void)? = nil,
         onReasoningUpdate: (@MainActor (String) -> Void)? = nil
     ) async throws -> (content: String?, reasoning: String?, toolCalls: [ToolCallItem]?) {
+        let startTime = CFAbsoluteTimeGetCurrent()
         var base = settings.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         if base.hasSuffix("/") {
             base = String(base.dropLast())
@@ -91,6 +93,21 @@ class OpenAIService {
             payload["tools"] = tools
         }
 
+        let payloadData = try JSONSerialization.data(withJSONObject: payload)
+        let profileName = settings.activeProfile?.name ?? "默认配置"
+        let toolCount = tools?.count ?? 0
+
+        await MainActor.run {
+            AppLogManager.shared.log(
+                category: .aiRequest,
+                level: .info,
+                title: "发起 AI 请求 [\(settings.modelName)]",
+                summary: "配置: \(profileName) · 消息数: \(openAIMessages.count) · 工具数: \(toolCount) · 请求体: \(payloadData.count) B",
+                details: "Endpoint: \(fullEndpoint)\nModel: \(settings.modelName)\nTemperature: \(settings.temperature)\nMessages Count: \(openAIMessages.count)\nTools Enabled: \(toolCount)",
+                conversationId: conversationId
+            )
+        }
+
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -100,15 +117,35 @@ class OpenAIService {
             let key = settings.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
             req.setValue(key.hasPrefix("Bearer ") ? key : "Bearer \(key)", forHTTPHeaderField: "Authorization")
         }
-        req.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        req.httpBody = payloadData
         req.timeoutInterval = 300
 
-        let (bytes, response) = try await URLSession.shared.bytes(for: req)
+        let bytes: URLSession.AsyncBytes
+        let response: URLResponse
+        do {
+            (bytes, response) = try await URLSession.shared.bytes(for: req)
+        } catch {
+            let nsErr = error as NSError
+            await MainActor.run {
+                AppLogManager.shared.log(
+                    category: .error,
+                    level: .error,
+                    title: "AI 请求连接失败 [\(settings.modelName)]",
+                    summary: "\(nsErr.localizedDescription) (Code: \(nsErr.code))",
+                    details: "Endpoint: \(fullEndpoint)\nDomain: \(nsErr.domain)\nCode: \(nsErr.code)\nDescription: \(nsErr.localizedDescription)",
+                    conversationId: conversationId
+                )
+            }
+            throw error
+        }
+
         try Task.checkCancellation()
 
         guard let httpRes = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
         }
+
+        let contentType = (httpRes.value(forHTTPHeaderField: "Content-Type") ?? "").lowercased()
 
         guard (200...299).contains(httpRes.statusCode) else {
             var errorData = Data()
@@ -118,6 +155,16 @@ class OpenAIService {
                 if errorData.count > 8192 { break }
             }
             let errString = String(data: errorData, encoding: .utf8) ?? ""
+            await MainActor.run {
+                AppLogManager.shared.log(
+                    category: .error,
+                    level: .error,
+                    title: "上游返回 HTTP \(httpRes.statusCode) [\(settings.modelName)]",
+                    summary: "状态码: \(httpRes.statusCode) · 响应前 200 字符: \(errString.prefix(200))",
+                    details: "Endpoint: \(fullEndpoint)\nHTTP Status: \(httpRes.statusCode)\nContent-Type: \(contentType)\nBody:\n\(errString)",
+                    conversationId: conversationId
+                )
+            }
             if let json = try? JSONSerialization.jsonObject(with: errorData) as? [String: Any],
                let errObj = json["error"] as? [String: Any],
                let msg = errObj["message"] as? String {
@@ -126,7 +173,6 @@ class OpenAIService {
             throw NSError(domain: "OpenAIService", code: httpRes.statusCode, userInfo: [NSLocalizedDescriptionKey: "API 响应错误 (\(httpRes.statusCode)): \(errString.prefix(200))"])
         }
 
-        let contentType = (httpRes.value(forHTTPHeaderField: "Content-Type") ?? "").lowercased()
         if !contentType.contains("event-stream") && contentType.contains("application/json") {
             var rawData = Data()
             for try await byte in bytes {
@@ -135,11 +181,23 @@ class OpenAIService {
             }
             if let json = try? JSONSerialization.jsonObject(with: rawData) as? [String: Any] {
                 let parsed = try parseNonStreamingJSON(json)
+                let finishReason = ((json["choices"] as? [[String: Any]])?.first?["finish_reason"] as? String) ?? "non_stream_json"
                 if let r = parsed.reasoning, !r.isEmpty {
                     await onReasoningUpdate?(r)
                 }
                 if let text = parsed.content, !text.isEmpty {
                     await onPartialUpdate?(text)
+                }
+                let elapsed = String(format: "%.2fs", CFAbsoluteTimeGetCurrent() - startTime)
+                await MainActor.run {
+                    AppLogManager.shared.log(
+                        category: .aiStop,
+                        level: finishReason == "length" ? .warning : .info,
+                        title: "非流式 JSON 响应完成 [\(settings.modelName)]",
+                        summary: "耗时: \(elapsed) · finish_reason: \(finishReason) · 正文: \(parsed.content?.count ?? 0) 字 · 思考: \(parsed.reasoning?.count ?? 0) 字",
+                        details: "HTTP Status: \(httpRes.statusCode)\nContent-Type: \(contentType)\nFinish Reason: \(finishReason)\nRaw Bytes: \(rawData.count)",
+                        conversationId: conversationId
+                    )
                 }
                 return parsed
             }
@@ -155,6 +213,11 @@ class OpenAIService {
         var toolCallsByIndex: [Int: PartialToolCall] = [:]
         var nonSSELines: [String] = []
         var receivedSSEEvent = false
+        var receivedDoneMarker = false
+        var sseChunkCount = 0
+        var lastFinishReason: String? = nil
+        var usageSummary: String = ""
+        var lastRawDataLine: String = ""
         var lastYieldTime = CFAbsoluteTimeGetCurrent()
         var lastReasoningYieldTime = CFAbsoluteTimeGetCurrent()
         var lastFlushedLength = 0
@@ -178,8 +241,12 @@ class OpenAIService {
             receivedSSEEvent = true
             let dataStr = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)
             if dataStr == "[DONE]" {
+                receivedDoneMarker = true
                 return true
             }
+            lastRawDataLine = String(dataStr.prefix(500))
+            sseChunkCount += 1
+
             guard let data = dataStr.data(using: .utf8),
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 return false
@@ -187,7 +254,24 @@ class OpenAIService {
 
             if let errObj = json["error"] as? [String: Any],
                let msg = errObj["message"] as? String {
+                await MainActor.run {
+                    AppLogManager.shared.log(
+                        category: .error,
+                        level: .error,
+                        title: "SSE 流内返回错误 [\(settings.modelName)]",
+                        summary: msg,
+                        details: "SSE Frame #\(sseChunkCount)\nRaw Data: \(dataStr)",
+                        conversationId: conversationId
+                    )
+                }
                 throw NSError(domain: "OpenAIService", code: -1, userInfo: [NSLocalizedDescriptionKey: msg])
+            }
+
+            if let usage = json["usage"] as? [String: Any] {
+                let p = usage["prompt_tokens"] ?? usage["input_tokens"] ?? 0
+                let c = usage["completion_tokens"] ?? usage["output_tokens"] ?? 0
+                let t = usage["total_tokens"] ?? 0
+                usageSummary = "prompt: \(p), completion: \(c), total: \(t)"
             }
 
             let eventType = json["type"] as? String ?? ""
@@ -196,6 +280,12 @@ class OpenAIService {
 
             if let choices = json["choices"] as? [[String: Any]],
                let firstChoice = choices.first {
+                if let fr = firstChoice["finish_reason"] as? String, !fr.isEmpty {
+                    lastFinishReason = fr
+                }
+                if let stopReason = firstChoice["stop_reason"] as? String, !stopReason.isEmpty, lastFinishReason == nil {
+                    lastFinishReason = stopReason
+                }
                 if let delta = firstChoice["delta"] as? [String: Any] {
                     if let c = delta["content"] as? String, !c.isEmpty {
                         contentPiece = c
@@ -310,32 +400,45 @@ class OpenAIService {
                         }
                         toolCallsByIndex[idx] = entry
                     }
-                case "response.completed", "response.done":
-                    if let respObj = json["response"] as? [String: Any],
-                       let outputs = respObj["output"] as? [[String: Any]] {
-                        for item in outputs {
-                            let itemType = item["type"] as? String ?? ""
-                            if itemType == "message", accumulatedContent.isEmpty,
-                               let contentArr = item["content"] as? [[String: Any]] {
-                                let texts = contentArr.compactMap { $0["text"] as? String }.joined()
-                                if !texts.isEmpty {
-                                    accumulatedContent = texts
-                                    lastFlushedLength = accumulatedContent.count
-                                    await onPartialUpdate?(accumulatedContent)
-                                }
-                            } else if itemType == "reasoning", accumulatedReasoning.isEmpty {
-                                var rParts: [String] = []
-                                if let summaries = item["summary"] as? [[String: Any]] {
-                                    rParts.append(contentsOf: summaries.compactMap { $0["text"] as? String })
-                                }
-                                if let contents = item["content"] as? [[String: Any]] {
-                                    rParts.append(contentsOf: contents.compactMap { $0["text"] as? String })
-                                }
-                                let joined = rParts.joined(separator: "\n")
-                                if !joined.isEmpty {
-                                    accumulatedReasoning = joined
-                                    lastFlushedReasoningLength = accumulatedReasoning.count
-                                    await onReasoningUpdate?(accumulatedReasoning)
+                case "response.completed", "response.done", "response.incomplete":
+                    if eventType == "response.incomplete" {
+                        lastFinishReason = "incomplete"
+                    } else if lastFinishReason == nil {
+                        lastFinishReason = "completed"
+                    }
+                    if let respObj = json["response"] as? [String: Any] {
+                        if let status = respObj["status"] as? String {
+                            lastFinishReason = status
+                        }
+                        if let incompleteDetails = respObj["incomplete_details"] as? [String: Any],
+                           let reason = incompleteDetails["reason"] as? String {
+                            lastFinishReason = "incomplete(\(reason))"
+                        }
+                        if let outputs = respObj["output"] as? [[String: Any]] {
+                            for item in outputs {
+                                let itemType = item["type"] as? String ?? ""
+                                if itemType == "message", accumulatedContent.isEmpty,
+                                   let contentArr = item["content"] as? [[String: Any]] {
+                                    let texts = contentArr.compactMap { $0["text"] as? String }.joined()
+                                    if !texts.isEmpty {
+                                        accumulatedContent = texts
+                                        lastFlushedLength = accumulatedContent.count
+                                        await onPartialUpdate?(accumulatedContent)
+                                    }
+                                } else if itemType == "reasoning", accumulatedReasoning.isEmpty {
+                                    var rParts: [String] = []
+                                    if let summaries = item["summary"] as? [[String: Any]] {
+                                        rParts.append(contentsOf: summaries.compactMap { $0["text"] as? String })
+                                    }
+                                    if let contents = item["content"] as? [[String: Any]] {
+                                        rParts.append(contentsOf: contents.compactMap { $0["text"] as? String })
+                                    }
+                                    let joined = rParts.joined(separator: "\n")
+                                    if !joined.isEmpty {
+                                        accumulatedReasoning = joined
+                                        lastFlushedReasoningLength = accumulatedReasoning.count
+                                        await onReasoningUpdate?(accumulatedReasoning)
+                                    }
                                 }
                             }
                         }
@@ -372,28 +475,45 @@ class OpenAIService {
             return false
         }
 
-        for try await byte in bytes {
-            try Task.checkCancellation()
-            if byte == 0x0A {
+        do {
+            for try await byte in bytes {
+                try Task.checkCancellation()
+                if byte == 0x0A {
+                    if lineBuffer.last == 0x0D {
+                        lineBuffer.removeLast()
+                    }
+                    let rawLine = String(decoding: lineBuffer, as: UTF8.self)
+                    lineBuffer.removeAll(keepingCapacity: true)
+                    let shouldBreak = try await processLine(rawLine)
+                    if shouldBreak { break }
+                } else {
+                    lineBuffer.append(byte)
+                }
+            }
+
+            if !lineBuffer.isEmpty {
                 if lineBuffer.last == 0x0D {
                     lineBuffer.removeLast()
                 }
                 let rawLine = String(decoding: lineBuffer, as: UTF8.self)
-                lineBuffer.removeAll(keepingCapacity: true)
-                let shouldBreak = try await processLine(rawLine)
-                if shouldBreak { break }
-            } else {
-                lineBuffer.append(byte)
+                lineBuffer.removeAll()
+                _ = try await processLine(rawLine)
             }
-        }
-
-        if !lineBuffer.isEmpty {
-            if lineBuffer.last == 0x0D {
-                lineBuffer.removeLast()
+        } catch {
+            if !(error is CancellationError) && (error as NSError).code != NSURLErrorCancelled {
+                let elapsed = String(format: "%.2fs", CFAbsoluteTimeGetCurrent() - startTime)
+                await MainActor.run {
+                    AppLogManager.shared.log(
+                        category: .aiStop,
+                        level: .error,
+                        title: "流式读取中途异常断开 [\(settings.modelName)]",
+                        summary: "耗时: \(elapsed) · 已收帧: \(sseChunkCount) · 已生成: \(accumulatedContent.count) 字 · 错误: \(error.localizedDescription)",
+                        details: "Error: \(error.localizedDescription)\nReceived [DONE]: \(receivedDoneMarker)\nLast Finish Reason: \(lastFinishReason ?? "nil")\nContent Chars: \(accumulatedContent.count)\nReasoning Chars: \(accumulatedReasoning.count)\nLast Raw SSE Line:\n\(lastRawDataLine)",
+                        conversationId: conversationId
+                    )
+                }
             }
-            let rawLine = String(decoding: lineBuffer, as: UTF8.self)
-            lineBuffer.removeAll()
-            _ = try await processLine(rawLine)
+            throw error
         }
 
         try Task.checkCancellation()
@@ -434,6 +554,30 @@ class OpenAIService {
             if !list.isEmpty {
                 finalToolCalls = list
             }
+        }
+
+        let elapsedStr = String(format: "%.2fs", CFAbsoluteTimeGetCurrent() - startTime)
+        let fr = lastFinishReason ?? (receivedDoneMarker ? "stop(无显式finish_reason)" : "未收到finish_reason且未收到[DONE]")
+        let isAbnormalTruncation = (lastFinishReason == "length" || lastFinishReason == "max_tokens" || (lastFinishReason?.contains("incomplete") == true) || (!receivedDoneMarker && lastFinishReason == nil))
+        let diagnosisNote: String
+        if lastFinishReason == "length" || lastFinishReason == "max_tokens" || (lastFinishReason?.contains("incomplete") == true) {
+            diagnosisNote = "⚠️ 诊断结论：上游接口因达到最大输出 Token 限制 (finish_reason=\(fr)) 主动截断了输出。"
+        } else if !receivedDoneMarker && lastFinishReason == nil {
+            diagnosisNote = "⚠️ 诊断结论：上游 HTTP 流在未发送 [DONE] 且未发送 finish_reason 的情况下提前关闭了连接（通常是反代超时或上游流中断）。"
+        } else {
+            diagnosisNote = "✅ 诊断结论：上游正常结束流式传输 (finish_reason=\(fr), [DONE]=\(receivedDoneMarker))。"
+        }
+
+        let tailPreview = String(accumulatedContent.suffix(160))
+        await MainActor.run {
+            AppLogManager.shared.log(
+                category: .aiStop,
+                level: isAbnormalTruncation ? .warning : .info,
+                title: isAbnormalTruncation ? "流式输出疑似截断 [\(settings.modelName)]" : "流式输出完成 [\(settings.modelName)]",
+                summary: "耗时: \(elapsedStr) · 结束原因: \(fr) · [DONE]: \(receivedDoneMarker ? "是" : "否") · 正文: \(accumulatedContent.count) 字 · 帧数: \(sseChunkCount)",
+                details: "\(diagnosisNote)\nModel: \(settings.modelName)\nSSE Frames: \(sseChunkCount)\nFinish Reason: \(fr)\nReceived [DONE]: \(receivedDoneMarker)\nUsage: \(usageSummary.isEmpty ? "未返回" : usageSummary)\nContent Length: \(accumulatedContent.count) chars\nReasoning Length: \(accumulatedReasoning.count) chars\nTool Calls: \(finalToolCalls?.count ?? 0)\nContent Tail (最后160字):\n\(tailPreview)\n\nLast SSE Data Frame:\n\(lastRawDataLine)",
+                conversationId: conversationId
+            )
         }
 
         let trimmedReasoning = accumulatedReasoning.trimmingCharacters(in: .whitespacesAndNewlines)

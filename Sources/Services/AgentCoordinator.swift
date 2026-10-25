@@ -7,6 +7,7 @@ final class StreamingTurnState: ObservableObject {
     @Published var activeMessageId: String? = nil
     @Published var displayedText: String = ""
     @Published var displayedReasoning: String = ""
+    @Published var isScrollInteracting: Bool = false
 
     private var targetText: String = ""
     private var targetReasoning: String = ""
@@ -20,12 +21,20 @@ final class StreamingTurnState: ObservableObject {
         targetReasoning = ""
         isStreamComplete = false
         isDisplayPaused = false
+        isScrollInteracting = false
         activeMessageId = messageId
         displayedText = ""
         displayedReasoning = ""
     }
 
     func setDisplayPaused(_ paused: Bool) {
+        if isScrollInteracting != paused {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                isScrollInteracting = paused
+            }
+        }
         guard isDisplayPaused != paused else { return }
         isDisplayPaused = paused
         if paused {
@@ -174,6 +183,7 @@ final class StreamingTurnState: ObservableObject {
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) {
+            isScrollInteracting = false
             activeMessageId = nil
             displayedText = ""
             displayedReasoning = ""
@@ -279,9 +289,18 @@ class AgentCoordinator: ObservableObject {
         generationTask = nil
 
         let convId = activeConversationId
+        let partialLength = streamingState.displayedText.count
         let idsToDelete = currentRunGeneratedMessageIds
         currentRunGeneratedMessageIds.removeAll()
         streamingState.reset()
+
+        AppLogManager.shared.log(
+            category: .aiStop,
+            level: .info,
+            title: "用户手动停止输出",
+            summary: "已清理本轮生成消息 (\(idsToDelete.count) 条)，停止前已显示 \(partialLength) 字",
+            conversationId: convId
+        )
 
         withAnimation(.spring(response: 0.26, dampingFraction: 0.86)) {
             if let convId = convId, !idsToDelete.isEmpty {
@@ -385,6 +404,7 @@ class AgentCoordinator: ObservableObject {
         servers: [MCPServer]
     ) async {
         guard var conversation = DataStorage.shared.conversations.first(where: { $0.id == conversationId }) else { return }
+        let effectiveSettings = settings.resolvedSettings(for: conversation)
 
         isCancelledByUser = false
         activeConversationId = conversationId
@@ -436,9 +456,10 @@ class AgentCoordinator: ObservableObject {
 
             do {
                 let (content, reasoning, toolCalls) = try await OpenAIService.shared.streamChatCompletion(
-                    settings: settings,
+                    settings: effectiveSettings,
                     messages: contextMessages,
                     tools: openAITools.isEmpty ? nil : openAITools,
+                    conversationId: conversationId,
                     onPartialUpdate: { [weak self] partialText in
                         guard let self = self, !self.isCancelledByUser, !Task.isCancelled else { return }
                         self.streamingState.pushPartialText(partialText)
@@ -477,6 +498,7 @@ class AgentCoordinator: ObservableObject {
 
                         var toolOutput = ""
                         if let mapping = toolServerMap[call.name] {
+                            let callStart = CFAbsoluteTimeGetCurrent()
                             do {
                                 toolOutput = try await MCPService.shared.callTool(
                                     server: mapping.server,
@@ -484,6 +506,15 @@ class AgentCoordinator: ObservableObject {
                                     argumentsJSON: call.arguments
                                 )
                                 executingCalls[i].result = toolOutput
+                                let callElapsed = String(format: "%.2fs", CFAbsoluteTimeGetCurrent() - callStart)
+                                AppLogManager.shared.log(
+                                    category: .mcpTool,
+                                    level: .info,
+                                    title: "MCP 工具执行成功 [\(mapping.originalToolName)]",
+                                    summary: "服务: \(mapping.server.name) · 耗时: \(callElapsed) · 返回长度: \(toolOutput.count) 字",
+                                    details: "Tool: \(call.name) (\(mapping.originalToolName))\nServer: \(mapping.server.name)\nArguments:\n\(call.arguments)\n\nOutput Preview (前500字):\n\(toolOutput.prefix(500))",
+                                    conversationId: conversationId
+                                )
                             } catch {
                                 if isCancelledByUser || Task.isCancelled || error is CancellationError {
                                     return
@@ -492,6 +523,14 @@ class AgentCoordinator: ObservableObject {
                                 toolOutput = errStr
                                 executingCalls[i].error = error.localizedDescription
                                 executingCalls[i].result = errStr
+                                AppLogManager.shared.log(
+                                    category: .mcpTool,
+                                    level: .error,
+                                    title: "MCP 工具执行失败 [\(mapping.originalToolName)]",
+                                    summary: error.localizedDescription,
+                                    details: "Tool: \(call.name)\nArguments:\n\(call.arguments)\nError:\n\(error.localizedDescription)",
+                                    conversationId: conversationId
+                                )
                             }
                         } else {
                             toolOutput = "Error: 未找到对应的 MCP 工具映射 (\(call.name))"

@@ -17,12 +17,14 @@ class DataStorage: ObservableObject {
     private let conversationsKey = "OpenMCP_Conversations"
 
     private init() {
+        let loadedSettings: OpenAISettings
         if let data = UserDefaults.standard.data(forKey: settingsKey),
            let decoded = try? JSONDecoder().decode(OpenAISettings.self, from: data) {
-            self.settings = decoded
+            loadedSettings = decoded
         } else {
-            self.settings = OpenAISettings()
+            loadedSettings = OpenAISettings()
         }
+        self.settings = loadedSettings
 
         if let data = UserDefaults.standard.data(forKey: serversKey),
            let decoded = try? JSONDecoder().decode([MCPServer].self, from: data) {
@@ -35,7 +37,14 @@ class DataStorage: ObservableObject {
            let decoded = try? JSONDecoder().decode([Conversation].self, from: data) {
             self.conversations = decoded
         } else {
-            self.conversations = [Conversation(title: "新对话", messages: [])]
+            self.conversations = [
+                Conversation(
+                    title: "新对话",
+                    messages: [],
+                    selectedProfileId: loadedSettings.activeProfileId,
+                    selectedModelName: loadedSettings.modelName
+                )
+            ]
         }
     }
 
@@ -68,9 +77,21 @@ class DataStorage: ObservableObject {
         }
     }
 
+    func updateConversationModel(conversationId: String, profileId: String, modelName: String) {
+        guard let idx = conversations.firstIndex(where: { $0.id == conversationId }) else { return }
+        conversations[idx].selectedProfileId = profileId
+        conversations[idx].selectedModelName = modelName
+        saveConversations()
+    }
+
     @discardableResult
     func addConversation(title: String = "新对话") -> Conversation {
-        let conv = Conversation(title: title, messages: [])
+        let conv = Conversation(
+            title: title,
+            messages: [],
+            selectedProfileId: settings.activeProfileId,
+            selectedModelName: settings.modelName
+        )
         conversations.insert(conv, at: 0)
         saveConversations()
         return conv
@@ -83,7 +104,14 @@ class DataStorage: ObservableObject {
     func deleteConversation(id: String) {
         conversations.removeAll { $0.id == id }
         if conversations.isEmpty {
-            conversations.append(Conversation(title: "新对话", messages: []))
+            conversations.append(
+                Conversation(
+                    title: "新对话",
+                    messages: [],
+                    selectedProfileId: settings.activeProfileId,
+                    selectedModelName: settings.modelName
+                )
+            )
         }
         saveConversations()
     }

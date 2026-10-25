@@ -201,6 +201,38 @@ struct OpenAISettings: Codable, Equatable {
         return entries
     }
 
+    func resolvedSettings(for conversation: Conversation?) -> OpenAISettings {
+        guard let conv = conversation else { return self }
+        var copy = self
+
+        if let pid = conv.selectedProfileId,
+           let profile = providerProfiles.first(where: { $0.id == pid }) {
+            copy.activeProfileId = profile.id
+            copy.baseURL = profile.baseURL
+            copy.apiKey = profile.apiKey
+            copy.availableModels = profile.availableModels
+            copy.enabledModels = profile.enabledModels
+            if let m = conv.selectedModelName, !m.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                copy.modelName = m
+            } else if let first = profile.enabledModels.first {
+                copy.modelName = first
+            }
+            return copy
+        }
+
+        if let m = conv.selectedModelName, !m.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if let matchedProfile = providerProfiles.first(where: { $0.enabledModels.contains(m) || $0.availableModels.contains(m) }) {
+                copy.activeProfileId = matchedProfile.id
+                copy.baseURL = matchedProfile.baseURL
+                copy.apiKey = matchedProfile.apiKey
+                copy.availableModels = matchedProfile.availableModels
+                copy.enabledModels = matchedProfile.enabledModels
+            }
+            copy.modelName = m
+        }
+        return copy
+    }
+
     mutating func selectProfile(id: String) {
         guard let profile = providerProfiles.first(where: { $0.id == id }) else { return }
         activeProfileId = profile.id
