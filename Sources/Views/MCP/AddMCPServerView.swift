@@ -10,10 +10,19 @@ struct AddMCPServerView: View {
     @State private var name: String = ""
     @State private var url: String = ""
     @State private var token: String = ""
+    @State private var showToken: Bool = false
     @State private var isTesting: Bool = false
     @State private var testResult: String? = nil
     @State private var isSuccess: Bool = false
     @State private var fetchedTools: [MCPTool] = []
+
+    private enum ServerField: Hashable {
+        case name
+        case url
+        case token
+    }
+
+    @FocusState private var focusedField: ServerField?
 
     private var theme: AppThemePalette {
         storage.settings.currentTheme
@@ -24,51 +33,152 @@ struct AddMCPServerView: View {
             ZStack {
                 theme.background
                     .ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        dismissKeyboard()
+                    }
 
                 ScrollView {
                     VStack(spacing: 16) {
                         VStack(alignment: .leading, spacing: 14) {
-                            Text("服务连接配置")
-                                .font(.system(size: 14, weight: .bold))
-                                .foregroundColor(theme.primaryText)
+                            HStack {
+                                Text("服务连接配置")
+                                    .font(.system(size: 14, weight: .bold))
+                                    .foregroundColor(theme.primaryText)
+                                Spacer()
+                                if focusedField != nil {
+                                    Button(action: dismissKeyboard) {
+                                        HStack(spacing: 4) {
+                                            Image(systemName: "keyboard.chevron.compact.down")
+                                            Text("收起")
+                                        }
+                                        .font(.system(size: 11.5, weight: .semibold))
+                                        .foregroundColor(theme.accent)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 3.5)
+                                        .background(theme.accent.opacity(0.12))
+                                        .clipShape(Capsule())
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
 
                             VStack(alignment: .leading, spacing: 6) {
                                 Text("服务名称")
                                     .font(.system(size: 12, weight: .medium))
                                     .foregroundColor(theme.secondaryText)
-                                TextField("例如 GitHub、Tavily、Cloudflare", text: $name)
-                                    .font(.system(size: 15))
-                                    .foregroundColor(theme.primaryText)
-                                    .padding(12)
-                                    .background(theme.elevatedBackground)
-                                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                                HStack(spacing: 8) {
+                                    TextField("例如 GitHub、Tavily、Cloudflare", text: $name)
+                                        .focused($focusedField, equals: .name)
+                                        .submitLabel(.next)
+                                        .onSubmit { focusedField = .url }
+                                        .font(.system(size: 15))
+                                        .foregroundColor(theme.primaryText)
+
+                                    if !name.isEmpty && focusedField == .name {
+                                        Button(action: { name = "" }) {
+                                            Image(systemName: "xmark.circle.fill")
+                                                .foregroundColor(theme.mutedText)
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+                                .padding(12)
+                                .background(theme.elevatedBackground)
+                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .stroke(focusedField == .name ? theme.accent : theme.border.opacity(0.6), lineWidth: 1)
+                                )
+                                .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                .onTapGesture { focusedField = .name }
                             }
 
                             VStack(alignment: .leading, spacing: 6) {
                                 Text("接口地址 (Endpoint URL)")
                                     .font(.system(size: 12, weight: .medium))
                                     .foregroundColor(theme.secondaryText)
-                                TextField("https://example.com/mcp", text: $url)
-                                    .autocapitalization(.none)
-                                    .keyboardType(.URL)
-                                    .font(.system(size: 14, design: .monospaced))
-                                    .foregroundColor(theme.primaryText)
-                                    .padding(12)
-                                    .background(theme.elevatedBackground)
-                                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                                HStack(spacing: 8) {
+                                    TextField("https://example.com/mcp", text: $url)
+                                        .focused($focusedField, equals: .url)
+                                        .textInputAutocapitalization(.never)
+                                        .disableAutocorrection(true)
+                                        .keyboardType(.URL)
+                                        .submitLabel(.next)
+                                        .onSubmit { focusedField = .token }
+                                        .font(.system(size: 14, design: .monospaced))
+                                        .foregroundColor(theme.primaryText)
+
+                                    if !url.isEmpty && focusedField == .url {
+                                        Button(action: { url = "" }) {
+                                            Image(systemName: "xmark.circle.fill")
+                                                .foregroundColor(theme.mutedText)
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+                                .padding(12)
+                                .background(theme.elevatedBackground)
+                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .stroke(focusedField == .url ? theme.accent : theme.border.opacity(0.6), lineWidth: 1)
+                                )
+                                .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                .onTapGesture { focusedField = .url }
                             }
 
                             VStack(alignment: .leading, spacing: 6) {
                                 Text("认证令牌 (Bearer Token，可选)")
                                     .font(.system(size: 12, weight: .medium))
                                     .foregroundColor(theme.secondaryText)
-                                SecureField("选填鉴权密钥", text: $token)
-                                    .autocapitalization(.none)
+
+                                HStack(spacing: 8) {
+                                    Group {
+                                        if showToken {
+                                            TextField("选填鉴权密钥", text: $token)
+                                                .textInputAutocapitalization(.never)
+                                                .disableAutocorrection(true)
+                                                .submitLabel(.done)
+                                                .onSubmit { focusedField = nil }
+                                        } else {
+                                            SecureField("选填鉴权密钥", text: $token)
+                                                .textInputAutocapitalization(.never)
+                                                .disableAutocorrection(true)
+                                                .submitLabel(.done)
+                                                .onSubmit { focusedField = nil }
+                                        }
+                                    }
+                                    .focused($focusedField, equals: .token)
                                     .font(.system(size: 14))
                                     .foregroundColor(theme.primaryText)
-                                    .padding(12)
-                                    .background(theme.elevatedBackground)
-                                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                                    if !token.isEmpty && focusedField == .token {
+                                        Button(action: { token = "" }) {
+                                            Image(systemName: "xmark.circle.fill")
+                                                .foregroundColor(theme.mutedText)
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+
+                                    Button(action: { showToken.toggle() }) {
+                                        Image(systemName: showToken ? "eye.slash.fill" : "eye.fill")
+                                            .font(.system(size: 14))
+                                            .foregroundColor(theme.mutedText)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                                .padding(12)
+                                .background(theme.elevatedBackground)
+                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .stroke(focusedField == .token ? theme.accent : theme.border.opacity(0.6), lineWidth: 1)
+                                )
+                                .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                .onTapGesture { focusedField = .token }
                             }
 
                             Button(action: testAndFetch) {
@@ -94,14 +204,14 @@ struct AddMCPServerView: View {
                             if let res = testResult {
                                 HStack(spacing: 8) {
                                     Image(systemName: isSuccess ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                                        .foregroundColor(isSuccess ? .green : .red)
+                                        .foregroundColor(isSuccess ? theme.accent : .red)
                                     Text(res)
                                         .font(.system(size: 12, weight: .medium))
-                                        .foregroundColor(isSuccess ? .green : .red)
+                                        .foregroundColor(isSuccess ? theme.accent : .red)
                                 }
                                 .padding(10)
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                                .background((isSuccess ? Color.green : Color.red).opacity(0.1))
+                                .background((isSuccess ? theme.accent : Color.red).opacity(0.1))
                                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                             }
                         }
@@ -144,19 +254,24 @@ struct AddMCPServerView: View {
                         }
                     }
                     .padding(16)
+                    .background(
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                dismissKeyboard()
+                            }
+                    )
                 }
                 .scrollDismissesKeyboard(.interactively)
-                .simultaneousGesture(
-                    TapGesture().onEnded {
-                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-                    }
-                )
             }
             .navigationTitle(server == nil ? "添加 MCP 服务" : "编辑 MCP 服务")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") { dismiss() }
+                    Button("取消") {
+                        dismissKeyboard()
+                        dismiss()
+                    }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") {
@@ -176,8 +291,13 @@ struct AddMCPServerView: View {
         }
     }
 
-    private func testAndFetch() {
+    private func dismissKeyboard() {
+        focusedField = nil
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    }
+
+    private func testAndFetch() {
+        dismissKeyboard()
         isTesting = true
         testResult = nil
         let target = MCPServer(name: name, url: url, token: token)
@@ -202,7 +322,7 @@ struct AddMCPServerView: View {
     }
 
     private func saveServer() {
-        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        dismissKeyboard()
         var s = server ?? MCPServer(name: name, url: url, token: token)
         s.name = name
         s.url = url

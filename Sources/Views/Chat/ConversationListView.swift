@@ -7,6 +7,7 @@ struct ConversationListView: View {
     @State private var searchText: String = ""
     @State private var renamingConversation: Conversation? = nil
     @State private var renameText: String = ""
+    @FocusState private var isSearchFocused: Bool
 
     private var theme: AppThemePalette {
         storage.settings.currentTheme
@@ -38,6 +39,10 @@ struct ConversationListView: View {
             ZStack {
                 theme.background
                     .ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        isSearchFocused = false
+                    }
 
                 ScrollView {
                     VStack(spacing: 16) {
@@ -58,6 +63,13 @@ struct ConversationListView: View {
                     .padding(.horizontal, 16)
                     .padding(.top, 8)
                     .padding(.bottom, 28)
+                    .background(
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                isSearchFocused = false
+                            }
+                    )
                 }
                 .scrollDismissesKeyboard(.interactively)
             }
@@ -139,7 +151,7 @@ struct ConversationListView: View {
 
                         HStack(spacing: 4) {
                             Circle()
-                                .fill(activeToolCount > 0 ? Color.green : theme.mutedText)
+                                .fill(activeToolCount > 0 ? theme.accent : theme.mutedText)
                                 .frame(width: 6, height: 6)
                             Text(activeToolCount > 0 ? "\(activeToolCount) 个工具就绪" : "纯对话模式")
                         }
@@ -184,6 +196,9 @@ struct ConversationListView: View {
                 .foregroundColor(theme.mutedText)
 
             TextField("搜索对话标题或消息内容...", text: $searchText)
+                .focused($isSearchFocused)
+                .submitLabel(.search)
+                .onSubmit { isSearchFocused = false }
                 .font(.system(size: 14))
                 .foregroundColor(theme.primaryText)
 
@@ -193,6 +208,16 @@ struct ConversationListView: View {
                         .font(.system(size: 15))
                         .foregroundColor(theme.mutedText)
                 }
+                .buttonStyle(.plain)
+            }
+
+            if isSearchFocused {
+                Button(action: { isSearchFocused = false }) {
+                    Text("收起")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(theme.accent)
+                }
+                .buttonStyle(.plain)
             }
         }
         .padding(.horizontal, 14)
@@ -201,8 +226,12 @@ struct ConversationListView: View {
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(theme.border, lineWidth: 1)
+                .stroke(isSearchFocused ? theme.accent : theme.border, lineWidth: 1)
         )
+        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .onTapGesture {
+            isSearchFocused = true
+        }
     }
 
     private var emptyStateCard: some View {
@@ -252,6 +281,7 @@ struct ConversationListView: View {
 
         return ZStack(alignment: .topTrailing) {
             Button(action: {
+                isSearchFocused = false
                 UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
                 navigationPath.append(conv.id)
             }) {
@@ -367,6 +397,7 @@ struct ConversationListView: View {
     }
 
     private func createAndOpenConversation() {
+        isSearchFocused = false
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         let newConv = storage.addConversation()
         navigationPath.append(newConv.id)

@@ -4,6 +4,7 @@ struct MCPToolDetailView: View {
     @EnvironmentObject var storage: DataStorage
     @State var server: MCPServer
     @State private var searchText: String = ""
+    @FocusState private var isSearchFocused: Bool
 
     private var theme: AppThemePalette {
         storage.settings.currentTheme
@@ -22,6 +23,10 @@ struct MCPToolDetailView: View {
         ZStack {
             theme.background
                 .ignoresSafeArea()
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    isSearchFocused = false
+                }
 
             ScrollView {
                 VStack(spacing: 16) {
@@ -84,16 +89,40 @@ struct MCPToolDetailView: View {
                             Image(systemName: "magnifyingglass")
                                 .foregroundColor(theme.mutedText)
                             TextField("筛选工具名称或描述...", text: $searchText)
+                                .focused($isSearchFocused)
+                                .submitLabel(.search)
+                                .onSubmit { isSearchFocused = false }
                                 .font(.system(size: 14))
                                 .foregroundColor(theme.primaryText)
+
+                            if !searchText.isEmpty {
+                                Button(action: { searchText = "" }) {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundColor(theme.mutedText)
+                                }
+                                .buttonStyle(.plain)
+                            }
+
+                            if isSearchFocused {
+                                Button(action: { isSearchFocused = false }) {
+                                    Text("收起")
+                                        .font(.system(size: 12, weight: .semibold))
+                                        .foregroundColor(theme.accent)
+                                }
+                                .buttonStyle(.plain)
+                            }
                         }
                         .padding(12)
                         .background(theme.cardBackground)
                         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                         .overlay(
                             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .stroke(theme.border, lineWidth: 1)
+                                .stroke(isSearchFocused ? theme.accent : theme.border, lineWidth: 1)
                         )
+                        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .onTapGesture {
+                            isSearchFocused = true
+                        }
                     }
 
                     if filteredToolIndices.isEmpty {
@@ -151,6 +180,7 @@ struct MCPToolDetailView: View {
                 }
                 .padding(16)
             }
+            .scrollDismissesKeyboard(.interactively)
         }
         .navigationTitle(server.name)
         .navigationBarTitleDisplayMode(.inline)

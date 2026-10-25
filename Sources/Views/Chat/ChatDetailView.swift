@@ -103,16 +103,6 @@ struct ChatDetailView: View {
         storage.servers.filter { $0.isEnabled }.reduce(0) { $0 + $1.tools.filter { $0.isEnabled }.count }
     }
 
-    private var quickModelOptions: [String] {
-        if !storage.settings.availableModels.isEmpty {
-            return Array(storage.settings.availableModels.prefix(25))
-        }
-        return [storage.settings.modelName, "gpt-4o", "gpt-4o-mini", "deepseek-chat", "deepseek-reasoner"]
-            .reduce(into: [String]()) { res, item in
-                if !res.contains(item) { res.append(item) }
-            }
-    }
-
     private let starterPrompts: [(icon: String, title: String, prompt: String)] = [
         ("sparkles", "代码架构与重构建议", "请帮我分析项目的核心结构，并给出优雅的现代重构方案。"),
         ("wrench.and.screwdriver.fill", "调用 MCP 工具执行任务", "请检查当前已启用的 MCP 工具，并告诉我你可以帮我完成哪些自动化操作。"),
@@ -656,9 +646,9 @@ struct ChatDetailView: View {
                 Menu {
                     Button(action: {
                         dismissKeyboard()
-                        showingPhotoPicker = true
+                        showingDocumentPicker = true
                     }) {
-                        Label("图片上传", systemImage: "photo.on.rectangle.angled")
+                        Label("文件上传", systemImage: "doc.badge.plus")
                     }
 
                     Button(action: {
@@ -670,9 +660,9 @@ struct ChatDetailView: View {
 
                     Button(action: {
                         dismissKeyboard()
-                        showingDocumentPicker = true
+                        showingPhotoPicker = true
                     }) {
-                        Label("文件上传", systemImage: "doc.badge.plus")
+                        Label("图片上传", systemImage: "photo.on.rectangle.angled")
                     }
                 } label: {
                     Image(systemName: "plus.circle")
@@ -723,15 +713,35 @@ struct ChatDetailView: View {
                     }
 
                 Menu {
-                    Section("切换对话模型") {
-                        ForEach(quickModelOptions, id: \.self) { m in
-                            Button(action: {
-                                storage.settings.modelName = m
-                            }) {
-                                HStack {
-                                    Text(m)
-                                    if storage.settings.modelName == m {
-                                        Image(systemName: "checkmark")
+                    let profilesWithModels = storage.settings.providerProfiles.filter { !$0.enabledModels.isEmpty }
+                    if profilesWithModels.count > 1 {
+                        ForEach(profilesWithModels) { profile in
+                            Section(profile.name) {
+                                ForEach(profile.enabledModels, id: \.self) { m in
+                                    Button(action: {
+                                        storage.settings.selectChatModel(profileId: profile.id, model: m)
+                                    }) {
+                                        HStack {
+                                            Text(m)
+                                            if storage.settings.activeProfileId == profile.id && storage.settings.modelName == m {
+                                                Image(systemName: "checkmark")
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        Section("已启用对话模型") {
+                            ForEach(storage.settings.chatSelectableModelEntries, id: \.model) { entry in
+                                Button(action: {
+                                    storage.settings.selectChatModel(profileId: entry.profileId, model: entry.model)
+                                }) {
+                                    HStack {
+                                        Text(entry.model)
+                                        if storage.settings.modelName == entry.model {
+                                            Image(systemName: "checkmark")
+                                        }
                                     }
                                 }
                             }
