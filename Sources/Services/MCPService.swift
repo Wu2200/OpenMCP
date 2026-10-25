@@ -47,8 +47,18 @@ actor MCPService {
             throw NSError(domain: "MCPService", code: -1, userInfo: [NSLocalizedDescriptionKey: "MCP 初始化响应缺少 result"])
         }
 
+        guard let negotiatedVersion = result["protocolVersion"] as? String,
+              negotiatedVersion == supportedProtocolVersion else {
+            let serverVersion = result["protocolVersion"] as? String ?? "缺失"
+            throw NSError(
+                domain: "MCPService",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "MCP 协议版本不兼容，客户端支持 \(supportedProtocolVersion)，服务端返回 \(serverVersion)"]
+            )
+        }
+
         let newSession = Session(
-            protocolVersion: result["protocolVersion"] as? String ?? supportedProtocolVersion,
+            protocolVersion: negotiatedVersion,
             sessionId: initResponse.value(forHTTPHeaderField: "Mcp-Session-Id"),
             url: url,
             token: token
@@ -114,40 +124,48 @@ actor MCPService {
             throw URLError(.badURL)
         }
 
-        var headers: [String: String] = [
-            "Content-Type": "application/json",
-            "Accept": "application/json, text/event-stream",
-            "User-Agent": "OpenMCP-iOS/1.0"
-        ]
-
-        if !server.token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let token = server.token.trimmingCharacters(in: .whitespacesAndNewlines)
-            headers["Authorization"] = token.hasPrefix("Bearer ") ? token : "Bearer \(token)"
-        }
-
-        _ = headers
         let activeSession = try await session(for: server, url: url)
-        let requestId = UUID().uuidString
-        let listBody: [String: Any] = [
-            "jsonrpc": "2.0",
-            "id": requestId,
-            "method": "tools/list",
-            "params": [String: Any]()
-        ]
-        let listRequest = try makeRequest(server: server, url: url, body: listBody, session: activeSession, timeout: 25)
-        let (data, _) = try await send(listRequest, serverId: server.id)
-        let parsedJSON = try parseResponse(data: data, expectedID: requestId)
-        guard let dict = parsedJSON as? [String: Any] else {
-            throw NSError(domain: "MCPService", code: -1, userInfo: [NSLocalizedDescriptionKey: "MCP 返回数据格式无效"])
-        }
+        var toolsArray: [[String: Any]] = []
+        var cursor: String? = nil
+        var seenCursors: Set<String> = []
 
-        if let error = dict["error"] as? [String: Any], let msg = error["message"] as? String {
-            throw NSError(domain: "MCPService", code: -1, userInfo: [NSLocalizedDescriptionKey: msg])
-        }
+        while true {
+            let requestId = UUID().uuidString
+            var params: [String: Any] = [:]
+            if let cursor = cursor {
+                params["cursor"] = cursor
+            }
+            let listBody: [String: Any] = [
+                "jsonrpc": "2.0",
+                "id": requestId,
+                "method": "tools/list",
+                "params": params
+            ]
+            let listRequest = try makeRequest(server: server, url: url, body: listBody, session: activeSession, timeout: 25)
+            let (data, _) = try await send(listRequest, serverId: server.id)
+            let parsedJSON = try parseResponse(data: data, expectedID: requestId)
+            guard let dict = parsedJSON as? [String: Any] else {
+                throw NSError(domain: "MCPService", code: -1, userInfo: [NSLocalizedDescriptionKey: "MCP 返回数据格式无效"])
+            }
 
-        guard let result = dict["result"] as? [String: Any],
-              let toolsArray = result["tools"] as? [[String: Any]] else {
-            return []
+            if let error = dict["error"] as? [String: Any] {
+                let message = error["message"] as? String ?? "未知 JSON-RPC 错误"
+                throw NSError(domain: "MCPService", code: -1, userInfo: [NSLocalizedDescriptionKey: message])
+            }
+
+            guard let result = dict["result"] as? [String: Any],
+                  let pageTools = result["tools"] as? [[String: Any]] else {
+                throw NSError(domain: "MCPService", code: -1, userInfo: [NSLocalizedDescriptionKey: "MCP 工具列表响应缺少 tools"])
+            }
+            toolsArray.append(contentsOf: pageTools)
+
+            guard let nextCursor = result["nextCursor"] as? String, !nextCursor.isEmpty else {
+                break
+            }
+            guard seenCursors.insert(nextCursor).inserted else {
+                throw NSError(domain: "MCPService", code: -1, userInfo: [NSLocalizedDescriptionKey: "MCP 工具列表返回了重复分页游标"])
+            }
+            cursor = nextCursor
         }
 
         let prefix = server.name.lowercased().filter { $0.isLetter || $0.isNumber || $0 == "_" }
@@ -236,7 +254,7 @@ actor MCPService {
                 flushEvent()
                 continue
             }
-            if line.hasPrefix(":" ) { continue }
+            if line.hasPrefix(":") { continue }
             if line.hasPrefix("data:") {
                 var value = String(line.dropFirst(5))
                 if value.first == " " {
