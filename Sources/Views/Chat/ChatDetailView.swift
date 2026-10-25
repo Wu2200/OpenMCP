@@ -14,6 +14,8 @@ struct ChatDetailView: View {
     @State private var showingDocumentPicker: Bool = false
     @State private var previewingStagedAttachment: ChatAttachment? = nil
     @State private var selectedTurnId: String? = nil
+    @State private var pendingDeleteTurn: MessageDisplayTurn? = nil
+    @State private var showingClearConversationAlert: Bool = false
     @State private var autoFollowOutput: Bool = true
     @State private var manualScrollTrigger: Int = 0
     @State private var isChatVisible: Bool = true
@@ -212,13 +214,7 @@ struct ChatDetailView: View {
                                             },
                                             onDelete: {
                                                 dismissKeyboard()
-                                                if selectedTurnId == turn.id {
-                                                    selectedTurnId = nil
-                                                }
-                                                storage.deleteMessageTurn(
-                                                    conversationId: conversationId,
-                                                    messageIds: turn.underlyingMessageIds
-                                                )
+                                                pendingDeleteTurn = turn
                                             }
                                         )
                                         .frame(width: rowAvailableWidth)
@@ -239,7 +235,7 @@ struct ChatDetailView: View {
                                 }
                                 .padding(.horizontal, 10)
                                 .padding(.top, 10)
-                                .padding(.bottom, 54)
+                                .padding(.bottom, 86)
                                 .frame(width: viewportWidth)
                                 .frame(minHeight: max(260, geo.size.height - 120), alignment: .top)
                                 .background(
@@ -293,6 +289,11 @@ struct ChatDetailView: View {
                         }
                         .onChange(of: currentConversation.messages.count) { _ in
                             if autoFollowOutput {
+                                manualScrollTrigger &+= 1
+                            }
+                        }
+                        .onChange(of: coordinator.isGenerating) { generating in
+                            if generating && autoFollowOutput {
                                 manualScrollTrigger &+= 1
                             }
                         }
@@ -366,11 +367,8 @@ struct ChatDetailView: View {
                         }
 
                         Button(role: .destructive, action: {
-                            selectedTurnId = nil
-                            if coordinator.isGenerating {
-                                coordinator.stopGeneration()
-                            }
-                            storage.clearConversationMessages(id: conversationId)
+                            dismissKeyboard()
+                            showingClearConversationAlert = true
                         }) {
                             Label("清空当前对话消息", systemImage: "trash")
                         }
@@ -420,6 +418,40 @@ struct ChatDetailView: View {
             } else {
                 AttachmentFilePreviewSheet(attachment: att, theme: theme)
             }
+        }
+        .alert("确认删除此条消息？", isPresented: Binding(
+            get: { pendingDeleteTurn != nil },
+            set: { if !$0 { pendingDeleteTurn = nil } }
+        )) {
+            Button("取消", role: .cancel) {
+                pendingDeleteTurn = nil
+            }
+            Button("删除", role: .destructive) {
+                if let turn = pendingDeleteTurn {
+                    if selectedTurnId == turn.id {
+                        selectedTurnId = nil
+                    }
+                    storage.deleteMessageTurn(
+                        conversationId: conversationId,
+                        messageIds: turn.underlyingMessageIds
+                    )
+                }
+                pendingDeleteTurn = nil
+            }
+        } message: {
+            Text("删除后该条消息将无法恢复。")
+        }
+        .alert("确认清空当前对话？", isPresented: $showingClearConversationAlert) {
+            Button("取消", role: .cancel) {}
+            Button("清空消息", role: .destructive) {
+                selectedTurnId = nil
+                if coordinator.isGenerating {
+                    coordinator.stopGeneration()
+                }
+                storage.clearConversationMessages(id: conversationId)
+            }
+        } message: {
+            Text("将清空当前对话中的所有历史消息，此操作不可恢复。")
         }
     }
 
@@ -1041,8 +1073,20 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
                 coord.cancelActiveAnimation()
             } else if triggerChanged {
                 coord.scrollToBottom(force: true)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                    if coord.isViewActive && coord.autoFollowOutput {
+                        coord.scrollToBottom(force: false, animated: true)
+                    }
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
+                    if coord.isViewActive && coord.autoFollowOutput {
+                        coord.scrollToBottom(force: false, animated: true)
+                    }
+                }
             } else if !wasViewActive && isGenerating && autoFollowOutput {
                 coord.scrollToBottom(animated: false)
+            } else if !wasGenerating && isGenerating && autoFollowOutput {
+                coord.scrollToBottom(force: false, animated: true)
             } else if wasGenerating && !isGenerating && autoFollowOutput {
                 coord.scrollToBottom(animated: true)
             }
@@ -1155,9 +1199,10 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
 
         private func bottomOffset(for scrollView: UIScrollView) -> CGFloat {
             let scale = UIScreen.main.scale
+            let extraBottomBreathingRoom: CGFloat = 24
             let raw = max(
                 -scrollView.adjustedContentInset.top,
-                scrollView.contentSize.height - scrollView.bounds.height + scrollView.adjustedContentInset.bottom
+                scrollView.contentSize.height - scrollView.bounds.height + scrollView.adjustedContentInset.bottom + extraBottomBreathingRoom
             )
             return round(raw * scale) / scale
         }
@@ -1180,7 +1225,8 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
                     return
                 }
 
-                guard heightDelta >= 6.0 else { return }
+                let distanceToTarget = self.bottomOffset(for: sv) - sv.contentOffset.y
+                guard heightDelta >= 1.5 || (self.isGenerating && distanceToTarget > 6.0) else { return }
                 self.lastObservedHeight = newHeight
                 self.scrollToBottom(force: false, animated: true)
             }
@@ -1199,7 +1245,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
             case .changed:
                 let translationY = recognizer.translation(in: sv).y
                 let distanceFromBottom = bottomOffset(for: sv) - sv.contentOffset.y
-                if (translationY > 8 || sv.contentOffset.y < panInitialOffsetY - 6) && distanceFromBottom > 28 {
+                if (translationY > 18 || sv.contentOffset.y < panInitialOffsetY - 16) && distanceFromBottom > 68 {
                     onUserDragUp()
                 }
             case .ended, .cancelled, .failed:
@@ -1221,7 +1267,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
                 self.userScrollActive = false
                 self.onScrollSettled()
                 let distanceFromBottom = self.bottomOffset(for: sv) - sv.contentOffset.y
-                if distanceFromBottom < 36 {
+                if distanceFromBottom < 72 {
                     self.onReachBottom()
                 }
             }
