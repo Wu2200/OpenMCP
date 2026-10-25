@@ -80,7 +80,7 @@ struct ChatDetailView: View {
 
     private var quickModelOptions: [String] {
         if !storage.settings.availableModels.isEmpty {
-            return Array(storage.settings.availableModels.prefix(20))
+            return Array(storage.settings.availableModels.prefix(25))
         }
         return [storage.settings.modelName, "gpt-4o", "gpt-4o-mini", "deepseek-chat", "deepseek-reasoner"]
             .reduce(into: [String]()) { res, item in
@@ -103,96 +103,123 @@ struct ChatDetailView: View {
                     dismissKeyboard()
                 }
 
-            VStack(spacing: 0) {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        if displayTurns.isEmpty && !coordinator.isGenerating {
-                            emptyConversationHero
+            ScrollViewReader { proxy in
+                VStack(spacing: 0) {
+                    ZStack(alignment: .bottomTrailing) {
+                        ScrollView {
+                            if displayTurns.isEmpty && !coordinator.isGenerating {
+                                emptyConversationHero
+                                    .padding(.horizontal, 16)
+                                    .padding(.top, 28)
+                                    .contentShape(Rectangle())
+                                    .onTapGesture {
+                                        dismissKeyboard()
+                                    }
+                            } else {
+                                LazyVStack(spacing: 20) {
+                                    ForEach(displayTurns) { turn in
+                                        MessageBubbleView(
+                                            turn: turn,
+                                            modelName: storage.settings.modelName,
+                                            isGenerating: coordinator.isGenerating,
+                                            onEditSave: { newContent in
+                                                dismissKeyboard()
+                                                storage.updateMessageContent(
+                                                    conversationId: conversationId,
+                                                    messageId: turn.primaryMessageId,
+                                                    newContent: newContent
+                                                )
+                                            },
+                                            onEditAndResend: { newContent in
+                                                dismissKeyboard()
+                                                Task {
+                                                    await coordinator.retryFromMessage(
+                                                        conversationId: conversationId,
+                                                        messageId: turn.primaryMessageId,
+                                                        newPrompt: newContent,
+                                                        settings: storage.settings,
+                                                        servers: storage.servers
+                                                    )
+                                                }
+                                            },
+                                            onRetry: {
+                                                dismissKeyboard()
+                                                Task {
+                                                    await coordinator.retryFromMessage(
+                                                        conversationId: conversationId,
+                                                        messageId: turn.primaryMessageId,
+                                                        settings: storage.settings,
+                                                        servers: storage.servers
+                                                    )
+                                                }
+                                            },
+                                            onDelete: {
+                                                dismissKeyboard()
+                                                storage.deleteMessageTurn(
+                                                    conversationId: conversationId,
+                                                    messageIds: turn.underlyingMessageIds
+                                                )
+                                            }
+                                        )
+                                        .id(turn.id)
+                                    }
+
+                                    if coordinator.isGenerating {
+                                        generatingStatusBanner
+                                            .id("generating_status")
+                                    }
+
+                                    if let err = coordinator.errorMessage {
+                                        errorBanner(err)
+                                            .id("error_status")
+                                    }
+
+                                    Color.clear
+                                        .frame(height: 4)
+                                        .id("bottom_anchor")
+                                }
                                 .padding(.horizontal, 16)
-                                .padding(.top, 28)
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    dismissKeyboard()
-                                }
-                        } else {
-                            LazyVStack(spacing: 16) {
-                                ForEach(displayTurns) { turn in
-                                    MessageBubbleView(
-                                        turn: turn,
-                                        modelName: storage.settings.modelName,
-                                        isGenerating: coordinator.isGenerating,
-                                        onEditSave: { newContent in
-                                            dismissKeyboard()
-                                            storage.updateMessageContent(
-                                                conversationId: conversationId,
-                                                messageId: turn.primaryMessageId,
-                                                newContent: newContent
-                                            )
-                                        },
-                                        onEditAndResend: { newContent in
-                                            dismissKeyboard()
-                                            Task {
-                                                await coordinator.retryFromMessage(
-                                                    conversationId: conversationId,
-                                                    messageId: turn.primaryMessageId,
-                                                    newPrompt: newContent,
-                                                    settings: storage.settings,
-                                                    servers: storage.servers
-                                                )
-                                            }
-                                        },
-                                        onRetry: {
-                                            dismissKeyboard()
-                                            Task {
-                                                await coordinator.retryFromMessage(
-                                                    conversationId: conversationId,
-                                                    messageId: turn.primaryMessageId,
-                                                    settings: storage.settings,
-                                                    servers: storage.servers
-                                                )
-                                            }
-                                        },
-                                        onDelete: {
-                                            dismissKeyboard()
-                                            storage.deleteMessageTurn(
-                                                conversationId: conversationId,
-                                                messageIds: turn.underlyingMessageIds
-                                            )
-                                        }
-                                    )
-                                    .id(turn.id)
-                                }
-
-                                if coordinator.isGenerating {
-                                    generatingStatusBanner
-                                        .id("generating_status")
-                                }
-
-                                if let err = coordinator.errorMessage {
-                                    errorBanner(err)
-                                        .id("error_status")
-                                }
+                                .padding(.top, 12)
+                                .padding(.bottom, 16)
                             }
-                            .padding(.horizontal, 14)
-                            .padding(.top, 12)
-                            .padding(.bottom, 20)
                         }
-                    }
-                    .scrollDismissesKeyboard(.interactively)
-                    .simultaneousGesture(
-                        TapGesture().onEnded {
-                            dismissKeyboard()
+                        .scrollDismissesKeyboard(.interactively)
+                        .simultaneousGesture(
+                            TapGesture().onEnded {
+                                dismissKeyboard()
+                            }
+                        )
+                        .onChange(of: currentConversation.messages.count) { _ in
+                            scrollToBottom(proxy: proxy)
                         }
-                    )
-                    .onChange(of: currentConversation.messages.count) { _ in
-                        scrollToBottom(proxy: proxy)
-                    }
-                    .onChange(of: coordinator.statusText) { _ in
-                        scrollToBottom(proxy: proxy)
-                    }
-                }
+                        .onChange(of: coordinator.statusText) { _ in
+                            scrollToBottom(proxy: proxy)
+                        }
 
-                composerDock
+                        if !displayTurns.isEmpty {
+                            Button(action: {
+                                scrollToBottom(proxy: proxy)
+                            }) {
+                                Image(systemName: "arrow.down")
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundColor(theme.primaryText)
+                                    .frame(width: 34, height: 34)
+                                    .background(theme.cardBackground)
+                                    .clipShape(Circle())
+                                    .overlay(
+                                        Circle()
+                                            .stroke(theme.border, lineWidth: 1)
+                                    )
+                                    .shadow(color: Color.black.opacity(theme.isDark ? 0.28 : 0.08), radius: 6, x: 0, y: 2)
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.trailing, 16)
+                            .padding(.bottom, 10)
+                        }
+                    }
+
+                    composerDock
+                }
             }
         }
         .navigationTitle(currentConversation.title)
@@ -215,44 +242,16 @@ struct ChatDetailView: View {
                     }
 
                     Menu {
-                        Section("切换对话模型") {
-                            ForEach(quickModelOptions, id: \.self) { m in
-                                Button(action: {
-                                    storage.settings.modelName = m
-                                }) {
-                                    HStack {
-                                        Text(m)
-                                        if storage.settings.modelName == m {
-                                            Image(systemName: "checkmark")
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        Divider()
-
                         Button(role: .destructive, action: {
                             storage.clearConversationMessages(id: conversationId)
                         }) {
                             Label("清空当前对话消息", systemImage: "trash")
                         }
                     } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "cpu")
-                                .font(.system(size: 11, weight: .semibold))
-                            Text(storage.settings.modelName)
-                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                                .lineLimit(1)
-                                .frame(maxWidth: 110)
-                            Image(systemName: "chevron.down")
-                                .font(.system(size: 9, weight: .bold))
-                        }
-                        .foregroundColor(theme.accent)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .background(theme.accent.opacity(0.12))
-                        .clipShape(Capsule())
+                        Image(systemName: "ellipsis")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(theme.primaryText)
+                            .frame(width: 30, height: 30)
                     }
                 }
             }
@@ -406,99 +405,135 @@ struct ChatDetailView: View {
     private var composerDock: some View {
         let canSend = !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !coordinator.isGenerating
 
-        return VStack(spacing: 8) {
-            HStack(spacing: 8) {
-                Button(action: {
-                    dismissKeyboard()
-                    showingToolsSheet = true
-                }) {
-                    HStack(spacing: 5) {
-                        Image(systemName: "wrench.and.screwdriver.fill")
-                            .font(.system(size: 11))
-                        Text(activeToolCount > 0 ? "工具 (\(activeToolCount))" : "未启用工具")
-                            .font(.system(size: 11, weight: .semibold))
-                    }
-                    .foregroundColor(activeToolCount > 0 ? theme.accent : theme.secondaryText)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(activeToolCount > 0 ? theme.accent.opacity(0.12) : theme.cardBackground)
-                    .clipShape(Capsule())
-                    .overlay(
-                        Capsule().stroke(theme.border, lineWidth: 1)
-                    )
-                }
-
-                Spacer()
-
-                if isInputFocused {
-                    Button(action: dismissKeyboard) {
-                        HStack(spacing: 4) {
-                            Image(systemName: "keyboard.chevron.compact.down")
-                                .font(.system(size: 11, weight: .semibold))
-                            Text("收起键盘")
-                                .font(.system(size: 11, weight: .semibold))
-                        }
-                        .foregroundColor(theme.secondaryText)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .background(theme.cardBackground)
-                        .clipShape(Capsule())
-                        .overlay(
-                            Capsule().stroke(theme.border, lineWidth: 1)
-                        )
-                    }
-                } else if !displayTurns.isEmpty {
-                    Text("\(displayTurns.count) 条消息")
-                        .font(.system(size: 11))
-                        .foregroundColor(theme.mutedText)
-                }
-            }
-            .padding(.horizontal, 16)
-
+        return VStack(spacing: 10) {
             HStack(alignment: .bottom, spacing: 10) {
-                TextField("输入问题或指令，支持自动调用 MCP 工具...", text: $inputText, axis: .vertical)
+                TextField("在这里输入你的问题...", text: $inputText, axis: .vertical)
                     .lineLimit(1...6)
                     .focused($isInputFocused)
-                    .font(.system(size: 15))
+                    .font(.system(size: 15.5))
                     .foregroundColor(theme.primaryText)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 11)
+                    .padding(.top, 2)
                     .disabled(coordinator.isGenerating)
 
                 Button(action: sendMessage) {
                     ZStack {
                         Circle()
                             .fill(canSend ? theme.accent : theme.elevatedBackground)
-                            .frame(width: 36, height: 36)
+                            .frame(width: 34, height: 34)
 
                         Image(systemName: coordinator.isGenerating ? "hourglass" : "arrow.up")
-                            .font(.system(size: 15, weight: .bold))
+                            .font(.system(size: 14, weight: .bold))
                             .foregroundColor(canSend ? .white : theme.mutedText)
                     }
                 }
                 .disabled(!canSend)
-                .padding(.trailing, 6)
-                .padding(.bottom, 5)
             }
-            .background(theme.cardBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .stroke(theme.border, lineWidth: 1)
-            )
-            .padding(.horizontal, 14)
-            .padding(.bottom, 10)
+
+            HStack(spacing: 12) {
+                Menu {
+                    Section("快捷提问模板") {
+                        ForEach(starterPrompts, id: \.title) { item in
+                            Button(action: {
+                                inputText = item.prompt
+                            }) {
+                                Label(item.title, systemImage: item.icon)
+                            }
+                        }
+                    }
+
+                    Divider()
+
+                    Button(role: .destructive, action: {
+                        storage.clearConversationMessages(id: conversationId)
+                    }) {
+                        Label("清空当前对话", systemImage: "trash")
+                    }
+                } label: {
+                    Image(systemName: "plus.circle")
+                        .font(.system(size: 18, weight: .medium))
+                        .foregroundColor(theme.secondaryText)
+                }
+
+                Button(action: {
+                    dismissKeyboard()
+                    showingToolsSheet = true
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "wrench.and.screwdriver")
+                            .font(.system(size: 14, weight: .medium))
+                        if activeToolCount > 0 {
+                            Text("\(activeToolCount)")
+                                .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                        }
+                    }
+                    .foregroundColor(activeToolCount > 0 ? theme.accent : theme.secondaryText)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(activeToolCount > 0 ? theme.accent.opacity(0.12) : Color.clear)
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+
+                if isInputFocused {
+                    Button(action: dismissKeyboard) {
+                        HStack(spacing: 3) {
+                            Image(systemName: "keyboard.chevron.compact.down")
+                                .font(.system(size: 13, weight: .medium))
+                            Text("收起")
+                                .font(.system(size: 11.5, weight: .medium))
+                        }
+                        .foregroundColor(theme.secondaryText)
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                Spacer()
+
+                Menu {
+                    Section("切换对话模型") {
+                        ForEach(quickModelOptions, id: \.self) { m in
+                            Button(action: {
+                                storage.settings.modelName = m
+                            }) {
+                                HStack {
+                                    Text(m)
+                                    if storage.settings.modelName == m {
+                                        Image(systemName: "checkmark")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "atom")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(theme.accent)
+                        Text(storage.settings.modelName)
+                            .font(.system(size: 12.5, weight: .medium))
+                            .foregroundColor(theme.primaryText)
+                            .lineLimit(1)
+                            .frame(maxWidth: 140, alignment: .trailing)
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(theme.secondaryText)
+                    }
+                }
+            }
         }
-        .padding(.top, 8)
-        .background(
-            theme.background
-                .overlay(
-                    Rectangle()
-                        .fill(theme.border.opacity(0.6))
-                        .frame(height: 0.5),
-                    alignment: .top
-                )
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(theme.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(theme.border, lineWidth: 1)
         )
+        .shadow(color: Color.black.opacity(theme.isDark ? 0.25 : 0.05), radius: 8, x: 0, y: 2)
+        .padding(.horizontal, 12)
+        .padding(.top, 6)
+        .padding(.bottom, 8)
+        .background(theme.background)
     }
 
     private var activeToolsSheet: some View {
@@ -606,8 +641,8 @@ struct ChatDetailView: View {
         withAnimation(.easeOut(duration: 0.2)) {
             if coordinator.isGenerating {
                 proxy.scrollTo("generating_status", anchor: .bottom)
-            } else if let last = displayTurns.last {
-                proxy.scrollTo(last.id, anchor: .bottom)
+            } else if displayTurns.last != nil {
+                proxy.scrollTo("bottom_anchor", anchor: .bottom)
             }
         }
     }

@@ -1,18 +1,6 @@
 import SwiftUI
 import UIKit
 
-enum MessageSegment: Identifiable {
-    case text(id: Int, content: String)
-    case code(id: Int, language: String, content: String)
-
-    var id: Int {
-        switch self {
-        case .text(let id, _): return id
-        case .code(let id, _, _): return id
-        }
-    }
-}
-
 struct MessageDisplayTurn: Identifiable, Equatable {
     var id: String
     var role: MessageRole
@@ -44,80 +32,45 @@ struct MessageBubbleView: View {
 
     var body: some View {
         if turn.role == .user {
-            userPromptCard
+            userTurnView
         } else {
-            assistantStudioCard
+            assistantTurnView
         }
     }
 
-    private var userPromptCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                HStack(spacing: 5) {
-                    Image(systemName: "person.fill")
-                        .font(.system(size: 11, weight: .bold))
-                    Text("我的提问")
-                        .font(.system(size: 12, weight: .semibold))
-                }
-                .foregroundColor(theme.accent)
-                .padding(.horizontal, 9)
-                .padding(.vertical, 4)
-                .background(theme.accent.opacity(0.14))
-                .clipShape(Capsule())
-
-                Spacer()
-
-                Text(turn.createdAt, format: .dateTime.hour().minute())
-                    .font(.system(size: 11))
-                    .foregroundColor(theme.mutedText)
-            }
-
+    private var userTurnView: some View {
+        VStack(alignment: .trailing, spacing: 6) {
             if isEditing {
                 editEditorBox(allowResend: true)
             } else {
-                Text(turn.content)
-                    .font(.system(size: 15.5, weight: .medium))
-                    .foregroundColor(theme.primaryText)
-                    .lineSpacing(4)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                actionButtonsBar
-            }
-        }
-        .padding(14)
-        .background(theme.userMessageBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(theme.accent.opacity(0.22), lineWidth: 1)
-        )
-    }
-
-    private var assistantStudioCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(theme.accent.opacity(0.15))
-                        .frame(width: 26, height: 26)
-                    Image(systemName: "sparkles")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundColor(theme.accent)
+                HStack {
+                    Spacer(minLength: 42)
+                    Text(turn.content)
+                        .font(.system(size: 15.5, weight: .regular))
+                        .foregroundColor(theme.primaryText)
+                        .lineSpacing(4)
+                        .textSelection(.enabled)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(theme.userMessageBackground)
+                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .stroke(theme.accent.opacity(0.18), lineWidth: 1)
+                        )
                 }
 
-                Text(modelName)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(theme.primaryText)
-                    .lineLimit(1)
-
-                Text(turn.createdAt, format: .dateTime.hour().minute())
-                    .font(.system(size: 11))
-                    .foregroundColor(theme.mutedText)
-
-                Spacer()
+                HStack {
+                    Spacer()
+                    floatingActionPill
+                }
             }
+        }
+        .padding(.vertical, 2)
+    }
 
+    private var assistantTurnView: some View {
+        VStack(alignment: .leading, spacing: 12) {
             if !turn.toolCalls.isEmpty {
                 ToolCallSummaryGroupView(toolCalls: turn.toolCalls)
             }
@@ -127,33 +80,40 @@ struct MessageBubbleView: View {
             } else {
                 let trimmed = turn.content.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !trimmed.isEmpty {
-                    let segments = parseSegments(from: trimmed)
-                    VStack(alignment: .leading, spacing: 10) {
-                        ForEach(segments) { seg in
-                            switch seg {
-                            case .text(_, let textContent):
-                                formattedMarkdownText(textContent)
-                            case .code(_, let lang, let codeContent):
-                                CodeBlockCard(language: lang, code: codeContent, theme: theme)
-                            }
-                        }
-                    }
+                    MarkdownDocumentView(content: trimmed, theme: theme)
                 }
 
-                actionButtonsBar
+                floatingActionPill
+                    .padding(.top, 2)
             }
         }
-        .padding(15)
-        .background(theme.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(theme.border, lineWidth: 1)
-        )
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var actionButtonsBar: some View {
-        HStack(spacing: 8) {
+    private var floatingActionPill: some View {
+        HStack(spacing: 4) {
+            Button(action: {
+                onRetry?()
+            }) {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 11.5, weight: .semibold))
+                    Text("重试")
+                        .font(.system(size: 11.5, weight: .medium))
+                }
+                .foregroundColor(theme.secondaryText)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 5)
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(isGenerating)
+
+            Divider()
+                .frame(height: 12)
+                .overlay(theme.border)
+
             Button(action: {
                 draftText = turn.content
                 withAnimation(.easeInOut(duration: 0.15)) {
@@ -163,58 +123,23 @@ struct MessageBubbleView: View {
             }) {
                 HStack(spacing: 4) {
                     Image(systemName: "pencil")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.system(size: 11.5, weight: .semibold))
                     Text("编辑")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.system(size: 11.5, weight: .medium))
                 }
                 .foregroundColor(theme.secondaryText)
-                .padding(.horizontal, 10)
+                .padding(.horizontal, 9)
                 .padding(.vertical, 5)
-                .background(theme.elevatedBackground)
-                .clipShape(Capsule())
+                .contentShape(Capsule())
             }
             .buttonStyle(.plain)
             .disabled(isGenerating)
-
-            Button(action: {
-                onRetry?()
-            }) {
-                HStack(spacing: 4) {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 11, weight: .semibold))
-                    Text("重试")
-                        .font(.system(size: 11, weight: .semibold))
-                }
-                .foregroundColor(theme.accent)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(theme.accent.opacity(0.12))
-                .clipShape(Capsule())
-            }
-            .buttonStyle(.plain)
-            .disabled(isGenerating)
-
-            Button(action: {
-                onDelete?()
-            }) {
-                HStack(spacing: 4) {
-                    Image(systemName: "trash")
-                        .font(.system(size: 11, weight: .semibold))
-                    Text("删除")
-                        .font(.system(size: 11, weight: .semibold))
-                }
-                .foregroundColor(.red.opacity(0.85))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(Color.red.opacity(0.1))
-                .clipShape(Capsule())
-            }
-            .buttonStyle(.plain)
-            .disabled(isGenerating)
-
-            Spacer()
 
             if !turn.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Divider()
+                    .frame(height: 12)
+                    .overlay(theme.border)
+
                 Button(action: {
                     UIPasteboard.general.string = turn.content
                     withAnimation { isCopied = true }
@@ -224,35 +149,63 @@ struct MessageBubbleView: View {
                 }) {
                     HStack(spacing: 4) {
                         Image(systemName: isCopied ? "checkmark" : "doc.on.doc")
-                            .font(.system(size: 10, weight: .semibold))
+                            .font(.system(size: 11, weight: .semibold))
                         Text(isCopied ? "已复制" : "复制")
-                            .font(.system(size: 11, weight: .medium))
+                            .font(.system(size: 11.5, weight: .medium))
                     }
                     .foregroundColor(isCopied ? theme.accent : theme.secondaryText)
                     .padding(.horizontal, 9)
                     .padding(.vertical, 5)
-                    .background(theme.elevatedBackground)
-                    .clipShape(Capsule())
+                    .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
             }
+
+            Divider()
+                .frame(height: 12)
+                .overlay(theme.border)
+
+            Button(action: {
+                onDelete?()
+            }) {
+                HStack(spacing: 4) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 11.5, weight: .semibold))
+                    Text("删除")
+                        .font(.system(size: 11.5, weight: .medium))
+                }
+                .foregroundColor(Color.red.opacity(0.8))
+                .padding(.horizontal, 9)
+                .padding(.vertical, 5)
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(isGenerating)
         }
-        .padding(.top, 2)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
+        .background(theme.cardBackground)
+        .clipShape(Capsule())
+        .overlay(
+            Capsule()
+                .stroke(theme.border, lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(theme.isDark ? 0.22 : 0.05), radius: 6, x: 0, y: 2)
     }
 
     private func editEditorBox(allowResend: Bool) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             TextField("修改消息内容...", text: $draftText, axis: .vertical)
-                .lineLimit(2...10)
+                .lineLimit(2...12)
                 .focused($isEditFieldFocused)
-                .font(.system(size: 14.5))
+                .font(.system(size: 15))
                 .foregroundColor(theme.primaryText)
-                .padding(10)
-                .background(theme.elevatedBackground)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .padding(12)
+                .background(theme.cardBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(theme.accent.opacity(0.4), lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(theme.accent.opacity(0.45), lineWidth: 1)
                 )
 
             HStack(spacing: 8) {
@@ -263,12 +216,13 @@ struct MessageBubbleView: View {
                     }
                 }) {
                     Text("取消")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.system(size: 12.5, weight: .semibold))
                         .foregroundColor(theme.secondaryText)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
-                        .background(theme.elevatedBackground)
+                        .background(theme.cardBackground)
                         .clipShape(Capsule())
+                        .overlay(Capsule().stroke(theme.border, lineWidth: 1))
                 }
                 .buttonStyle(.plain)
 
@@ -284,7 +238,7 @@ struct MessageBubbleView: View {
                     onEditSave?(trimmed)
                 }) {
                     Text("仅保存")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.system(size: 12.5, weight: .semibold))
                         .foregroundColor(theme.accent)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
@@ -305,9 +259,9 @@ struct MessageBubbleView: View {
                     }) {
                         HStack(spacing: 4) {
                             Image(systemName: "paperplane.fill")
-                                .font(.system(size: 10))
+                                .font(.system(size: 10.5))
                             Text("保存并重发")
-                                .font(.system(size: 12, weight: .semibold))
+                                .font(.system(size: 12.5, weight: .semibold))
                         }
                         .foregroundColor(.white)
                         .padding(.horizontal, 12)
@@ -320,53 +274,6 @@ struct MessageBubbleView: View {
             }
         }
     }
-
-    @ViewBuilder
-    private func formattedMarkdownText(_ rawText: String) -> some View {
-        if let attr = try? AttributedString(
-            markdown: rawText,
-            options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        ) {
-            Text(attr)
-                .font(.system(size: 15))
-                .foregroundColor(theme.primaryText)
-                .lineSpacing(5)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        } else {
-            Text(rawText)
-                .font(.system(size: 15))
-                .foregroundColor(theme.primaryText)
-                .lineSpacing(5)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
-    private func parseSegments(from text: String) -> [MessageSegment] {
-        var result: [MessageSegment] = []
-        let components = text.components(separatedBy: "```")
-        for (idx, part) in components.enumerated() {
-            if idx % 2 == 0 {
-                let cleaned = part.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !cleaned.isEmpty {
-                    result.append(.text(id: idx, content: cleaned))
-                }
-            } else {
-                var lines = part.components(separatedBy: .newlines)
-                var lang = "code"
-                if let first = lines.first?.trimmingCharacters(in: .whitespacesAndNewlines), !first.isEmpty {
-                    lang = first
-                    lines.removeFirst()
-                } else if !lines.isEmpty {
-                    lines.removeFirst()
-                }
-                let codeBody = lines.joined(separator: "\n").trimmingCharacters(in: .newlines)
-                result.append(.code(id: idx, language: lang, content: codeBody))
-            }
-        }
-        return result
-    }
 }
 
 struct CodeBlockCard: View {
@@ -378,8 +285,8 @@ struct CodeBlockCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text(language.uppercased())
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                Text(language.lowercased())
+                    .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
                     .foregroundColor(theme.secondaryText)
                 Spacer()
                 Button(action: {
@@ -391,26 +298,32 @@ struct CodeBlockCard: View {
                 }) {
                     HStack(spacing: 4) {
                         Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                            .font(.system(size: 10, weight: .semibold))
-                        Text(copied ? "已复制代码" : "复制代码")
+                            .font(.system(size: 10.5, weight: .semibold))
+                        Text(copied ? "已复制" : "复制代码")
                             .font(.system(size: 11, weight: .medium))
                     }
                     .foregroundColor(copied ? theme.accent : theme.secondaryText)
                 }
+                .buttonStyle(.plain)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(theme.border.opacity(0.45))
+            .background(theme.elevatedBackground)
+
+            Rectangle()
+                .fill(theme.border)
+                .frame(height: 1)
 
             ScrollView(.horizontal, showsIndicators: true) {
                 Text(code)
                     .font(.system(size: 13, design: .monospaced))
                     .foregroundColor(theme.primaryText)
+                    .lineSpacing(3)
                     .textSelection(.enabled)
                     .padding(12)
             }
         }
-        .background(theme.elevatedBackground)
+        .background(theme.cardBackground)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
