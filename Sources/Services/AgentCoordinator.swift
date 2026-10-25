@@ -466,6 +466,7 @@ class AgentCoordinator: ObservableObject {
                 return
             }
             stepIndex += 1
+            let contextMessages = conversation.messages
             let placeholderMsg = ChatMessage(
                 role: .assistant,
                 content: "",
