@@ -21,7 +21,15 @@ struct ConversationListView: View {
         guard !query.isEmpty else { return storage.conversations }
         return storage.conversations.filter { conv in
             if conv.title.lowercased().contains(query) { return true }
-            return conv.messages.contains { $0.content.lowercased().contains(query) }
+            return conv.messages.contains { msg in
+                if msg.content.lowercased().contains(query) { return true }
+                if let atts = msg.attachments {
+                    return atts.contains {
+                        $0.fileName.lowercased().contains(query) || ($0.textContent?.lowercased().contains(query) == true)
+                    }
+                }
+                return false
+            }
         }
     }
 
@@ -40,7 +48,7 @@ struct ConversationListView: View {
                         if filteredConversations.isEmpty {
                             emptyStateCard
                         } else {
-                            LazyVStack(spacing: 12) {
+                            VStack(spacing: 12) {
                                 ForEach(filteredConversations) { conv in
                                     conversationCard(for: conv)
                                 }
