@@ -422,7 +422,7 @@ struct ChatDetailView: View {
 
                 Text("有什么可以帮你的？")
                     .font(.system(size: 19, weight: .bold))
-                    .foregroundColor(theme.primaryText)
+                    .foregroundColor(theme.accent)
 
                 HStack(spacing: 8) {
                     Label(storage.settings.modelName, systemImage: "cpu")
@@ -685,357 +685,322 @@ struct ChatDetailView: View {
                         }
                     }
                     .foregroundColor(activeToolCount > 0 ? theme.accent : theme.secondaryText)
-struct ChatScrollViewObserver: UIViewRepresentable {
-    var autoFollowEnabled: Bool
-    var isGenerating: Bool
-    var contentDigest: Int
-    var manualScrollTrigger: Int
-    var onAutoFollowChanged: (Bool) -> Void
-    var onUserInteractionChanged: ((Bool) -> Void)? = nil
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3.5)
+                    .background(activeToolCount > 0 ? theme.accent.opacity(0.12) : Color.clear)
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .fixedSize()
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator(
-            autoFollowEnabled: autoFollowEnabled,
-            isGenerating: isGenerating,
-            onAutoFollowChanged: onAutoFollowChanged,
-            onUserInteractionChanged: onUserInteractionChanged
-        )
-    }
-
-    func makeUIView(context: Context) -> ObserverHostView {
-        let view = ObserverHostView()
-        view.backgroundColor = .clear
-        view.isUserInteractionEnabled = false
-        let coordinator = context.coordinator
-        view.onMoveToWindow = { [weak view, weak coordinator] in
-            guard let view = view, let coordinator = coordinator else { return }
-            coordinator.attachIfNeeded(from: view)
-        }
-        return view
-    }
-
-    func updateUIView(_ uiView: ObserverHostView, context: Context) {
-        let coordinator = context.coordinator
-        coordinator.onAutoFollowChanged = onAutoFollowChanged
-        coordinator.onUserInteractionChanged = onUserInteractionChanged
-        let wasGenerating = coordinator.isGenerating
-        coordinator.autoFollowEnabled = autoFollowEnabled
-        coordinator.isGenerating = isGenerating
-        coordinator.attachIfNeeded(from: uiView)
-
-        if manualScrollTrigger != coordinator.lastManualScrollTrigger {
-            coordinator.lastManualScrollTrigger = manualScrollTrigger
-            coordinator.forceScrollToBottom(animated: !isGenerating)
-            return
-        }
-
-        if contentDigest != coordinator.lastContentDigest {
-            coordinator.lastContentDigest = contentDigest
-            if autoFollowEnabled {
-                coordinator.followIfNeeded()
-            }
-        }
-
-        if wasGenerating && !isGenerating && autoFollowEnabled {
-            coordinator.schedulePostGenerationSettleAlignment()
-        }
-    }
-
-    final class ObserverHostView: UIView {
-        var onMoveToWindow: (() -> Void)?
-
-        override func didMoveToWindow() {
-            super.didMoveToWindow()
-            if window != nil {
-                onMoveToWindow?()
-            }
-        }
-    }
-
-    final class Coordinator: NSObject {
-        var autoFollowEnabled: Bool
-        var isGenerating: Bool
-        var onAutoFollowChanged: (Bool) -> Void
-        var onUserInteractionChanged: ((Bool) -> Void)?
-        var lastContentDigest: Int = 0
-        var lastManualScrollTrigger: Int = 0
-
-        private weak var observedScrollView: UIScrollView?
-        private var contentOffsetObservation: NSKeyValueObservation?
-        private var contentSizeObservation: NSKeyValueObservation?
-        private var panStateObservation: NSKeyValueObservation?
-        private var isPerformingProgrammaticScroll: Bool = false
-        private var userDraggedAwayDuringCurrentTouch: Bool = false
-        private var isReportingUserInteraction: Bool = false
-        private var settleWorkItem: DispatchWorkItem?
-        private var postGenerationSettleItems: [DispatchWorkItem] = []
-
-        private let bottomLockThreshold: CGFloat = 14.0
-        private let userBreakawayThreshold: CGFloat = 18.0
-        private let targetBottomGap: CGFloat = 0.0
-
-        init(
-            autoFollowEnabled: Bool,
-            isGenerating: Bool,
-            onAutoFollowChanged: @escaping (Bool) -> Void,
-            onUserInteractionChanged: ((Bool) -> Void)?
-        ) {
-            self.autoFollowEnabled = autoFollowEnabled
-            self.isGenerating = isGenerating
-            self.onAutoFollowChanged = onAutoFollowChanged
-            self.onUserInteractionChanged = onUserInteractionChanged
-            super.init()
-        }
-
-        deinit {
-            settleWorkItem?.cancel()
-            postGenerationSettleItems.forEach { $0.cancel() }
-            contentOffsetObservation?.invalidate()
-            contentSizeObservation?.invalidate()
-            panStateObservation?.invalidate()
-        }
-
-        private func setUserInteraction(_ interacting: Bool) {
-            settleWorkItem?.cancel()
-            settleWorkItem = nil
-            guard isReportingUserInteraction != interacting else { return }
-            isReportingUserInteraction = interacting
-            DispatchQueue.main.async { [weak self] in
-                self?.onUserInteractionChanged?(interacting)
-            }
-        }
-
-        private func scheduleInteractionEndAfterSettle(for scrollView: UIScrollView) {
-            settleWorkItem?.cancel()
-            let item = DispatchWorkItem { [weak self, weak scrollView] in
-                guard let self = self else { return }
-                if let sv = scrollView {
-                    let gestureState = sv.panGestureRecognizer.state
-                    let gestureActive = gestureState == .began || gestureState == .changed
-                    if sv.isTracking || sv.isDragging || gestureActive {
-                        self.scheduleInteractionEndAfterSettle(for: sv)
-                        return
-                    }
-                    let dist = self.distanceFromBottom(in: sv)
-                    if dist <= self.bottomLockThreshold {
-                        self.userDraggedAwayDuringCurrentTouch = false
-                        if !self.autoFollowEnabled {
-                            self.autoFollowEnabled = true
-                            self.onAutoFollowChanged(true)
+                if isInputFocused {
+                    Button(action: dismissKeyboard) {
+                        HStack(spacing: 3) {
+                            Image(systemName: "keyboard.chevron.compact.down")
+                                .font(.system(size: 12.5, weight: .medium))
+                            Text("收起")
+                                .font(.system(size: 11.5, weight: .medium))
                         }
+                        .foregroundColor(theme.secondaryText)
                     }
+                    .buttonStyle(.plain)
+                    .fixedSize()
                 }
-                self.setUserInteraction(false)
-            }
-            settleWorkItem = item
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08, execute: item)
-        }
 
-        func attachIfNeeded(from view: UIView) {
-            if let existing = observedScrollView, existing.window != nil {
-                return
-            }
-            DispatchQueue.main.async { [weak self, weak view] in
-                guard let self = self, let view = view else { return }
-                guard let scrollView = self.findScrollView(from: view) else { return }
-                guard self.observedScrollView !== scrollView else { return }
-                self.bind(to: scrollView)
-            }
-        }
+                Spacer(minLength: 16)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        handleBackgroundTap()
+                    }
 
-        private func findScrollView(from startView: UIView) -> UIScrollView? {
-            var current: UIView? = startView
-            while let node = current {
-                if let sv = node as? UIScrollView {
-                    return sv
-                }
-                current = node.superview
-            }
-            return nil
-        }
-
-        private func bind(to scrollView: UIScrollView) {
-            observedScrollView = scrollView
-            contentOffsetObservation?.invalidate()
-            contentSizeObservation?.invalidate()
-            panStateObservation?.invalidate()
-
-            scrollView.keyboardDismissMode = .interactive
-
-            panStateObservation = scrollView.panGestureRecognizer.observe(\.state, options: [.new]) { [weak self, weak scrollView] recognizer, _ in
-                guard let self = self, let scrollView = scrollView else { return }
-                let state = recognizer.state
-                if state == .began || state == .changed {
-                    self.setUserInteraction(true)
-                    let translation = recognizer.translation(in: scrollView)
-                    if translation.y > 4 {
-                        self.userDraggedAwayDuringCurrentTouch = true
-                        if self.autoFollowEnabled {
-                            self.autoFollowEnabled = false
-                            DispatchQueue.main.async {
-                                self.onAutoFollowChanged(false)
+                Menu {
+                    let profilesWithModels = storage.settings.providerProfiles.filter { !$0.enabledModels.isEmpty }
+                    if profilesWithModels.count > 1 {
+                        ForEach(profilesWithModels) { profile in
+                            Section(profile.name) {
+                                ForEach(profile.enabledModels, id: \.self) { m in
+                                    Button(action: {
+                                        storage.settings.selectChatModel(profileId: profile.id, model: m)
+                                    }) {
+                                        HStack {
+                                            Text(m)
+                                            if storage.settings.activeProfileId == profile.id && storage.settings.modelName == m {
+                                                Image(systemName: "checkmark")
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        Section("已启用对话模型") {
+                            ForEach(storage.settings.chatSelectableModelEntries, id: \.model) { entry in
+                                Button(action: {
+                                    storage.settings.selectChatModel(profileId: entry.profileId, model: entry.model)
+                                }) {
+                                    HStack {
+                                        Text(entry.model)
+                                        if storage.settings.modelName == entry.model {
+                                            Image(systemName: "checkmark")
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
-                } else if state == .ended || state == .cancelled || state == .failed {
-                    self.scheduleInteractionEndAfterSettle(for: scrollView)
-                }
-            }
-
-            contentOffsetObservation = scrollView.observe(\.contentOffset, options: [.old, .new]) { [weak self, weak scrollView] _, change in
-                guard let self = self, let scrollView = scrollView else { return }
-                self.handleOffsetChanged(scrollView, oldOffset: change.oldValue, newOffset: change.newValue)
-            }
-
-            contentSizeObservation = scrollView.observe(\.contentSize, options: [.old, .new]) { [weak self, weak scrollView] _, change in
-                guard let self = self, let scrollView = scrollView else { return }
-                let oldH = change.oldValue?.height ?? 0
-                let newH = change.newValue?.height ?? 0
-                guard abs(newH - oldH) > 0.5 else { return }
-                self.handleContentSizeChanged(scrollView)
-            }
-        }
-
-        private func maxBottomOffset(for scrollView: UIScrollView) -> CGFloat {
-            let inset = scrollView.adjustedContentInset
-            let rawMax = scrollView.contentSize.height - scrollView.bounds.height + inset.bottom - targetBottomGap
-            return max(-inset.top, rawMax)
-        }
-
-        private func distanceFromBottom(in scrollView: UIScrollView) -> CGFloat {
-            return maxBottomOffset(for: scrollView) - scrollView.contentOffset.y
-        }
-
-        private func isUserActivelyTouching(_ scrollView: UIScrollView) -> Bool {
-            let panState = scrollView.panGestureRecognizer.state
-            let panActive = panState == .began || panState == .changed
-            return scrollView.isTracking || scrollView.isDragging || panActive
-        }
-
-        private func handleOffsetChanged(_ scrollView: UIScrollView, oldOffset: CGPoint?, newOffset: CGPoint?) {
-            guard !isPerformingProgrammaticScroll else { return }
-
-            let dist = distanceFromBottom(in: scrollView)
-            let touching = isUserActivelyTouching(scrollView)
-
-            if touching {
-                setUserInteraction(true)
-
-                if let oldY = oldOffset?.y, let newY = newOffset?.y, newY < oldY - 0.5, dist > userBreakawayThreshold {
-                    userDraggedAwayDuringCurrentTouch = true
-                    if autoFollowEnabled {
-                        autoFollowEnabled = false
-                        DispatchQueue.main.async { [weak self] in
-                            self?.onAutoFollowChanged(false)
-                        }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "atom")
+                            .font(.system(size: 12.5, weight: .semibold))
+                            .foregroundColor(theme.accent)
+                        Text(storage.settings.modelName)
+                            .font(.system(size: 12.5, weight: .medium))
+                            .foregroundColor(theme.primaryText)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 9.5, weight: .semibold))
+                            .foregroundColor(theme.secondaryText)
                     }
-                    return
-                }
-
-                if dist > userBreakawayThreshold && userDraggedAwayDuringCurrentTouch {
-                    if autoFollowEnabled {
-                        autoFollowEnabled = false
-                        DispatchQueue.main.async { [weak self] in
-                            self?.onAutoFollowChanged(false)
-                        }
-                    }
-                    return
-                }
-            }
-
-            if dist <= bottomLockThreshold {
-                if !touching {
-                    userDraggedAwayDuringCurrentTouch = false
-                }
-                if !autoFollowEnabled && !userDraggedAwayDuringCurrentTouch {
-                    autoFollowEnabled = true
-                    DispatchQueue.main.async { [weak self] in
-                        self?.onAutoFollowChanged(true)
-                    }
-                }
-            } else if scrollView.isDecelerating && userDraggedAwayDuringCurrentTouch {
-                if autoFollowEnabled {
-                    autoFollowEnabled = false
-                    DispatchQueue.main.async { [weak self] in
-                        self?.onAutoFollowChanged(false)
-                    }
-                }
-            }
-
-            if !touching && !scrollView.isDecelerating && isReportingUserInteraction {
-                scheduleInteractionEndAfterSettle(for: scrollView)
-            }
-        }
-
-        private func handleContentSizeChanged(_ scrollView: UIScrollView) {
-            guard autoFollowEnabled else { return }
-            guard !isUserActivelyTouching(scrollView), !scrollView.isDecelerating else { return }
-            alignToBottomImmediately(scrollView)
-        }
-
-        func schedulePostGenerationSettleAlignment() {
-            postGenerationSettleItems.forEach { $0.cancel() }
-            postGenerationSettleItems.removeAll()
-
-            let delays: [TimeInterval] = [0.05, 0.18, 0.35]
-            for delay in delays {
-                let item = DispatchWorkItem { [weak self] in
-                    guard let self = self,
-                          self.autoFollowEnabled,
-                          let scrollView = self.observedScrollView else { return }
-                    guard !self.isUserActivelyTouching(scrollView), !scrollView.isDecelerating else { return }
-                    self.alignToBottomImmediately(scrollView)
-                }
-                postGenerationSettleItems.append(item)
-                DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
-            }
-        }
-
-        func followIfNeeded() {
-            guard autoFollowEnabled, let scrollView = observedScrollView else { return }
-            guard !isUserActivelyTouching(scrollView), !scrollView.isDecelerating else { return }
-            alignToBottomImmediately(scrollView)
-        }
-
-        func forceScrollToBottom(animated: Bool) {
-            userDraggedAwayDuringCurrentTouch = false
-            setUserInteraction(false)
-            if !autoFollowEnabled {
-                autoFollowEnabled = true
-                DispatchQueue.main.async { [weak self] in
-                    self?.onAutoFollowChanged(true)
-                }
-            }
-            guard let scrollView = observedScrollView else { return }
-            DispatchQueue.main.async { [weak self, weak scrollView] in
-                guard let self = self, let scrollView = scrollView else { return }
-                let targetY = self.maxBottomOffset(for: scrollView)
-                guard abs(scrollView.contentOffset.y - targetY) > 0.5 else { return }
-                if animated {
-                    self.isPerformingProgrammaticScroll = true
-                    scrollView.setContentOffset(CGPoint(x: 0, y: targetY), animated: true)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-                        self?.isPerformingProgrammaticScroll = false
-                    }
-                } else {
-                    self.alignToBottomImmediately(scrollView)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(theme.elevatedBackground.opacity(0.65))
+                    .clipShape(Capsule())
                 }
             }
         }
+        .padding(.horizontal, 13)
+        .padding(.vertical, 10)
+        .background(theme.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(theme.border, lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(theme.isDark ? 0.25 : 0.05), radius: 6, x: 0, y: 2)
+        .padding(.horizontal, 10)
+        .padding(.top, 4)
+        .padding(.bottom, 6)
+        .frame(width: viewportWidth)
+        .background(
+            theme.background
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    handleBackgroundTap()
+                }
+        )
+    }
 
-        private func alignToBottomImmediately(_ scrollView: UIScrollView) {
-            let targetY = maxBottomOffset(for: scrollView)
-            let delta = targetY - scrollView.contentOffset.y
-            guard abs(delta) > 0.5 else { return }
-
-            isPerformingProgrammaticScroll = true
-            UIView.performWithoutAnimation {
-                scrollView.setContentOffset(CGPoint(x: 0, y: targetY), animated: false)
+    private func stagedAttachmentChip(_ att: ChatAttachment) -> some View {
+        HStack(spacing: 7) {
+            if att.kind == .image,
+               let b64 = att.imageDataBase64,
+               let data = Data(base64Encoded: b64),
+               let img = UIImage(data: data) {
+                Image(uiImage: img)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 34, height: 34)
+                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            } else {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(theme.accent.opacity(0.14))
+                        .frame(width: 32, height: 32)
+                    Image(systemName: att.iconName)
+                        .font(.system(size: 13.5, weight: .semibold))
+                        .foregroundColor(theme.accent)
+                }
             }
-            isPerformingProgrammaticScroll = false
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(att.fileName)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(theme.primaryText)
+                    .lineLimit(1)
+                Text(att.metadataSummary)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(theme.secondaryText)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: 130, alignment: .leading)
+
+            Image(systemName: "xmark.circle.fill")
+                .font(.system(size: 15))
+                .foregroundColor(theme.mutedText)
+                .padding(2)
+                .contentShape(Circle())
+                .onTapGesture {
+                    pendingAttachments.removeAll { $0.id == att.id }
+                }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(theme.elevatedBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(theme.border, lineWidth: 1)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .onTapGesture {
+            previewingStagedAttachment = att
         }
     }
+
+    private var activeToolsSheet: some View {
+        NavigationStack {
+            ZStack {
+                theme.background.ignoresSafeArea()
+
+                if storage.servers.isEmpty {
+                    VStack(spacing: 12) {
+                        Image(systemName: "server.rack")
+                            .font(.system(size: 32))
+                            .foregroundColor(theme.mutedText)
+                        Text("尚未配置任何 MCP 服务")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundColor(theme.primaryText)
+                        Text("请前往底部「MCP 工具」标签页添加服务。")
+                            .font(.system(size: 13))
+                            .foregroundColor(theme.secondaryText)
+                    }
+                } else {
+                    ScrollView {
+                        VStack(spacing: 14) {
+                            ForEach(storage.servers) { server in
+                                VStack(alignment: .leading, spacing: 10) {
+                                    HStack {
+                                        Text(server.name)
+                                            .font(.system(size: 15, weight: .bold))
+                                            .foregroundColor(theme.primaryText)
+                                        Spacer()
+                                        Toggle("启用", isOn: Binding(
+                                            get: { server.isEnabled },
+                                            set: { val in
+                                                var s = server
+                                                s.isEnabled = val
+                                                storage.addOrUpdateServer(s)
+                                            }
+                                        ))
+                        .labelsHidden()
+                        .tint(theme.accent)
+                                    }
+
+                                    Text("\(server.tools.filter { $0.isEnabled }.count) / \(server.tools.count) 个工具已开启")
+                                        .font(.system(size: 12))
+                                        .foregroundColor(theme.secondaryText)
+                                }
+                                .padding(14)
+                                .background(theme.cardBackground)
+                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .stroke(theme.border, lineWidth: 1)
+                                )
+                            }
+                        }
+                        .padding(16)
+                    }
+                }
+            }
+            .navigationTitle("对话可用工具")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") {
+                        showingToolsSheet = false
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private func handleBackgroundTap() {
+        if isInputFocused {
+            dismissKeyboard()
+        }
+        if selectedTurnId != nil {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                selectedTurnId = nil
+            }
+        }
+    }
+
+    private func dismissKeyboard() {
+        isInputFocused = false
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    }
+
+    private func sendMessage() {
+        let prompt = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let attachmentsToSend = pendingAttachments
+        guard !prompt.isEmpty || !attachmentsToSend.isEmpty else { return }
+        inputText = ""
+        pendingAttachments = []
+        selectedTurnId = nil
+        autoFollowOutput = true
+        coordinator.streamingState.setDisplayPaused(false)
+        manualScrollTrigger &+= 1
+        dismissKeyboard()
+        coordinator.startSendMessage(
+            conversationId: conversationId,
+            userPrompt: prompt,
+            attachments: attachmentsToSend,
+            settings: storage.settings,
+            servers: storage.servers
+        )
+    }
+
+    private func sendSpecificPrompt(_ prompt: String) {
+        selectedTurnId = nil
+        autoFollowOutput = true
+        coordinator.streamingState.setDisplayPaused(false)
+        manualScrollTrigger &+= 1
+        dismissKeyboard()
+        coordinator.startSendMessage(
+            conversationId: conversationId,
+            userPrompt: prompt,
+            settings: storage.settings,
+            servers: storage.servers
+        )
+    }
 }
+
+private struct ChatScrollViewIntrospector: UIViewRepresentable {
+    var isGenerating: Bool
+    var autoFollowOutput: Bool
+    var isViewActive: Bool
+    var manualScrollTrigger: Int
+    var onUserTouchBegan: () -> Void
+    var onUserDragUp: () -> Void
+    var onReachBottom: () -> Void
+    var onScrollSettled: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(
+            isGenerating: isGenerating,
+            autoFollowOutput: autoFollowOutput,
+            isViewActive: isViewActive,
+            manualScrollTrigger: manualScrollTrigger,
+            onUserTouchBegan: onUserTouchBegan,
+            onUserDragUp: onUserDragUp,
+            onReachBottom: onReachBottom,
+            onScrollSettled: onScrollSettled
+        )
+    }
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView(frame: .zero)
+        view.isUserInteractionEnabled = false
+        view.backgroundColor = .clear
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        let coord = context.coordinator
+        let wasGenerating = coord.isGenerating
         let wasViewActive = coord.isViewActive
         coord.isGenerating = isGenerating
         coord.autoFollowOutput = autoFollowOutput
