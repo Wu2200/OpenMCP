@@ -389,6 +389,7 @@ struct MarkdownInlineText: View {
             TimelineView(StreamingRevealSchedule(end: lastSegment.date.addingTimeInterval(StreamingRevealTracker.fadeDuration))) { context in
                 styledText(StreamingRevealTracker.render(attr, runs: runs, at: context.date), baseColor: baseColor)
             }
+            .id(lastSegment.date)
         } else {
             styledText(attr, baseColor: baseColor)
         }
