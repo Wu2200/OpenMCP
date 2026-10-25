@@ -136,7 +136,7 @@ struct ChatDetailView: View {
                                             isActiveGeneratingTurn: activeGenerating,
                                             statusText: activeGenerating ? coordinator.statusText : "",
                                             thinkingStartTime: activeGenerating ? coordinator.thinkingStartTime : nil,
-                                            streamingState: activeGenerating ? coordinator.streamingState : nil,
+                                            streamingState: coordinator.streamingState,
                                             isSelected: selectedTurnId == turn.id,
                                             onSelectToggle: {
                                                 if isInputFocused {
@@ -208,19 +208,22 @@ struct ChatDetailView: View {
 
                                     StreamingScrollFollowerView(
                                         streamingState: coordinator.streamingState,
+                                        isGenerating: coordinator.isGenerating,
                                         autoFollowOutput: autoFollowOutput,
                                         onScrollToBottom: {
                                             scrollToBottomImmediate(proxy: proxy)
                                         }
                                     )
-                                    .frame(height: 2)
+                                    .frame(height: 1)
                                     .id("bottom_anchor")
                                 }
                                 .padding(.horizontal, 10)
                                 .padding(.top, 10)
-                                .padding(.bottom, 14)
+                                .padding(.bottom, 12)
                                 .background(
                                     ChatScrollViewIntrospector(
+                                        isGenerating: coordinator.isGenerating,
+                                        autoFollowOutput: autoFollowOutput,
                                         onUserDragUp: {
                                             if autoFollowOutput {
                                                 autoFollowOutput = false
@@ -865,6 +868,7 @@ struct ChatDetailView: View {
 
 private struct StreamingScrollFollowerView: View {
     @ObservedObject var streamingState: StreamingTurnState
+    let isGenerating: Bool
     let autoFollowOutput: Bool
     let onScrollToBottom: () -> Void
     @State private var lastScrollTime: TimeInterval = 0
@@ -874,20 +878,37 @@ private struct StreamingScrollFollowerView: View {
             .onChange(of: streamingState.displayedText.count) { _ in
                 guard autoFollowOutput else { return }
                 let now = CFAbsoluteTimeGetCurrent()
-                if now - lastScrollTime >= 0.085 {
+                if now - lastScrollTime >= 0.048 {
                     lastScrollTime = now
                     onScrollToBottom()
+                }
+            }
+            .onChange(of: isGenerating) { generating in
+                guard autoFollowOutput else { return }
+                if !generating {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) {
+                        if autoFollowOutput {
+                            onScrollToBottom()
+                        }
+                    }
                 }
             }
     }
 }
 
 private struct ChatScrollViewIntrospector: UIViewRepresentable {
+    var isGenerating: Bool
+    var autoFollowOutput: Bool
     var onUserDragUp: () -> Void
     var onReachBottom: () -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onUserDragUp: onUserDragUp, onReachBottom: onReachBottom)
+        Coordinator(
+            isGenerating: isGenerating,
+            autoFollowOutput: autoFollowOutput,
+            onUserDragUp: onUserDragUp,
+            onReachBottom: onReachBottom
+        )
     }
 
     func makeUIView(context: Context) -> UIView {
@@ -898,6 +919,8 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.isGenerating = isGenerating
+        context.coordinator.autoFollowOutput = autoFollowOutput
         context.coordinator.onUserDragUp = onUserDragUp
         context.coordinator.onReachBottom = onReachBottom
         DispatchQueue.main.async {
@@ -906,11 +929,22 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
     }
 
     final class Coordinator: NSObject {
+        var isGenerating: Bool
+        var autoFollowOutput: Bool
         var onUserDragUp: () -> Void
         var onReachBottom: () -> Void
         private weak var attachedScrollView: UIScrollView?
+        private var contentSizeObservation: NSKeyValueObservation?
+        private var lastObservedHeight: CGFloat = 0
 
-        init(onUserDragUp: @escaping () -> Void, onReachBottom: @escaping () -> Void) {
+        init(
+            isGenerating: Bool,
+            autoFollowOutput: Bool,
+            onUserDragUp: @escaping () -> Void,
+            onReachBottom: @escaping () -> Void
+        ) {
+            self.isGenerating = isGenerating
+            self.autoFollowOutput = autoFollowOutput
             self.onUserDragUp = onUserDragUp
             self.onReachBottom = onReachBottom
         }
@@ -924,10 +958,37 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
                         sv.delaysContentTouches = true
                         sv.canCancelContentTouches = true
                         sv.panGestureRecognizer.addTarget(self, action: #selector(handlePan(_:)))
+                        observeContentSize(of: sv)
                     }
                     break
                 }
                 current = candidate.superview
+            }
+        }
+
+        private func observeContentSize(of scrollView: UIScrollView) {
+            contentSizeObservation?.invalidate()
+            lastObservedHeight = scrollView.contentSize.height
+            contentSizeObservation = scrollView.observe(\.contentSize, options: [.new]) { [weak self] sv, _ in
+                guard let self = self else { return }
+                let newHeight = sv.contentSize.height
+                let delta = newHeight - self.lastObservedHeight
+                self.lastObservedHeight = newHeight
+
+                guard self.isGenerating,
+                      self.autoFollowOutput,
+                      !sv.isTracking,
+                      !sv.isDragging,
+                      delta > 0.5 else {
+                    return
+                }
+
+                let bottomInset = sv.adjustedContentInset.bottom
+                let topInset = sv.adjustedContentInset.top
+                let targetY = max(-topInset, newHeight - sv.bounds.height + bottomInset)
+                if targetY > sv.contentOffset.y {
+                    sv.setContentOffset(CGPoint(x: 0, y: targetY), animated: false)
+                }
             }
         }
 
@@ -936,7 +997,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
             let translation = recognizer.translation(in: sv)
 
             if recognizer.state == .began || recognizer.state == .changed {
-                if translation.y > 4 {
+                if translation.y > 2 {
                     onUserDragUp()
                 }
             } else if recognizer.state == .ended || recognizer.state == .cancelled {

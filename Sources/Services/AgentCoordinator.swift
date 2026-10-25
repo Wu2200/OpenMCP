@@ -9,27 +9,47 @@ final class StreamingTurnState: ObservableObject {
 
     private var targetText: String = ""
     private var animationTimer: Timer? = nil
+    private var drainContinuations: [CheckedContinuation<Void, Never>] = []
+    private var isAcceleratingDrain: Bool = false
 
     func begin(messageId: String) {
         stopTimer()
+        resumeAllContinuations()
         activeMessageId = messageId
         targetText = ""
         displayedText = ""
+        isAcceleratingDrain = false
     }
 
     func pushPartialText(_ newText: String) {
         targetText = newText
-        if displayedText.isEmpty && newText.count <= 12 {
+        if displayedText.isEmpty && newText.count <= 4 {
             displayedText = newText
             return
         }
         startTimerIfNeeded()
     }
 
-    func finish(with finalText: String) {
+    func completeAndDrain(with finalText: String) async {
+        targetText = finalText
+        isAcceleratingDrain = true
+        if displayedText.count >= targetText.count {
+            displayedText = finalText
+            stopTimer()
+            return
+        }
+        startTimerIfNeeded()
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            drainContinuations.append(continuation)
+        }
+    }
+
+    func finishImmediate(with finalText: String) {
         stopTimer()
         targetText = finalText
         displayedText = finalText
+        isAcceleratingDrain = false
+        resumeAllContinuations()
     }
 
     func reset() {
@@ -37,11 +57,13 @@ final class StreamingTurnState: ObservableObject {
         activeMessageId = nil
         targetText = ""
         displayedText = ""
+        isAcceleratingDrain = false
+        resumeAllContinuations()
     }
 
     private func startTimerIfNeeded() {
         guard animationTimer == nil else { return }
-        animationTimer = Timer.scheduledTimer(withTimeInterval: 0.028, repeats: true) { [weak self] _ in
+        animationTimer = Timer.scheduledTimer(withTimeInterval: 0.032, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.tick()
             }
@@ -53,23 +75,58 @@ final class StreamingTurnState: ObservableObject {
         animationTimer = nil
     }
 
+    private func resumeAllContinuations() {
+        guard !drainContinuations.isEmpty else { return }
+        let pending = drainContinuations
+        drainContinuations.removeAll()
+        for cont in pending {
+            cont.resume()
+        }
+    }
+
     private func tick() {
         guard displayedText.count < targetText.count else {
             if displayedText != targetText {
                 displayedText = targetText
             }
             stopTimer()
+            resumeAllContinuations()
             return
         }
 
         let remaining = targetText.count - displayedText.count
-        let step = max(3, min(remaining, max(4, remaining / 3)))
+        let step: Int
+        if isAcceleratingDrain {
+            if remaining <= 36 {
+                step = 2
+            } else if remaining <= 120 {
+                step = 4
+            } else if remaining <= 360 {
+                step = 9
+            } else {
+                step = max(14, remaining / 22)
+            }
+        } else {
+            if remaining <= 30 {
+                step = 2
+            } else if remaining <= 90 {
+                step = 3
+            } else if remaining <= 240 {
+                step = 6
+            } else if remaining <= 600 {
+                step = 12
+            } else {
+                step = max(16, remaining / 28)
+            }
+        }
+
         let nextCount = min(targetText.count, displayedText.count + step)
         let idx = targetText.index(targetText.startIndex, offsetBy: nextCount)
         displayedText = String(targetText[..<idx])
 
         if displayedText.count >= targetText.count {
             stopTimer()
+            resumeAllContinuations()
         }
     }
 }
@@ -301,7 +358,16 @@ class AgentCoordinator: ObservableObject {
                 }
 
                 let finalText = content ?? ""
-                streamingState.finish(with: finalText)
+                if !finalText.isEmpty {
+                    await streamingState.completeAndDrain(with: finalText)
+                } else {
+                    streamingState.finishImmediate(with: "")
+                }
+
+                if isCancelledByUser || Task.isCancelled {
+                    return
+                }
+
                 conversation.messages[msgIndex].content = finalText
 
                 if let calls = toolCalls, !calls.isEmpty {

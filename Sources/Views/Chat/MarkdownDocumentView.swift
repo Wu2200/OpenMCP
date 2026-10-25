@@ -123,12 +123,12 @@ struct MarkdownDocumentView: View {
                     theme: theme,
                     isStreaming: isStreaming && (block.id == blocks.last?.id)
                 )
-                .equatable()
-                .transition(.opacity.combined(with: .offset(y: 2)))
+                .transition(.opacity.combined(with: .offset(y: 3)))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .animation(isStreaming ? .easeOut(duration: 0.16) : nil, value: blocks.count)
+        .fixedSize(horizontal: false, vertical: true)
+        .animation(isStreaming ? .easeOut(duration: 0.24) : nil, value: blocks.count)
     }
 }
 
@@ -158,6 +158,7 @@ struct MarkdownBlockItemView: View, Equatable {
                 }
             }
             .padding(.vertical, 1)
+            .fixedSize(horizontal: false, vertical: true)
 
         case .blockquote(_, let text):
             MarkdownInlineText(text: text, fontSize: 14, weight: .regular, theme: theme, isSecondary: true, isStreaming: isStreaming)
@@ -166,6 +167,7 @@ struct MarkdownBlockItemView: View, Equatable {
                 .padding(.trailing, 10)
                 .padding(.vertical, 7)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
                 .background(theme.elevatedBackground.opacity(0.6))
                 .overlay(alignment: .leading) {
                     RoundedRectangle(cornerRadius: 2)
@@ -210,6 +212,7 @@ struct MarkdownBlockItemView: View, Equatable {
             }
         }
         .padding(.top, level <= 2 ? 4 : 2)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     @ViewBuilder
@@ -241,6 +244,7 @@ struct MarkdownBlockItemView: View, Equatable {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.leading, CGFloat(normalizedIndent) * 14)
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -259,8 +263,9 @@ struct MarkdownInlineText: View {
             .tint(theme.accent)
             .textSelection(.enabled)
             .contentTransition(.opacity)
-            .animation(isStreaming ? .easeOut(duration: 0.14) : nil, value: text)
+            .animation(isStreaming ? .easeInOut(duration: 0.18) : nil, value: text)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -326,6 +331,7 @@ struct MarkdownTableView: View {
                     )
                 }
             }
+            .fixedSize(horizontal: true, vertical: true)
             .background(theme.cardBackground)
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay(
@@ -333,6 +339,7 @@ struct MarkdownTableView: View {
                     .stroke(theme.border, lineWidth: 1)
             )
         }
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     @ViewBuilder
@@ -361,6 +368,7 @@ struct MarkdownTableView: View {
                     }
             }
         }
+        .fixedSize(horizontal: false, vertical: true)
         .background(
             isHeader
                 ? theme.elevatedBackground
@@ -377,6 +385,7 @@ struct MarkdownTableView: View {
             .tint(theme.accent)
             .multilineTextAlignment(textAlignment(for: alignment))
             .lineSpacing(2.5)
+            .fixedSize(horizontal: false, vertical: true)
             .textSelection(.enabled)
     }
 

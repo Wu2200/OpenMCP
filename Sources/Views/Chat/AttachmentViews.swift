@@ -10,22 +10,21 @@ struct ThinkingStatusView: View {
     let theme: AppThemePalette
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 0.1)) { context in
+        TimelineView(.periodic(from: .now, by: 0.04)) { context in
             let elapsed = max(0, context.date.timeIntervalSince(startDate))
-            let phase = Int((elapsed * 3.2).rounded(.down)) % 3
 
             HStack(spacing: 7) {
                 Text(statusText.isEmpty ? "思考中" : statusText)
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundColor(theme.primaryText)
 
-                HStack(spacing: 3.5) {
+                HStack(spacing: 4) {
                     ForEach(0..<3, id: \.self) { index in
+                        let wave = (sin(elapsed * 2.5 - Double(index) * 0.9) + 1.0) * 0.5
                         Circle()
-                            .fill(theme.accent.opacity(phase == index ? 1.0 : 0.32))
+                            .fill(theme.accent.opacity(0.28 + 0.72 * wave))
                             .frame(width: 5, height: 5)
-                            .scaleEffect(phase == index ? 1.15 : 0.88)
-                            .animation(.easeInOut(duration: 0.2), value: phase)
+                            .scaleEffect(0.84 + 0.30 * wave)
                     }
                 }
 
@@ -88,6 +87,7 @@ struct AttachmentFileCardView: View {
                         .font(.system(size: 11.5, weight: .semibold))
                 }
                 .foregroundColor(theme.accent)
+                .fixedSize(horizontal: true, vertical: false)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 5.5)
                 .background(theme.accent.opacity(0.12))
@@ -105,6 +105,7 @@ struct AttachmentFileCardView: View {
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 6)
                     .background(theme.elevatedBackground.opacity(0.75))
@@ -113,6 +114,7 @@ struct AttachmentFileCardView: View {
         }
         .padding(10)
         .frame(maxWidth: 280, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
         .background(theme.cardBackground)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(

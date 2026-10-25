@@ -20,7 +20,7 @@ struct MessageBubbleView: View {
     var isActiveGeneratingTurn: Bool = false
     var statusText: String = ""
     var thinkingStartTime: Date? = nil
-    var streamingState: StreamingTurnState? = nil
+    @ObservedObject var streamingState: StreamingTurnState
     var isSelected: Bool = false
     var onSelectToggle: (() -> Void)? = nil
     var onEditSave: ((String) -> Void)? = nil
@@ -70,145 +70,183 @@ struct MessageBubbleView: View {
             ? ChatAttachment.makeLongTextAttachment(from: trimmed)
             : nil
 
-        return VStack(alignment: .trailing, spacing: 6) {
-            HStack(alignment: .top, spacing: 6) {
-                Spacer(minLength: 24)
+        return HStack(alignment: .top, spacing: 6) {
+            Spacer(minLength: 24)
 
-                if isEditing {
-                    editEditorBox(allowResend: true)
-                } else {
-                    VStack(alignment: .trailing, spacing: 6) {
-                        if !imageAtts.isEmpty {
-                            AttachmentImageGridView(
-                                attachments: imageAtts,
-                                theme: theme,
-                                isSelected: isSelected,
-                                onCardTap: {
-                                    onSelectToggle?()
-                                },
-                                onSelectImage: { img in
-                                    previewingImageAttachment = img
-                                }
-                            )
-                        }
+            if isEditing {
+                editEditorBox(allowResend: true)
+            } else {
+                VStack(alignment: .trailing, spacing: 6) {
+                    if !imageAtts.isEmpty {
+                        AttachmentImageGridView(
+                            attachments: imageAtts,
+                            theme: theme,
+                            isSelected: isSelected,
+                            onCardTap: {
+                                onSelectToggle?()
+                            },
+                            onSelectImage: { img in
+                                previewingImageAttachment = img
+                            }
+                        )
+                    }
 
-                        ForEach(fileAtts) { fileAtt in
-                            AttachmentFileCardView(
-                                attachment: fileAtt,
-                                theme: theme,
-                                isSelected: isSelected,
-                                onCardTap: {
-                                    onSelectToggle?()
-                                },
-                                onPreviewTap: {
-                                    previewingFileAttachment = fileAtt
-                                }
-                            )
-                        }
+                    ForEach(fileAtts) { fileAtt in
+                        AttachmentFileCardView(
+                            attachment: fileAtt,
+                            theme: theme,
+                            isSelected: isSelected,
+                            onCardTap: {
+                                onSelectToggle?()
+                            },
+                            onPreviewTap: {
+                                previewingFileAttachment = fileAtt
+                            }
+                        )
+                    }
 
-                        if let packaged = autoPackagedLongText {
-                            AttachmentFileCardView(
-                                attachment: packaged,
-                                theme: theme,
-                                isSelected: isSelected,
-                                onCardTap: {
-                                    onSelectToggle?()
-                                },
-                                onPreviewTap: {
-                                    previewingFileAttachment = packaged
-                                }
+                    if let packaged = autoPackagedLongText {
+                        AttachmentFileCardView(
+                            attachment: packaged,
+                            theme: theme,
+                            isSelected: isSelected,
+                            onCardTap: {
+                                onSelectToggle?()
+                            },
+                            onPreviewTap: {
+                                previewingFileAttachment = packaged
+                            }
+                        )
+                    } else if !trimmed.isEmpty {
+                        Text(turn.content)
+                            .font(.system(size: 15, weight: .regular))
+                            .foregroundColor(theme.primaryText)
+                            .lineSpacing(3.5)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 9)
+                            .background(theme.userMessageBackground)
+                            .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                                    .stroke(isSelected ? theme.accent.opacity(0.55) : theme.accent.opacity(0.18), lineWidth: 1)
                             )
-                        } else if !trimmed.isEmpty {
-                            Text(turn.content)
-                                .font(.system(size: 15, weight: .regular))
-                                .foregroundColor(theme.primaryText)
-                                .lineSpacing(3.5)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 9)
-                                .background(theme.userMessageBackground)
-                                .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 15, style: .continuous)
-                                        .stroke(isSelected ? theme.accent.opacity(0.55) : theme.accent.opacity(0.18), lineWidth: 1)
-                                )
-                                .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-                                .onTapGesture {
-                                    onSelectToggle?()
-                                }
-                        }
+                            .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                            .onTapGesture {
+                                onSelectToggle?()
+                            }
+                    }
+
+                    if isSelected {
+                        floatingActionPill
+                            .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .topTrailing)))
                     }
                 }
-
-                compactAvatar(isUser: true)
-                    .onTapGesture {
-                        onSelectToggle?()
-                    }
+                .fixedSize(horizontal: false, vertical: true)
             }
 
-            if isSelected && !isEditing {
-                floatingActionPill
-                    .padding(.trailing, 30)
-                    .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .topTrailing)))
-            }
+            compactAvatar(isUser: true)
+                .onTapGesture {
+                    onSelectToggle?()
+                }
         }
+    }
+
+    private var effectiveAssistantText: String {
+        let base = turn.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isActiveGeneratingTurn else {
+            return base
+        }
+        let live = streamingState.displayedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !live.isEmpty {
+            if base.isEmpty || (turn.underlyingMessageIds.contains(streamingState.activeMessageId ?? "") && base == live) {
+                return live
+            }
+            if !base.isEmpty && live != base && !base.hasSuffix(live) {
+                return base + "\n\n" + live
+            }
+            return live
+        }
+        return base
     }
 
     private var assistantTurnView: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .top, spacing: 6) {
-                compactAvatar(isUser: false)
-                    .onTapGesture {
-                        onSelectToggle?()
+        let currentText = effectiveAssistantText
+        let isPureThinking = isActiveGeneratingTurn && currentText.isEmpty && turn.toolCalls.isEmpty
+
+        return HStack(alignment: .top, spacing: 6) {
+            compactAvatar(isUser: false)
+                .onTapGesture {
+                    onSelectToggle?()
+                }
+
+            if isEditing {
+                editEditorBox(allowResend: false)
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    if isPureThinking {
+                        ThinkingStatusView(
+                            statusText: statusText,
+                            startDate: thinkingStartTime ?? turn.createdAt,
+                            theme: theme
+                        )
+                        .padding(.horizontal, 13)
+                        .padding(.vertical, 9)
+                        .background(theme.cardBackground)
+                        .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 15, style: .continuous)
+                                .stroke(isSelected ? theme.accent.opacity(0.45) : theme.border, lineWidth: 1)
+                        )
+                        .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                        .onTapGesture {
+                            onSelectToggle?()
+                        }
+                    } else {
+                        VStack(alignment: .leading, spacing: 8) {
+                            if !turn.toolCalls.isEmpty {
+                                ToolCallSummaryGroupView(toolCalls: turn.toolCalls, theme: theme)
+                            }
+
+                            if !currentText.isEmpty {
+                                MarkdownDocumentView(
+                                    content: currentText,
+                                    theme: theme,
+                                    isStreaming: isActiveGeneratingTurn
+                                )
+                            } else if isActiveGeneratingTurn {
+                                ThinkingStatusView(
+                                    statusText: statusText,
+                                    startDate: thinkingStartTime ?? turn.createdAt,
+                                    theme: theme
+                                )
+                                .padding(.top, 2)
+                            }
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .background(theme.cardBackground)
+                        .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 15, style: .continuous)
+                                .stroke(isSelected ? theme.accent.opacity(0.45) : theme.border, lineWidth: 1)
+                        )
+                        .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                        .onTapGesture {
+                            onSelectToggle?()
+                        }
                     }
 
-                if isEditing {
-                    editEditorBox(allowResend: false)
-                } else if isActiveGeneratingTurn, let streamState = streamingState {
-                    ActiveStreamingAssistantBubbleContent(
-                        turn: turn,
-                        theme: theme,
-                        statusText: statusText,
-                        thinkingStartTime: thinkingStartTime,
-                        isSelected: isSelected,
-                        streamingState: streamState,
-                        onSelectToggle: onSelectToggle
-                    )
-                } else {
-                    staticAssistantBubbleContent
+                    if isSelected {
+                        floatingActionPill
+                            .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .topLeading)))
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
             }
-
-            if isSelected && !isEditing {
-                floatingActionPill
-                    .padding(.leading, 30)
-                    .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .topLeading)))
-            }
-        }
-    }
-
-    private var staticAssistantBubbleContent: some View {
-        let trimmed = turn.content.trimmingCharacters(in: .whitespacesAndNewlines)
-        return VStack(alignment: .leading, spacing: 8) {
-            if !turn.toolCalls.isEmpty {
-                ToolCallSummaryGroupView(toolCalls: turn.toolCalls, theme: theme)
-            }
-
-            if !trimmed.isEmpty {
-                MarkdownDocumentView(content: trimmed, theme: theme, isStreaming: false)
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(theme.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 15, style: .continuous)
-                .stroke(isSelected ? theme.accent.opacity(0.45) : theme.border, lineWidth: 1)
-        )
-        .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-        .onTapGesture {
-            onSelectToggle?()
         }
     }
 
@@ -237,6 +275,7 @@ struct MessageBubbleView: View {
                     .font(.system(size: 11.5, weight: .medium))
             }
             .foregroundColor(isGenerating ? theme.mutedText : theme.secondaryText)
+            .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
             .contentShape(Capsule())
@@ -256,6 +295,7 @@ struct MessageBubbleView: View {
                     .font(.system(size: 11.5, weight: .medium))
             }
             .foregroundColor(isGenerating ? theme.mutedText : theme.secondaryText)
+            .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
             .contentShape(Capsule())
@@ -280,6 +320,7 @@ struct MessageBubbleView: View {
                         .font(.system(size: 11.5, weight: .medium))
                 }
                 .foregroundColor(isCopied ? theme.accent : theme.secondaryText)
+                .fixedSize(horizontal: true, vertical: false)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 5)
                 .contentShape(Capsule())
@@ -303,6 +344,7 @@ struct MessageBubbleView: View {
                     .font(.system(size: 11.5, weight: .medium))
             }
             .foregroundColor(isGenerating ? theme.mutedText : Color.red.opacity(0.8))
+            .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
             .contentShape(Capsule())
@@ -403,88 +445,6 @@ struct MessageBubbleView: View {
     }
 }
 
-private struct ActiveStreamingAssistantBubbleContent: View {
-    let turn: MessageDisplayTurn
-    let theme: AppThemePalette
-    let statusText: String
-    let thinkingStartTime: Date?
-    let isSelected: Bool
-    @ObservedObject var streamingState: StreamingTurnState
-    var onSelectToggle: (() -> Void)?
-
-    private var combinedContent: String {
-        let base = turn.content.trimmingCharacters(in: .whitespacesAndNewlines)
-        let live = streamingState.displayedText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !live.isEmpty {
-            if base.isEmpty || turn.underlyingMessageIds.contains(streamingState.activeMessageId ?? "") && base == live {
-                return live
-            }
-            if !turn.content.isEmpty && live != base {
-                return base + "\n\n" + live
-            }
-            return live
-        }
-        return base
-    }
-
-    var body: some View {
-        let currentText = combinedContent
-        let isPureThinking = currentText.isEmpty && turn.toolCalls.isEmpty
-
-        if isPureThinking {
-            ThinkingStatusView(
-                statusText: statusText,
-                startDate: thinkingStartTime ?? turn.createdAt,
-                theme: theme
-            )
-            .padding(.horizontal, 13)
-            .padding(.vertical, 9)
-            .background(theme.cardBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 15, style: .continuous)
-                    .stroke(isSelected ? theme.accent.opacity(0.45) : theme.border, lineWidth: 1)
-            )
-            .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-            .onTapGesture {
-                onSelectToggle?()
-            }
-
-            Spacer(minLength: 36)
-        } else {
-            VStack(alignment: .leading, spacing: 8) {
-                if !turn.toolCalls.isEmpty {
-                    ToolCallSummaryGroupView(toolCalls: turn.toolCalls, theme: theme)
-                }
-
-                if !currentText.isEmpty {
-                    MarkdownDocumentView(content: currentText, theme: theme, isStreaming: true)
-                } else {
-                    ThinkingStatusView(
-                        statusText: statusText,
-                        startDate: thinkingStartTime ?? turn.createdAt,
-                        theme: theme
-                    )
-                    .padding(.top, 2)
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(theme.cardBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 15, style: .continuous)
-                    .stroke(isSelected ? theme.accent.opacity(0.45) : theme.border, lineWidth: 1)
-            )
-            .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-            .onTapGesture {
-                onSelectToggle?()
-            }
-        }
-    }
-}
-
 struct CodeBlockCard: View {
     let language: String
     let code: String
@@ -520,7 +480,7 @@ struct CodeBlockCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 HStack(spacing: 5) {
                     Text(language.lowercased())
                         .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
@@ -529,11 +489,11 @@ struct CodeBlockCard: View {
                         .fixedSize(horizontal: true, vertical: false)
 
                     Text("\(totalLines) 行")
-                        .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
                         .foregroundColor(theme.mutedText)
                         .lineLimit(1)
                         .fixedSize(horizontal: true, vertical: false)
-                        .padding(.horizontal, 6)
+                        .padding(.horizontal, 5)
                         .padding(.vertical, 1.5)
                         .background(theme.cardBackground.opacity(0.7))
                         .clipShape(Capsule())
@@ -545,12 +505,13 @@ struct CodeBlockCard: View {
                     HStack(spacing: 3) {
                         Image(systemName: "doc.text.magnifyingglass")
                             .font(.system(size: 10.5, weight: .semibold))
-                        Text("查看全文")
+                        Text("全文")
                             .font(.system(size: 11, weight: .medium))
                             .lineLimit(1)
                     }
                     .foregroundColor(theme.secondaryText)
-                    .padding(.horizontal, 4)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .padding(.horizontal, 5)
                     .padding(.vertical, 3)
                     .contentShape(Rectangle())
                     .onTapGesture {
@@ -565,7 +526,8 @@ struct CodeBlockCard: View {
                             .lineLimit(1)
                     }
                     .foregroundColor(theme.accent)
-                    .padding(.horizontal, 4)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .padding(.horizontal, 5)
                     .padding(.vertical, 3)
                     .contentShape(Rectangle())
                     .onTapGesture {
@@ -583,7 +545,8 @@ struct CodeBlockCard: View {
                         .lineLimit(1)
                 }
                 .foregroundColor(copied ? theme.accent : theme.secondaryText)
-                .padding(.horizontal, 4)
+                .fixedSize(horizontal: true, vertical: false)
+                .padding(.horizontal, 5)
                 .padding(.vertical, 3)
                 .contentShape(Rectangle())
                 .onTapGesture {
@@ -607,9 +570,11 @@ struct CodeBlockCard: View {
                     .font(.system(size: 12.5, design: .monospaced))
                     .foregroundColor(theme.primaryText)
                     .lineSpacing(3)
+                    .fixedSize(horizontal: true, vertical: true)
                     .textSelection(.enabled)
                     .padding(10)
             }
+            .fixedSize(horizontal: false, vertical: true)
 
             if isCollapsible {
                 Rectangle()
@@ -634,6 +599,7 @@ struct CodeBlockCard: View {
                 }
             }
         }
+        .fixedSize(horizontal: false, vertical: true)
         .background(theme.cardBackground)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
