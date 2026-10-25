@@ -1,71 +1,143 @@
 import SwiftUI
+import UIKit
 
 struct ToolCallCardView: View {
+    @EnvironmentObject var storage: DataStorage
     let toolCall: ToolCallItem
     @State private var isExpanded: Bool = false
+    @State private var isCopied: Bool = false
+
+    private var theme: AppThemePalette {
+        storage.settings.currentTheme
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 0) {
             Button(action: {
                 withAnimation(.easeInOut(duration: 0.2)) {
                     isExpanded.toggle()
                 }
             }) {
-                HStack(spacing: 8) {
-                    if toolCall.isExecuting {
-                        ProgressView()
-                            .scaleEffect(0.7)
-                    } else if toolCall.error != nil {
-                        Image(systemName: "exclamationmark.circle.fill")
-                            .foregroundColor(.orange)
-                    } else {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundColor(.green)
+                HStack(spacing: 10) {
+                    ZStack {
+                        Circle()
+                            .fill(statusColor.opacity(0.15))
+                            .frame(width: 26, height: 26)
+                        if toolCall.isExecuting {
+                            ProgressView()
+                                .scaleEffect(0.65)
+                                .tint(theme.accent)
+                        } else {
+                            Image(systemName: statusIcon)
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundColor(statusColor)
+                        }
                     }
 
-                    Text("工具: \(toolCall.name)")
-                        .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                        .foregroundColor(.primary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(toolCall.name)
+                            .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                            .foregroundColor(theme.primaryText)
+                            .lineLimit(1)
+
+                        Text(statusLabel)
+                            .font(.system(size: 11))
+                            .foregroundColor(theme.secondaryText)
+                    }
 
                     Spacer()
 
+                    Text(isExpanded ? "收起详情" : "查看参数")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(theme.mutedText)
+
                     Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(theme.mutedText)
                 }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
             }
+            .buttonStyle(.plain)
 
             if isExpanded {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("输入参数:")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(.secondary)
-                    Text(toolCall.arguments)
-                        .font(.system(size: 12, design: .monospaced))
-                        .padding(8)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color(.tertiarySystemBackground))
-                        .cornerRadius(6)
+                VStack(alignment: .leading, spacing: 8) {
+                    Divider()
+                        .overlay(theme.border)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("调用参数 (Arguments)")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(theme.secondaryText)
+
+                        Text(toolCall.arguments)
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundColor(theme.primaryText)
+                            .textSelection(.enabled)
+                            .padding(10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(theme.cardBackground)
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    }
 
                     if let res = toolCall.result {
-                        Text("返回结果:")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(.secondary)
-                            .padding(.top, 2)
-                        Text(res)
-                            .font(.system(size: 12, design: .monospaced))
-                            .lineLimit(12)
-                            .padding(8)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color(.tertiarySystemBackground))
-                            .cornerRadius(6)
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text("执行结果 (Output)")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundColor(theme.secondaryText)
+                                Spacer()
+                                Button(action: {
+                                    UIPasteboard.general.string = res
+                                    withAnimation { isCopied = true }
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                        withAnimation { isCopied = false }
+                                    }
+                                }) {
+                                    Text(isCopied ? "已复制" : "复制结果")
+                                        .font(.system(size: 11, weight: .medium))
+                                        .foregroundColor(theme.accent)
+                                }
+                            }
+
+                            Text(res)
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundColor(theme.primaryText)
+                                .lineLimit(14)
+                                .textSelection(.enabled)
+                                .padding(10)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(theme.cardBackground)
+                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        }
                     }
                 }
-                .transition(.opacity)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 12)
             }
         }
-        .padding(10)
-        .background(Color(.secondarySystemBackground))
-        .cornerRadius(10)
+        .background(theme.elevatedBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(theme.border, lineWidth: 1)
+        )
+    }
+
+    private var statusColor: Color {
+        if toolCall.isExecuting { return theme.accent }
+        if toolCall.error != nil { return .orange }
+        return .green
+    }
+
+    private var statusIcon: String {
+        if toolCall.error != nil { return "exclamationmark.triangle.fill" }
+        return "checkmark"
+    }
+
+    private var statusLabel: String {
+        if toolCall.isExecuting { return "正在执行 MCP 工具调用..." }
+        if let err = toolCall.error { return "执行异常: \(err)" }
+        return "已完成工具调用"
     }
 }

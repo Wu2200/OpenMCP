@@ -4,7 +4,11 @@ import Combine
 class DataStorage: ObservableObject {
     static let shared = DataStorage()
 
-    @Published var settings: OpenAISettings
+    @Published var settings: OpenAISettings {
+        didSet {
+            saveSettings()
+        }
+    }
     @Published var servers: [MCPServer]
     @Published var conversations: [Conversation]
 
@@ -67,6 +71,11 @@ class DataStorage: ObservableObject {
         saveServers()
     }
 
+    func deleteServer(id: String) {
+        servers.removeAll { $0.id == id }
+        saveServers()
+    }
+
     func addConversation(title: String = "新对话") -> Conversation {
         let conv = Conversation(title: title, messages: [])
         conversations.insert(conv, at: 0)
@@ -81,8 +90,21 @@ class DataStorage: ObservableObject {
         }
     }
 
+    func clearConversationMessages(id: String) {
+        if let index = conversations.firstIndex(where: { $0.id == id }) {
+            conversations[index].messages.removeAll()
+            conversations[index].updatedAt = Date()
+            saveConversations()
+        }
+    }
+
     func deleteConversation(at indexSet: IndexSet) {
         conversations.remove(atOffsets: indexSet)
+        saveConversations()
+    }
+
+    func deleteConversation(id: String) {
+        conversations.removeAll { $0.id == id }
         saveConversations()
     }
 }
