@@ -13,6 +13,7 @@ final class StreamingTurnState: ObservableObject {
     private var lastTextCommitTime: CFAbsoluteTime = 0
     private var lastReasoningCommitTime: CFAbsoluteTime = 0
     private var coalesceWorkItem: DispatchWorkItem? = nil
+    private var isDisplayPaused = false
 
     func begin(messageId: String) {
         coalesceWorkItem?.cancel()
@@ -21,14 +22,27 @@ final class StreamingTurnState: ObservableObject {
         pendingReasoning = nil
         lastTextCommitTime = 0
         lastReasoningCommitTime = 0
+        isDisplayPaused = false
         activeMessageId = messageId
         displayedText = ""
         displayedReasoning = ""
     }
 
+    func setDisplayPaused(_ paused: Bool) {
+        guard isDisplayPaused != paused else { return }
+        isDisplayPaused = paused
+        if paused {
+            coalesceWorkItem?.cancel()
+            coalesceWorkItem = nil
+        } else {
+            commitPendingUpdates(at: CFAbsoluteTimeGetCurrent())
+        }
+    }
+
     func pushPartialText(_ newText: String) {
         guard displayedText != newText else { return }
         pendingText = newText
+        guard !isDisplayPaused else { return }
 
         let now = CFAbsoluteTimeGetCurrent()
         let elapsed = now - lastTextCommitTime
@@ -44,6 +58,7 @@ final class StreamingTurnState: ObservableObject {
     func pushPartialReasoning(_ newReasoning: String) {
         guard displayedReasoning != newReasoning else { return }
         pendingReasoning = newReasoning
+        guard !isDisplayPaused else { return }
 
         let now = CFAbsoluteTimeGetCurrent()
         let elapsed = now - lastReasoningCommitTime
@@ -70,6 +85,7 @@ final class StreamingTurnState: ObservableObject {
     private func commitPendingUpdates(at timestamp: CFAbsoluteTime) {
         coalesceWorkItem?.cancel()
         coalesceWorkItem = nil
+        guard !isDisplayPaused else { return }
 
         var transaction = Transaction()
         transaction.disablesAnimations = true
@@ -109,6 +125,7 @@ final class StreamingTurnState: ObservableObject {
         coalesceWorkItem = nil
         pendingText = nil
         pendingReasoning = nil
+        isDisplayPaused = false
 
         var transaction = Transaction()
         transaction.disablesAnimations = true
