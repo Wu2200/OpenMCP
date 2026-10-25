@@ -1053,7 +1053,9 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
                 if abs(delta) > 0.1 {
                     sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: targetY), animated: false)
                 }
-                stopFollowing()
+                if !isGenerating {
+                    stopFollowing()
+                }
                 return
             }
 
