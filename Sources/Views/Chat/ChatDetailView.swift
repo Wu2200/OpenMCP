@@ -1023,7 +1023,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
             )
         }
 
-        private func startFollowing() {
+        func startFollowing() {
             guard displayLink == nil else { return }
             lastDisplayTimestamp = 0
             let link = CADisplayLink(target: self, selector: #selector(followBottomOnDisplayLink(_:)))
