@@ -509,6 +509,7 @@ class AgentCoordinator: ObservableObject {
 
                 conversation.messages[msgIndex].content = finalText
                 conversation.messages[msgIndex].reasoningContent = reasoning
+                DataStorage.shared.updateConversation(conversation, persistImmediately: false)
 
                 if let calls = toolCalls, !calls.isEmpty {
                     var executingCalls = calls.map { c -> ToolCallItem in
@@ -617,7 +618,8 @@ class AgentCoordinator: ObservableObject {
                 } else {
                     if finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && stepIndex > 1 {
                         statusText = "生成总结中"
-                        var recoveryMessages = contextMessages
+                        var recoveryMessages = conversation.messages
+                        recoveryMessages.removeLast()
                         recoveryMessages.append(
                             ChatMessage(
                                 role: .user,
