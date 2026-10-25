@@ -7,6 +7,7 @@ struct ChatDetailView: View {
     @StateObject private var coordinator = AgentCoordinator()
     @State private var inputText: String = ""
     @State private var showingToolsSheet: Bool = false
+    @State private var selectedTurnId: String? = nil
     @FocusState private var isInputFocused: Bool
 
     private var theme: AppThemePalette {
@@ -99,9 +100,6 @@ struct ChatDetailView: View {
         ZStack {
             theme.background
                 .ignoresSafeArea()
-                .onTapGesture {
-                    dismissKeyboard()
-                }
 
             ScrollViewReader { proxy in
                 VStack(spacing: 0) {
@@ -109,21 +107,35 @@ struct ChatDetailView: View {
                         ScrollView {
                             if displayTurns.isEmpty && !coordinator.isGenerating {
                                 emptyConversationHero
-                                    .padding(.horizontal, 16)
-                                    .padding(.top, 28)
+                                    .padding(.horizontal, 14)
+                                    .padding(.top, 24)
                                     .contentShape(Rectangle())
                                     .onTapGesture {
-                                        dismissKeyboard()
+                                        handleBackgroundTap()
                                     }
                             } else {
-                                LazyVStack(spacing: 20) {
+                                LazyVStack(spacing: 12) {
                                     ForEach(displayTurns) { turn in
                                         MessageBubbleView(
                                             turn: turn,
                                             modelName: storage.settings.modelName,
                                             isGenerating: coordinator.isGenerating,
+                                            isSelected: selectedTurnId == turn.id,
+                                            onSelectToggle: {
+                                                if isInputFocused {
+                                                    dismissKeyboard()
+                                                }
+                                                withAnimation(.easeInOut(duration: 0.16)) {
+                                                    if selectedTurnId == turn.id {
+                                                        selectedTurnId = nil
+                                                    } else {
+                                                        selectedTurnId = turn.id
+                                                    }
+                                                }
+                                            },
                                             onEditSave: { newContent in
                                                 dismissKeyboard()
+                                                selectedTurnId = nil
                                                 storage.updateMessageContent(
                                                     conversationId: conversationId,
                                                     messageId: turn.primaryMessageId,
@@ -132,6 +144,7 @@ struct ChatDetailView: View {
                                             },
                                             onEditAndResend: { newContent in
                                                 dismissKeyboard()
+                                                selectedTurnId = nil
                                                 Task {
                                                     await coordinator.retryFromMessage(
                                                         conversationId: conversationId,
@@ -144,6 +157,7 @@ struct ChatDetailView: View {
                                             },
                                             onRetry: {
                                                 dismissKeyboard()
+                                                selectedTurnId = nil
                                                 Task {
                                                     await coordinator.retryFromMessage(
                                                         conversationId: conversationId,
@@ -155,6 +169,9 @@ struct ChatDetailView: View {
                                             },
                                             onDelete: {
                                                 dismissKeyboard()
+                                                if selectedTurnId == turn.id {
+                                                    selectedTurnId = nil
+                                                }
                                                 storage.deleteMessageTurn(
                                                     conversationId: conversationId,
                                                     messageIds: turn.underlyingMessageIds
@@ -178,17 +195,19 @@ struct ChatDetailView: View {
                                         .frame(height: 4)
                                         .id("bottom_anchor")
                                 }
-                                .padding(.horizontal, 16)
-                                .padding(.top, 12)
-                                .padding(.bottom, 16)
+                                .padding(.horizontal, 10)
+                                .padding(.top, 10)
+                                .padding(.bottom, 14)
                             }
                         }
-                        .scrollDismissesKeyboard(.interactively)
-                        .simultaneousGesture(
-                            TapGesture().onEnded {
-                                dismissKeyboard()
-                            }
+                        .background(
+                            Color.clear
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    handleBackgroundTap()
+                                }
                         )
+                        .scrollDismissesKeyboard(.interactively)
                         .onChange(of: currentConversation.messages.count) { _ in
                             scrollToBottom(proxy: proxy)
                         }
@@ -203,18 +222,18 @@ struct ChatDetailView: View {
                                 Image(systemName: "arrow.down")
                                     .font(.system(size: 13, weight: .bold))
                                     .foregroundColor(theme.primaryText)
-                                    .frame(width: 34, height: 34)
+                                    .frame(width: 32, height: 32)
                                     .background(theme.cardBackground)
                                     .clipShape(Circle())
                                     .overlay(
                                         Circle()
                                             .stroke(theme.border, lineWidth: 1)
                                     )
-                                    .shadow(color: Color.black.opacity(theme.isDark ? 0.28 : 0.08), radius: 6, x: 0, y: 2)
+                                    .shadow(color: Color.black.opacity(theme.isDark ? 0.28 : 0.08), radius: 5, x: 0, y: 2)
                             }
                             .buttonStyle(.plain)
-                            .padding(.trailing, 16)
-                            .padding(.bottom, 10)
+                            .padding(.trailing, 14)
+                            .padding(.bottom, 8)
                         }
                     }
 
@@ -243,6 +262,7 @@ struct ChatDetailView: View {
 
                     Menu {
                         Button(role: .destructive, action: {
+                            selectedTurnId = nil
                             storage.clearConversationMessages(id: conversationId)
                         }) {
                             Label("清空当前对话消息", systemImage: "trash")
@@ -267,14 +287,14 @@ struct ChatDetailView: View {
                 ZStack {
                     Circle()
                         .fill(theme.accent.opacity(0.14))
-                        .frame(width: 66, height: 66)
+                        .frame(width: 64, height: 64)
                     Image(systemName: "sparkles")
-                        .font(.system(size: 28, weight: .semibold))
+                        .font(.system(size: 26, weight: .semibold))
                         .foregroundColor(theme.accent)
                 }
 
                 Text("有什么可以帮你的？")
-                    .font(.system(size: 20, weight: .bold))
+                    .font(.system(size: 19, weight: .bold))
                     .foregroundColor(theme.primaryText)
 
                 HStack(spacing: 8) {
@@ -296,18 +316,18 @@ struct ChatDetailView: View {
                 }
             }
 
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
                 ForEach(starterPrompts, id: \.title) { item in
                     Button(action: {
                         sendSpecificPrompt(item.prompt)
                     }) {
                         VStack(alignment: .leading, spacing: 8) {
                             Image(systemName: item.icon)
-                                .font(.system(size: 16, weight: .semibold))
+                                .font(.system(size: 15, weight: .semibold))
                                 .foregroundColor(theme.accent)
-                                .frame(width: 32, height: 32)
+                                .frame(width: 30, height: 30)
                                 .background(theme.accent.opacity(0.12))
-                                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
                             Text(item.title)
                                 .font(.system(size: 13, weight: .semibold))
@@ -320,12 +340,12 @@ struct ChatDetailView: View {
                                 .lineLimit(2)
                                 .multilineTextAlignment(.leading)
                         }
-                        .padding(13)
+                        .padding(12)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .background(theme.cardBackground)
-                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
                         .overlay(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            RoundedRectangle(cornerRadius: 15, style: .continuous)
                                 .stroke(theme.border, lineWidth: 1)
                         )
                     }
@@ -346,13 +366,14 @@ struct ChatDetailView: View {
             Spacer()
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 12)
+        .padding(.vertical, 10)
         .background(theme.cardBackground)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .stroke(theme.border, lineWidth: 1)
         )
+        .padding(.leading, 30)
     }
 
     private func errorBanner(_ message: String) -> some View {
@@ -393,36 +414,44 @@ struct ChatDetailView: View {
             }
             Spacer()
         }
-        .padding(14)
+        .padding(12)
         .background(Color.red.opacity(0.08))
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .stroke(Color.red.opacity(0.25), lineWidth: 1)
         )
+        .padding(.leading, 30)
     }
 
     private var composerDock: some View {
         let canSend = !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !coordinator.isGenerating
 
-        return VStack(spacing: 10) {
+        return VStack(spacing: 8) {
             HStack(alignment: .bottom, spacing: 10) {
                 TextField("在这里输入你的问题...", text: $inputText, axis: .vertical)
                     .lineLimit(1...6)
                     .focused($isInputFocused)
                     .font(.system(size: 15.5))
                     .foregroundColor(theme.primaryText)
-                    .padding(.top, 2)
+                    .padding(.vertical, 4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        if !coordinator.isGenerating {
+                            isInputFocused = true
+                        }
+                    }
                     .disabled(coordinator.isGenerating)
 
                 Button(action: sendMessage) {
                     ZStack {
                         Circle()
                             .fill(canSend ? theme.accent : theme.elevatedBackground)
-                            .frame(width: 34, height: 34)
+                            .frame(width: 32, height: 32)
 
                         Image(systemName: coordinator.isGenerating ? "hourglass" : "arrow.up")
-                            .font(.system(size: 14, weight: .bold))
+                            .font(.system(size: 13.5, weight: .bold))
                             .foregroundColor(canSend ? .white : theme.mutedText)
                     }
                 }
@@ -444,13 +473,14 @@ struct ChatDetailView: View {
                     Divider()
 
                     Button(role: .destructive, action: {
+                        selectedTurnId = nil
                         storage.clearConversationMessages(id: conversationId)
                     }) {
                         Label("清空当前对话", systemImage: "trash")
                     }
                 } label: {
                     Image(systemName: "plus.circle")
-                        .font(.system(size: 18, weight: .medium))
+                        .font(.system(size: 17.5, weight: .medium))
                         .foregroundColor(theme.secondaryText)
                 }
 
@@ -460,7 +490,7 @@ struct ChatDetailView: View {
                 }) {
                     HStack(spacing: 4) {
                         Image(systemName: "wrench.and.screwdriver")
-                            .font(.system(size: 14, weight: .medium))
+                            .font(.system(size: 13.5, weight: .medium))
                         if activeToolCount > 0 {
                             Text("\(activeToolCount)")
                                 .font(.system(size: 11.5, weight: .semibold, design: .rounded))
@@ -468,7 +498,7 @@ struct ChatDetailView: View {
                     }
                     .foregroundColor(activeToolCount > 0 ? theme.accent : theme.secondaryText)
                     .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
+                    .padding(.vertical, 3.5)
                     .background(activeToolCount > 0 ? theme.accent.opacity(0.12) : Color.clear)
                     .clipShape(Capsule())
                 }
@@ -478,7 +508,7 @@ struct ChatDetailView: View {
                     Button(action: dismissKeyboard) {
                         HStack(spacing: 3) {
                             Image(systemName: "keyboard.chevron.compact.down")
-                                .font(.system(size: 13, weight: .medium))
+                                .font(.system(size: 12.5, weight: .medium))
                             Text("收起")
                                 .font(.system(size: 11.5, weight: .medium))
                         }
@@ -507,32 +537,32 @@ struct ChatDetailView: View {
                 } label: {
                     HStack(spacing: 5) {
                         Image(systemName: "atom")
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(.system(size: 12.5, weight: .semibold))
                             .foregroundColor(theme.accent)
                         Text(storage.settings.modelName)
-                            .font(.system(size: 12.5, weight: .medium))
+                            .font(.system(size: 12, weight: .medium))
                             .foregroundColor(theme.primaryText)
                             .lineLimit(1)
                             .frame(maxWidth: 140, alignment: .trailing)
                         Image(systemName: "chevron.down")
-                            .font(.system(size: 10, weight: .semibold))
+                            .font(.system(size: 9.5, weight: .semibold))
                             .foregroundColor(theme.secondaryText)
                     }
                 }
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 13)
+        .padding(.vertical, 10)
         .background(theme.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .stroke(theme.border, lineWidth: 1)
         )
-        .shadow(color: Color.black.opacity(theme.isDark ? 0.25 : 0.05), radius: 8, x: 0, y: 2)
-        .padding(.horizontal, 12)
-        .padding(.top, 6)
-        .padding(.bottom, 8)
+        .shadow(color: Color.black.opacity(theme.isDark ? 0.25 : 0.05), radius: 6, x: 0, y: 2)
+        .padding(.horizontal, 10)
+        .padding(.top, 4)
+        .padding(.bottom, 6)
         .background(theme.background)
     }
 
@@ -605,6 +635,17 @@ struct ChatDetailView: View {
         .presentationDetents([.medium, .large])
     }
 
+    private func handleBackgroundTap() {
+        if isInputFocused {
+            dismissKeyboard()
+        }
+        if selectedTurnId != nil {
+            withAnimation(.easeInOut(duration: 0.16)) {
+                selectedTurnId = nil
+            }
+        }
+    }
+
     private func dismissKeyboard() {
         isInputFocused = false
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
@@ -614,6 +655,7 @@ struct ChatDetailView: View {
         let prompt = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty else { return }
         inputText = ""
+        selectedTurnId = nil
         dismissKeyboard()
         Task {
             await coordinator.sendMessage(
@@ -626,6 +668,7 @@ struct ChatDetailView: View {
     }
 
     private func sendSpecificPrompt(_ prompt: String) {
+        selectedTurnId = nil
         dismissKeyboard()
         Task {
             await coordinator.sendMessage(

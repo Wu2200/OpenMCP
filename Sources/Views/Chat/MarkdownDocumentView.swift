@@ -36,141 +36,55 @@ struct MarkdownListItem: Identifiable {
     var text: String
 }
 
-struct MarkdownDocumentView: View {
-    let content: String
-    let theme: AppThemePalette
+final class MarkdownRenderCache {
+    static let shared = MarkdownRenderCache()
 
-    var body: some View {
-        let blocks = MarkdownParser.parse(content)
-        VStack(alignment: .leading, spacing: 12) {
-            ForEach(blocks) { block in
-                switch block {
-                case .heading(_, let level, let text):
-                    headingView(level: level, text: text)
+    private let blockCache = NSCache<NSString, BlockBox>()
+    private let attrCache = NSCache<NSString, AttrBox>()
 
-                case .paragraph(_, let text):
-                    MarkdownInlineText(text: text, fontSize: 15.5, weight: .regular, theme: theme)
-                        .lineSpacing(5)
+    final class BlockBox {
+        let blocks: [MarkdownBlock]
+        init(_ blocks: [MarkdownBlock]) { self.blocks = blocks }
+    }
 
-                case .list(_, let items):
-                    VStack(alignment: .leading, spacing: 7) {
-                        ForEach(items) { item in
-                            listItemView(item)
-                        }
-                    }
-                    .padding(.vertical, 2)
+    final class AttrBox {
+        let attr: AttributedString
+        init(_ attr: AttributedString) { self.attr = attr }
+    }
 
-                case .blockquote(_, let text):
-                    HStack(spacing: 0) {
-                        RoundedRectangle(cornerRadius: 2)
-                            .fill(theme.accent.opacity(0.75))
-                            .frame(width: 3.5)
+    private init() {
+        blockCache.countLimit = 300
+        attrCache.countLimit = 800
+    }
 
-                        MarkdownInlineText(text: text, fontSize: 14.5, weight: .regular, theme: theme, isSecondary: true)
-                            .lineSpacing(4)
-                            .padding(.leading, 12)
-                            .padding(.vertical, 6)
-                    }
-                    .padding(.trailing, 10)
-                    .background(theme.elevatedBackground.opacity(0.55))
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-
-                case .codeBlock(_, let language, let code):
-                    CodeBlockCard(language: language, code: code, theme: theme)
-
-                case .table(_, let headers, let alignments, let rows):
-                    MarkdownTableView(headers: headers, alignments: alignments, rows: rows, theme: theme)
-
-                case .divider:
-                    Rectangle()
-                        .fill(theme.border)
-                        .frame(height: 1)
-                        .padding(.vertical, 4)
-                }
-            }
+    func blocks(for content: String) -> [MarkdownBlock] {
+        let key = content as NSString
+        if let cached = blockCache.object(forKey: key) {
+            return cached.blocks
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        let parsed = MarkdownParser.parse(content)
+        blockCache.setObject(BlockBox(parsed), forKey: key)
+        return parsed
     }
 
-    @ViewBuilder
-    private func headingView(level: Int, text: String) -> some View {
-        let size: CGFloat = {
-            switch level {
-            case 1: return 20.5
-            case 2: return 18.0
-            case 3: return 16.5
-            default: return 15.5
-            }
-        }()
-
-        VStack(alignment: .leading, spacing: 6) {
-            MarkdownInlineText(text: text, fontSize: size, weight: .bold, theme: theme)
-                .lineSpacing(3)
-
-            if level == 1 {
-                Rectangle()
-                    .fill(theme.border.opacity(0.6))
-                    .frame(height: 1)
-            }
+    func attributedString(
+        for text: String,
+        fontSize: CGFloat,
+        theme: AppThemePalette
+    ) -> AttributedString {
+        let cacheKey = "\(theme.backgroundHex)-\(theme.accentHex)-\(Int(fontSize * 10))-\(text)" as NSString
+        if let cached = attrCache.object(forKey: cacheKey) {
+            return cached.attr
         }
-        .padding(.top, level <= 2 ? 6 : 3)
-        .padding(.bottom, 1)
-    }
 
-    @ViewBuilder
-    private func listItemView(_ item: MarkdownListItem) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            switch item.marker {
-            case .bullet:
-                Text(item.indent == 0 ? "•" : (item.indent == 1 ? "◦" : "▪"))
-                    .font(.system(size: 15.5, weight: .bold))
-                    .foregroundColor(theme.primaryText)
-                    .frame(width: 14, alignment: .center)
-
-            case .ordered(let num):
-                Text(num)
-                    .font(.system(size: 14.5, weight: .semibold, design: .rounded))
-                    .foregroundColor(theme.primaryText)
-                    .frame(minWidth: 18, alignment: .trailing)
-
-            case .task(let checked):
-                Image(systemName: checked ? "checkmark.square.fill" : "square")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(checked ? theme.accent : theme.secondaryText)
-                    .frame(width: 16, alignment: .center)
-            }
-
-            MarkdownInlineText(text: item.text, fontSize: 15.5, weight: .regular, theme: theme)
-                .lineSpacing(4)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(.leading, CGFloat(min(item.indent, 4)) * 16)
-    }
-}
-
-struct MarkdownInlineText: View {
-    let text: String
-    var fontSize: CGFloat = 15.5
-    var weight: Font.Weight = .regular
-    let theme: AppThemePalette
-    var isSecondary: Bool = false
-
-    var body: some View {
-        Text(buildAttributedString())
-            .font(.system(size: fontSize, weight: weight))
-            .foregroundColor(isSecondary ? theme.secondaryText : theme.primaryText)
-            .tint(theme.accent)
-            .textSelection(.enabled)
-            .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func buildAttributedString() -> AttributedString {
         let prepared = MarkdownParser.enrichAutoLinksAndSpaces(text)
         guard var attr = try? AttributedString(
             markdown: prepared,
             options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         ) else {
-            return AttributedString(text)
+            let fallback = AttributedString(text)
+            attrCache.setObject(AttrBox(fallback), forKey: cacheKey)
+            return fallback
         }
 
         let codeBg = UIColor(theme.elevatedBackground)
@@ -189,7 +103,139 @@ struct MarkdownInlineText: View {
                 attr[range].underlineStyle = .single
             }
         }
+
+        attrCache.setObject(AttrBox(attr), forKey: cacheKey)
         return attr
+    }
+}
+
+struct MarkdownDocumentView: View {
+    let content: String
+    let theme: AppThemePalette
+
+    var body: some View {
+        let blocks = MarkdownRenderCache.shared.blocks(for: content)
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(blocks) { block in
+                switch block {
+                case .heading(_, let level, let text):
+                    headingView(level: level, text: text)
+
+                case .paragraph(_, let text):
+                    MarkdownInlineText(text: text, fontSize: 15, weight: .regular, theme: theme)
+                        .lineSpacing(3.5)
+
+                case .list(_, let items):
+                    let minIndent = items.map(\.indent).min() ?? 0
+                    VStack(alignment: .leading, spacing: 5) {
+                        ForEach(items) { item in
+                            listItemView(item, baseIndent: minIndent)
+                        }
+                    }
+                    .padding(.vertical, 1)
+
+                case .blockquote(_, let text):
+                    MarkdownInlineText(text: text, fontSize: 14, weight: .regular, theme: theme, isSecondary: true)
+                        .lineSpacing(3.5)
+                        .padding(.leading, 12)
+                        .padding(.trailing, 10)
+                        .padding(.vertical, 7)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(theme.elevatedBackground.opacity(0.6))
+                        .overlay(alignment: .leading) {
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(theme.accent.opacity(0.8))
+                                .frame(width: 3.5)
+                        }
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                case .codeBlock(_, let language, let code):
+                    CodeBlockCard(language: language, code: code, theme: theme)
+
+                case .table(_, let headers, let alignments, let rows):
+                    MarkdownTableView(headers: headers, alignments: alignments, rows: rows, theme: theme)
+
+                case .divider:
+                    Rectangle()
+                        .fill(theme.border)
+                        .frame(height: 1)
+                        .padding(.vertical, 2)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func headingView(level: Int, text: String) -> some View {
+        let size: CGFloat = {
+            switch level {
+            case 1: return 19.0
+            case 2: return 17.0
+            case 3: return 15.8
+            default: return 15.0
+            }
+        }()
+
+        VStack(alignment: .leading, spacing: 4) {
+            MarkdownInlineText(text: text, fontSize: size, weight: .bold, theme: theme)
+                .lineSpacing(2.5)
+
+            if level == 1 {
+                Rectangle()
+                    .fill(theme.border.opacity(0.6))
+                    .frame(height: 1)
+            }
+        }
+        .padding(.top, level <= 2 ? 4 : 2)
+    }
+
+    @ViewBuilder
+    private func listItemView(_ item: MarkdownListItem, baseIndent: Int) -> some View {
+        let normalizedIndent = max(0, min(item.indent - baseIndent, 4))
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            switch item.marker {
+            case .bullet:
+                Text(normalizedIndent == 0 ? "•" : (normalizedIndent == 1 ? "◦" : "▪"))
+                    .font(.system(size: 14.5, weight: .bold))
+                    .foregroundColor(theme.primaryText)
+                    .frame(width: 12, alignment: .center)
+
+            case .ordered(let num):
+                Text(num)
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundColor(theme.primaryText)
+                    .frame(minWidth: 16, alignment: .trailing)
+
+            case .task(let checked):
+                Image(systemName: checked ? "checkmark.square.fill" : "square")
+                    .font(.system(size: 13.5, weight: .semibold))
+                    .foregroundColor(checked ? theme.accent : theme.secondaryText)
+                    .frame(width: 15, alignment: .center)
+            }
+
+            MarkdownInlineText(text: item.text, fontSize: 15, weight: .regular, theme: theme)
+                .lineSpacing(3.5)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.leading, CGFloat(normalizedIndent) * 14)
+    }
+}
+
+struct MarkdownInlineText: View {
+    let text: String
+    var fontSize: CGFloat = 15
+    var weight: Font.Weight = .regular
+    let theme: AppThemePalette
+    var isSecondary: Bool = false
+
+    var body: some View {
+        Text(MarkdownRenderCache.shared.attributedString(for: text, fontSize: fontSize, theme: theme))
+            .font(.system(size: fontSize, weight: weight))
+            .foregroundColor(isSecondary ? theme.secondaryText : theme.primaryText)
+            .tint(theme.accent)
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -216,21 +262,21 @@ struct MarkdownTableView: View {
 
             let calculated: CGFloat
             if maxUnits <= 3 {
-                calculated = 48
+                calculated = 44
             } else if maxUnits <= 8 {
-                calculated = max(68, CGFloat(maxUnits) * 10.5 + 24)
+                calculated = max(64, CGFloat(maxUnits) * 10.0 + 20)
             } else if maxUnits <= 18 {
-                calculated = min(155, max(92, CGFloat(maxUnits) * 8.8 + 24))
+                calculated = min(150, max(88, CGFloat(maxUnits) * 8.5 + 20))
             } else {
-                calculated = min(230, max(155, CGFloat(maxUnits) * 6.5 + 28))
+                calculated = min(220, max(145, CGFloat(maxUnits) * 6.2 + 24))
             }
             widths.append(calculated)
         }
 
-        let screenAvailable = max(300, UIScreen.main.bounds.width - 36)
+        let availableWidth = max(240, UIScreen.main.bounds.width - 78)
         let total = widths.reduce(0, +)
-        if total > 0 && total < screenAvailable {
-            let scale = screenAvailable / total
+        if total > 0 && total < availableWidth {
+            let scale = availableWidth / total
             return widths.map { floor($0 * scale) }
         }
         return widths
@@ -256,9 +302,9 @@ struct MarkdownTableView: View {
                 }
             }
             .background(theme.cardBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .stroke(theme.border, lineWidth: 1)
             )
         }
@@ -271,26 +317,25 @@ struct MarkdownTableView: View {
         isHeader: Bool,
         isAlternate: Bool = false
     ) -> some View {
-        HStack(alignment: .center, spacing: 0) {
+        HStack(alignment: .top, spacing: 0) {
             ForEach(0..<columnCount, id: \.self) { col in
                 let cellText = col < cells.count ? cells[col] : ""
                 let width = col < widths.count ? widths[col] : 100
                 let align = col < alignments.count ? alignments[col] : .leading
 
                 cellContent(text: cellText, isHeader: isHeader, alignment: align)
-                    .padding(.horizontal, 11)
-                    .padding(.vertical, isHeader ? 11 : 10)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, isHeader ? 9 : 8)
                     .frame(width: width, alignment: frameAlignment(for: align))
-                    .frame(maxHeight: .infinity, alignment: frameAlignment(for: align))
-
-                if col < columnCount - 1 {
-                    Rectangle()
-                        .fill(theme.border)
-                        .frame(width: 1)
-                }
+                    .overlay(alignment: .trailing) {
+                        if col < columnCount - 1 {
+                            Rectangle()
+                                .fill(theme.border.opacity(0.75))
+                                .frame(width: 1)
+                        }
+                    }
             }
         }
-        .fixedSize(horizontal: false, vertical: true)
         .background(
             isHeader
                 ? theme.elevatedBackground
@@ -300,46 +345,14 @@ struct MarkdownTableView: View {
 
     @ViewBuilder
     private func cellContent(text: String, isHeader: Bool, alignment: HorizontalAlignment) -> some View {
-        let prepared = MarkdownParser.enrichAutoLinksAndSpaces(text)
-        if var attr = try? AttributedString(
-            markdown: prepared,
-            options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        ) {
-            let _ = styleCellAttributedString(&attr, isHeader: isHeader)
-            Text(attr)
-                .font(.system(size: isHeader ? 13.5 : 14, weight: isHeader ? .semibold : .regular))
-                .foregroundColor(theme.primaryText)
-                .tint(theme.accent)
-                .multilineTextAlignment(textAlignment(for: alignment))
-                .lineSpacing(3)
-                .textSelection(.enabled)
-        } else {
-            Text(text)
-                .font(.system(size: isHeader ? 13.5 : 14, weight: isHeader ? .semibold : .regular))
-                .foregroundColor(theme.primaryText)
-                .multilineTextAlignment(textAlignment(for: alignment))
-                .lineSpacing(3)
-                .textSelection(.enabled)
-        }
-    }
-
-    private func styleCellAttributedString(_ attr: inout AttributedString, isHeader: Bool) {
-        let codeBg = UIColor(theme.elevatedBackground)
-        let codeFg = UIColor(theme.primaryText)
-        let linkFg = UIColor(theme.accent)
-
-        for run in attr.runs {
-            let range = run.range
-            if let intent = run.inlinePresentationIntent, intent.contains(.code) {
-                attr[range].font = .system(size: 12.5, weight: .medium, design: .monospaced)
-                attr[range].backgroundColor = codeBg
-                attr[range].foregroundColor = codeFg
-            }
-            if run.link != nil {
-                attr[range].foregroundColor = linkFg
-                attr[range].underlineStyle = .single
-            }
-        }
+        let fontSize: CGFloat = isHeader ? 13 : 13.5
+        Text(MarkdownRenderCache.shared.attributedString(for: text, fontSize: fontSize, theme: theme))
+            .font(.system(size: fontSize, weight: isHeader ? .semibold : .regular))
+            .foregroundColor(theme.primaryText)
+            .tint(theme.accent)
+            .multilineTextAlignment(textAlignment(for: alignment))
+            .lineSpacing(2.5)
+            .textSelection(.enabled)
     }
 
     private func frameAlignment(for align: HorizontalAlignment) -> Alignment {
@@ -383,14 +396,12 @@ enum MarkdownParser {
             let line = lines[i]
             let trimmed = line.trimmingCharacters(in: .whitespaces)
 
-            // 1. Blank line -> flush current paragraph
             if trimmed.isEmpty {
                 flushParagraph()
                 i += 1
                 continue
             }
 
-            // 2. Fenced Code Block (``` or ~~~)
             if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") {
                 flushParagraph()
                 let fence = String(trimmed.prefix(3))
@@ -412,7 +423,6 @@ enum MarkdownParser {
                 continue
             }
 
-            // 3. Markdown Table
             if i + 1 < lines.count,
                line.contains("|"),
                let alignments = parseTableSeparator(lines[i + 1]) {
@@ -443,7 +453,6 @@ enum MarkdownParser {
                 }
             }
 
-            // 4. Horizontal Divider (---, ***, ___)
             if isHorizontalRule(trimmed) {
                 flushParagraph()
                 blocks.append(.divider(id: nextId))
@@ -452,7 +461,6 @@ enum MarkdownParser {
                 continue
             }
 
-            // 5. Heading (# to ######)
             if let heading = parseHeading(trimmed) {
                 flushParagraph()
                 blocks.append(.heading(id: nextId, level: heading.level, text: heading.text))
@@ -461,7 +469,6 @@ enum MarkdownParser {
                 continue
             }
 
-            // 6. Blockquote (> ...)
             if trimmed.hasPrefix(">") {
                 flushParagraph()
                 var quoteLines: [String] = []
@@ -483,7 +490,6 @@ enum MarkdownParser {
                 continue
             }
 
-            // 7. Unordered / Ordered / Task List
             if let firstItem = parseListItem(line, id: 0) {
                 flushParagraph()
                 var items: [MarkdownListItem] = [firstItem]
@@ -499,9 +505,10 @@ enum MarkdownParser {
                         items.append(parsedItem)
                         itemCounter += 1
                         i += 1
-                    } else if nextLine.hasPrefix("  ") || nextLine.hasPrefix("\t"),
+                    } else if (nextLine.hasPrefix("  ") || nextLine.hasPrefix("\t")),
                               !nextTrimmed.hasPrefix("#"),
                               !nextTrimmed.hasPrefix("```"),
+                              !nextTrimmed.hasPrefix(">"),
                               !nextTrimmed.hasPrefix("|") {
                         items[items.count - 1].text += "\n" + nextTrimmed
                         i += 1
@@ -514,7 +521,6 @@ enum MarkdownParser {
                 continue
             }
 
-            // 8. Normal paragraph line
             paragraphBuffer.append(line)
             i += 1
         }
@@ -524,7 +530,7 @@ enum MarkdownParser {
     }
 
     private static func parseHeading(_ trimmed: String) -> (level: Int, text: String)? {
-        guard trimmed.hasPrefix("#") else { return nil }
+        guard trimmed.first == "#" else { return nil }
         var level = 0
         for ch in trimmed {
             if ch == "#" {
@@ -534,25 +540,32 @@ enum MarkdownParser {
             }
         }
         guard level >= 1 && level <= 6 else { return nil }
-        let remainder = String(trimmed.dropFirst(level))
-        guard remainder.first == " " || remainder.first == "\t" || remainder.unicodeScalars.first.map({ $0.value > 127 }) == true else {
+        let remainder = trimmed.dropFirst(level)
+        guard let first = remainder.first,
+              first == " " || first == "\t" || (first.unicodeScalars.first?.value ?? 0) > 127 else {
             return nil
         }
-        let cleaned = remainder
-            .trimmingCharacters(in: .whitespaces)
-            .replacingOccurrences(of: #"\s+#+$"#, with: "", options: .regularExpression)
+        var cleaned = remainder.trimmingCharacters(in: .whitespaces)
+        while cleaned.hasSuffix("#") {
+            cleaned.removeLast()
+        }
+        cleaned = cleaned.trimmingCharacters(in: .whitespaces)
         guard !cleaned.isEmpty else { return nil }
         return (level, cleaned)
     }
 
     private static func isHorizontalRule(_ trimmed: String) -> Bool {
+        guard let first = trimmed.first, first == "-" || first == "*" || first == "_" else { return false }
         guard trimmed.count >= 3 else { return false }
-        let compact = trimmed.replacingOccurrences(of: " ", with: "")
-        guard compact.count >= 3 else { return false }
-        if compact.allSatisfy({ $0 == "-" }) || compact.allSatisfy({ $0 == "*" }) || compact.allSatisfy({ $0 == "_" }) {
-            return true
+        var count = 0
+        for ch in trimmed {
+            if ch == first {
+                count += 1
+            } else if ch != " " {
+                return false
+            }
         }
-        return false
+        return count >= 3
     }
 
     private static func parseListItem(_ line: String, id: Int) -> MarkdownListItem? {
@@ -568,25 +581,34 @@ enum MarkdownParser {
         }
         let indent = leadingSpaces / 2
         let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard let first = trimmed.first else { return nil }
 
-        // Task list: - [ ] or - [x]
-        if let match = trimmed.range(of: #"^[-*+]\s+\[([ xX])\]\s+"#, options: .regularExpression) {
-            let prefix = String(trimmed[match])
-            let checked = prefix.contains("x") || prefix.contains("X")
-            let body = String(trimmed[match.upperBound...])
-            return MarkdownListItem(id: id, indent: indent, marker: .task(checked), text: body)
-        }
-
-        // Unordered list: -, *, +, •
-        if let match = trimmed.range(of: #"^[-*+•]\s+"#, options: .regularExpression) {
-            let body = String(trimmed[match.upperBound...])
+        if first == "-" || first == "*" || first == "+" || first == "•" {
+            let afterBullet = trimmed.dropFirst()
+            guard afterBullet.first == " " || afterBullet.first == "\t" else { return nil }
+            let body = afterBullet.trimmingCharacters(in: .whitespaces)
+            if body.hasPrefix("[ ] ") || body.hasPrefix("[x] ") || body.hasPrefix("[X] ") {
+                let checked = body.hasPrefix("[x] ") || body.hasPrefix("[X] ")
+                let taskText = String(body.dropFirst(4)).trimmingCharacters(in: .whitespaces)
+                return MarkdownListItem(id: id, indent: indent, marker: .task(checked), text: taskText)
+            }
             return MarkdownListItem(id: id, indent: indent, marker: .bullet, text: body)
         }
 
-        // Ordered list: 1. or 1)
-        if let match = trimmed.range(of: #"^\d+[.)]\s+"#, options: .regularExpression) {
-            let markerStr = String(trimmed[match]).trimmingCharacters(in: .whitespaces)
-            let body = String(trimmed[match.upperBound...])
+        if first.isNumber {
+            var idx = trimmed.startIndex
+            while idx < trimmed.endIndex, trimmed[idx].isNumber {
+                idx = trimmed.index(after: idx)
+            }
+            guard idx < trimmed.endIndex, (trimmed[idx] == "." || trimmed[idx] == ")") else {
+                return nil
+            }
+            let afterDot = trimmed.index(after: idx)
+            guard afterDot < trimmed.endIndex, (trimmed[afterDot] == " " || trimmed[afterDot] == "\t") else {
+                return nil
+            }
+            let markerStr = String(trimmed[..<afterDot])
+            let body = String(trimmed[afterDot...]).trimmingCharacters(in: .whitespaces)
             return MarkdownListItem(id: id, indent: indent, marker: .ordered(markerStr), text: body)
         }
 
@@ -602,12 +624,18 @@ enum MarkdownParser {
         var alignments: [HorizontalAlignment] = []
         for cell in cells {
             let c = cell.trimmingCharacters(in: .whitespaces)
-            guard c.range(of: #"^:?-+:?$"#, options: .regularExpression) != nil else {
+            guard !c.isEmpty else { return nil }
+            var slice = Substring(c)
+            let hasLeadingColon = slice.first == ":"
+            if hasLeadingColon { slice = slice.dropFirst() }
+            let hasTrailingColon = slice.last == ":"
+            if hasTrailingColon { slice = slice.dropLast() }
+            guard !slice.isEmpty && slice.allSatisfy({ $0 == "-" }) else {
                 return nil
             }
-            if c.hasPrefix(":") && c.hasSuffix(":") {
+            if hasLeadingColon && hasTrailingColon {
                 alignments.append(.center)
-            } else if c.hasSuffix(":") {
+            } else if hasTrailingColon {
                 alignments.append(.trailing)
             } else {
                 alignments.append(.leading)
@@ -655,8 +683,7 @@ enum MarkdownParser {
 
         var joined = processedLines.joined(separator: "\n")
 
-        // Auto-link bare github.com/owner/repo if not already inside markdown link or code
-        if !joined.contains("](") && !joined.contains("`") {
+        if joined.contains("github.com/") && !joined.contains("](") && !joined.contains("`") {
             joined = joined.replacingOccurrences(
                 of: #"(?<![/\w])(github\.com/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)?)"#,
                 with: "[$1](https://$1)",
@@ -668,7 +695,9 @@ enum MarkdownParser {
 
     static func stripInlineSyntax(_ text: String) -> String {
         var s = text
-        s = s.replacingOccurrences(of: #"\[([^\]]+)\]\([^)]+\)"#, with: "$1", options: .regularExpression)
+        if s.contains("](") {
+            s = s.replacingOccurrences(of: #"\[([^\]]+)\]\([^)]+\)"#, with: "$1", options: .regularExpression)
+        }
         s = s.replacingOccurrences(of: "**", with: "")
         s = s.replacingOccurrences(of: "`", with: "")
         return s.trimmingCharacters(in: .whitespacesAndNewlines)

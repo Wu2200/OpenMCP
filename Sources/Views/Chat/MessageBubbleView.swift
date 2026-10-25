@@ -16,6 +16,8 @@ struct MessageBubbleView: View {
     let turn: MessageDisplayTurn
     var modelName: String = "Assistant"
     var isGenerating: Bool = false
+    var isSelected: Bool = false
+    var onSelectToggle: (() -> Void)? = nil
     var onEditSave: ((String) -> Void)? = nil
     var onEditAndResend: ((String) -> Void)? = nil
     var onRetry: (() -> Void)? = nil
@@ -40,55 +42,100 @@ struct MessageBubbleView: View {
 
     private var userTurnView: some View {
         VStack(alignment: .trailing, spacing: 6) {
-            if isEditing {
-                editEditorBox(allowResend: true)
-            } else {
-                HStack {
-                    Spacer(minLength: 42)
+            HStack(alignment: .top, spacing: 6) {
+                Spacer(minLength: 24)
+
+                if isEditing {
+                    editEditorBox(allowResend: true)
+                } else {
                     Text(turn.content)
-                        .font(.system(size: 15.5, weight: .regular))
+                        .font(.system(size: 15, weight: .regular))
                         .foregroundColor(theme.primaryText)
-                        .lineSpacing(4)
-                        .textSelection(.enabled)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
+                        .lineSpacing(3.5)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 9)
                         .background(theme.userMessageBackground)
-                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
                         .overlay(
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .stroke(theme.accent.opacity(0.18), lineWidth: 1)
+                            RoundedRectangle(cornerRadius: 15, style: .continuous)
+                                .stroke(isSelected ? theme.accent.opacity(0.45) : theme.accent.opacity(0.18), lineWidth: 1)
                         )
+                        .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                        .onTapGesture {
+                            onSelectToggle?()
+                        }
                 }
 
-                HStack {
-                    Spacer()
-                    floatingActionPill
-                }
+                compactAvatar(isUser: true)
+                    .onTapGesture {
+                        onSelectToggle?()
+                    }
+            }
+
+            if isSelected && !isEditing {
+                floatingActionPill
+                    .padding(.trailing, 30)
+                    .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .topTrailing)))
             }
         }
-        .padding(.vertical, 2)
     }
 
     private var assistantTurnView: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            if !turn.toolCalls.isEmpty {
-                ToolCallSummaryGroupView(toolCalls: turn.toolCalls)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top, spacing: 6) {
+                compactAvatar(isUser: false)
+                    .onTapGesture {
+                        onSelectToggle?()
+                    }
+
+                if isEditing {
+                    editEditorBox(allowResend: false)
+                } else {
+                    VStack(alignment: .leading, spacing: 8) {
+                        if !turn.toolCalls.isEmpty {
+                            ToolCallSummaryGroupView(toolCalls: turn.toolCalls)
+                        }
+
+                        let trimmed = turn.content.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !trimmed.isEmpty {
+                            MarkdownDocumentView(content: trimmed, theme: theme)
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(theme.cardBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 15, style: .continuous)
+                            .stroke(isSelected ? theme.accent.opacity(0.45) : theme.border, lineWidth: 1)
+                    )
+                    .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                    .onTapGesture {
+                        onSelectToggle?()
+                    }
+                }
             }
 
-            if isEditing {
-                editEditorBox(allowResend: false)
-            } else {
-                let trimmed = turn.content.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty {
-                    MarkdownDocumentView(content: trimmed, theme: theme)
-                }
-
+            if isSelected && !isEditing {
                 floatingActionPill
-                    .padding(.top, 2)
+                    .padding(.leading, 30)
+                    .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .topLeading)))
             }
         }
-        .padding(.vertical, 6)
-        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func compactAvatar(isUser: Bool) -> some View {
+        ZStack {
+            Circle()
+                .fill(isUser ? theme.accent : theme.accent.opacity(0.14))
+                .frame(width: 24, height: 24)
+
+            Image(systemName: isUser ? "person.fill" : "sparkles")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(isUser ? .white : theme.accent)
+        }
+        .padding(.top, 2)
     }
 
     private var floatingActionPill: some View {
@@ -98,12 +145,12 @@ struct MessageBubbleView: View {
             }) {
                 HStack(spacing: 4) {
                     Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 11.5, weight: .semibold))
+                        .font(.system(size: 11, weight: .semibold))
                     Text("重试")
                         .font(.system(size: 11.5, weight: .medium))
                 }
                 .foregroundColor(theme.secondaryText)
-                .padding(.horizontal, 9)
+                .padding(.horizontal, 8)
                 .padding(.vertical, 5)
                 .contentShape(Capsule())
             }
@@ -123,12 +170,12 @@ struct MessageBubbleView: View {
             }) {
                 HStack(spacing: 4) {
                     Image(systemName: "pencil")
-                        .font(.system(size: 11.5, weight: .semibold))
+                        .font(.system(size: 11, weight: .semibold))
                     Text("编辑")
                         .font(.system(size: 11.5, weight: .medium))
                 }
                 .foregroundColor(theme.secondaryText)
-                .padding(.horizontal, 9)
+                .padding(.horizontal, 8)
                 .padding(.vertical, 5)
                 .contentShape(Capsule())
             }
@@ -154,7 +201,7 @@ struct MessageBubbleView: View {
                             .font(.system(size: 11.5, weight: .medium))
                     }
                     .foregroundColor(isCopied ? theme.accent : theme.secondaryText)
-                    .padding(.horizontal, 9)
+                    .padding(.horizontal, 8)
                     .padding(.vertical, 5)
                     .contentShape(Capsule())
                 }
@@ -170,12 +217,12 @@ struct MessageBubbleView: View {
             }) {
                 HStack(spacing: 4) {
                     Image(systemName: "trash")
-                        .font(.system(size: 11.5, weight: .semibold))
+                        .font(.system(size: 11, weight: .semibold))
                     Text("删除")
                         .font(.system(size: 11.5, weight: .medium))
                 }
                 .foregroundColor(Color.red.opacity(0.8))
-                .padding(.horizontal, 9)
+                .padding(.horizontal, 8)
                 .padding(.vertical, 5)
                 .contentShape(Capsule())
             }
@@ -190,7 +237,7 @@ struct MessageBubbleView: View {
             Capsule()
                 .stroke(theme.border, lineWidth: 1)
         )
-        .shadow(color: Color.black.opacity(theme.isDark ? 0.22 : 0.05), radius: 6, x: 0, y: 2)
+        .shadow(color: Color.black.opacity(theme.isDark ? 0.22 : 0.05), radius: 5, x: 0, y: 2)
     }
 
     private func editEditorBox(allowResend: Bool) -> some View {
@@ -273,6 +320,7 @@ struct MessageBubbleView: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity)
     }
 }
 
@@ -307,7 +355,7 @@ struct CodeBlockCard: View {
                 .buttonStyle(.plain)
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.vertical, 7)
             .background(theme.elevatedBackground)
 
             Rectangle()
@@ -316,17 +364,17 @@ struct CodeBlockCard: View {
 
             ScrollView(.horizontal, showsIndicators: true) {
                 Text(code)
-                    .font(.system(size: 13, design: .monospaced))
+                    .font(.system(size: 12.5, design: .monospaced))
                     .foregroundColor(theme.primaryText)
                     .lineSpacing(3)
                     .textSelection(.enabled)
-                    .padding(12)
+                    .padding(10)
             }
         }
         .background(theme.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(theme.border, lineWidth: 1)
         )
     }

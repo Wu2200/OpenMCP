@@ -14,15 +14,6 @@ struct SettingsView: View {
         storage.settings.currentTheme
     }
 
-    private let presets: [(name: String, base: String, model: String)] = [
-        ("DeepSeek", "https://api.deepseek.com", "deepseek-chat"),
-        ("OpenAI", "https://api.openai.com/v1", "gpt-4o"),
-        ("SiliconFlow", "https://api.siliconflow.cn/v1", "Qwen/Qwen2.5-72B-Instruct"),
-        ("Moonshot", "https://api.moonshot.cn/v1", "moonshot-v1-8k"),
-        ("Groq", "https://api.groq.com/openai/v1", "llama-3.3-70b-versatile"),
-        ("Ollama 本地", "http://127.0.0.1:11434/v1", "qwen2.5:latest")
-    ]
-
     private let customSoftSwatches: [(name: String, bg: String, accent: String)] = [
         ("杏仁暖奶", "F7F2EA", "9E6B43"),
         ("薄荷微风", "ECF5F0", "3B7A57"),
@@ -44,8 +35,6 @@ struct SettingsView: View {
 
                         apiAndModelCard
 
-                        quickProviderPresetsCard
-
                         generationParametersCard
                     }
                     .padding(.horizontal, 16)
@@ -53,11 +42,6 @@ struct SettingsView: View {
                     .padding(.bottom, 32)
                 }
                 .scrollDismissesKeyboard(.interactively)
-                .simultaneousGesture(
-                    TapGesture().onEnded {
-                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-                    }
-                )
             }
             .navigationTitle("外观与设置")
             .navigationBarTitleDisplayMode(.large)
@@ -353,55 +337,6 @@ struct SettingsView: View {
                     }
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(.red)
-                }
-            }
-        }
-        .padding(16)
-        .background(theme.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(theme.border, lineWidth: 1)
-        )
-    }
-
-    private var quickProviderPresetsCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("快捷服务商预设")
-                .font(.system(size: 15, weight: .bold))
-                .foregroundColor(theme.primaryText)
-
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
-                ForEach(presets, id: \.name) { item in
-                    let isCurrent = storage.settings.baseURL == item.base
-                    Button(action: {
-                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-                        storage.settings.baseURL = item.base
-                        storage.settings.modelName = item.model
-                        storage.settings.availableModels = []
-                        fetchErrorMessage = nil
-                        fetchSuccessMessage = "已切换至 \(item.name) 预设"
-                    }) {
-                        VStack(spacing: 4) {
-                            Text(item.name)
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundColor(isCurrent ? theme.accent : theme.primaryText)
-                            Text(item.model)
-                                .font(.system(size: 10))
-                                .foregroundColor(theme.secondaryText)
-                                .lineLimit(1)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                        .padding(.horizontal, 6)
-                        .background(isCurrent ? theme.accent.opacity(0.12) : theme.elevatedBackground)
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .stroke(isCurrent ? theme.accent : theme.border, lineWidth: 1)
-                        )
-                    }
-                    .buttonStyle(.plain)
                 }
             }
         }
