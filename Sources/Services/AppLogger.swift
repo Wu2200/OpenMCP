@@ -63,10 +63,13 @@ final class AppLogManager: ObservableObject {
     static let shared = AppLogManager()
 
     @Published private(set) var logs: [AppLogEntry] = []
+    @Published private(set) var isLoggingEnabled: Bool
     private let maxLogCount = 250
     private let storageKey = "OpenMCP_AppDiagnosticLogs"
+    private let loggingEnabledKey = "OpenMCP_DiagnosticLoggingEnabled"
 
     private init() {
+        isLoggingEnabled = UserDefaults.standard.object(forKey: loggingEnabledKey) as? Bool ?? true
         if let data = UserDefaults.standard.data(forKey: storageKey),
            let decoded = try? JSONDecoder().decode([AppLogEntry].self, from: data) {
             self.logs = decoded.map { entry in
@@ -95,6 +98,12 @@ final class AppLogManager: ObservableObject {
         return "对话记录"
     }
 
+    func setLoggingEnabled(_ enabled: Bool) {
+        guard isLoggingEnabled != enabled else { return }
+        isLoggingEnabled = enabled
+        UserDefaults.standard.set(enabled, forKey: loggingEnabledKey)
+    }
+
     @discardableResult
     func log(
         category: AppLogCategory,
@@ -109,6 +118,7 @@ final class AppLogManager: ObservableObject {
         stepIndex: Int? = nil,
         toolItems: [AppLogToolItem]? = nil
     ) -> String {
+        guard isLoggingEnabled else { return "" }
         let resolvedTitle = conversationId != nil ? resolvedConversationTitle(for: conversationId, fallback: conversationTitle) : conversationTitle
         let entry = AppLogEntry(
             category: category,
@@ -140,7 +150,7 @@ final class AppLogManager: ObservableObject {
         details: String? = nil,
         conversationTitle: String? = nil
     ) {
-        guard let idx = logs.firstIndex(where: { $0.id == id }) else { return }
+        guard isLoggingEnabled, let idx = logs.firstIndex(where: { $0.id == id }) else { return }
         if let category = category {
             logs[idx].category = category
         }
@@ -179,6 +189,7 @@ final class AppLogManager: ObservableObject {
         arguments: String,
         outputPreview: String
     ) {
+        guard isLoggingEnabled else { return }
         let item = AppLogToolItem(
             toolName: toolName,
             serverName: serverName,
