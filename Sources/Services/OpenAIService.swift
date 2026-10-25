@@ -199,12 +199,13 @@ class OpenAIService {
                     await onPartialUpdate?(text)
                 }
                 let elapsed = String(format: "%.2fs", CFAbsoluteTimeGetCurrent() - startTime)
+                let isTruncatedNonStream = (finishReason == "length" || finishReason == "max_tokens" || finishReason.contains("incomplete") || ((parsed.content ?? "").isEmpty && (parsed.toolCalls ?? []).isEmpty))
                 await MainActor.run {
                     AppLogManager.shared.updateLog(
                         id: requestLogId,
-                        category: .aiStop,
-                        level: finishReason == "length" ? .warning : .info,
-                        title: "\(stepPrefix)非流式响应完成 [\(settings.modelName)]",
+                        category: isTruncatedNonStream ? .aiTruncated : .aiStop,
+                        level: isTruncatedNonStream ? .warning : .info,
+                        title: isTruncatedNonStream ? "\(stepPrefix)非流式响应截断 [\(settings.modelName)]" : "\(stepPrefix)非流式响应完成 [\(settings.modelName)]",
                         summary: "耗时: \(elapsed) · finish_reason: \(finishReason) · 正文: \(parsed.content?.count ?? 0) 字 · 工具调用: \(parsed.toolCalls?.count ?? 0)",
                         details: "\(requestHeaderDetails)\n\nHTTP Status: \(httpRes.statusCode)\nContent-Type: \(contentType)\nFinish Reason: \(finishReason)\nRaw Bytes: \(rawData.count)"
                     )
@@ -515,7 +516,7 @@ class OpenAIService {
                 await MainActor.run {
                     AppLogManager.shared.updateLog(
                         id: requestLogId,
-                        category: .aiStop,
+                        category: .aiTruncated,
                         level: .error,
                         title: "\(stepPrefix)流式读取中途异常断开 [\(settings.modelName)]",
                         summary: "耗时: \(elapsed) · 已收帧: \(sseChunkCount) · 已生成: \(accumulatedContent.count) 字 · 错误: \(error.localizedDescription)",
@@ -579,25 +580,45 @@ class OpenAIService {
 
         let elapsedStr = String(format: "%.2fs", CFAbsoluteTimeGetCurrent() - startTime)
         let fr = lastFinishReason ?? (receivedDoneMarker ? "stop(无显式finish_reason)" : "未收到finish_reason且未收到[DONE]")
-        let isAbnormalTruncation = (lastFinishReason == "length" || lastFinishReason == "max_tokens" || (lastFinishReason?.contains("incomplete") == true) || (!receivedDoneMarker && lastFinishReason == nil))
+        let toolCallCountResult = finalToolCalls?.count ?? 0
+        let hasTextContent = !accumulatedContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let isLengthTruncated = (lastFinishReason == "length" || lastFinishReason == "max_tokens" || (lastFinishReason?.contains("incomplete") == true))
+        let isPrematureEOF = (!receivedDoneMarker && lastFinishReason == nil)
+        let isEmptyResponseTruncated = (!hasTextContent && toolCallCountResult == 0)
+        let isAbnormalTruncation = (isLengthTruncated || isPrematureEOF || isEmptyResponseTruncated)
+
         let diagnosisNote: String
-        if lastFinishReason == "length" || lastFinishReason == "max_tokens" || (lastFinishReason?.contains("incomplete") == true) {
+        if isLengthTruncated {
             diagnosisNote = "⚠️ 诊断结论：上游接口因达到最大输出 Token 限制 (finish_reason=\(fr)) 主动截断了输出。"
-        } else if !receivedDoneMarker && lastFinishReason == nil {
+        } else if isPrematureEOF {
             diagnosisNote = "⚠️ 诊断结论：上游 HTTP 流在未发送 [DONE] 且未发送 finish_reason 的情况下提前关闭了连接（通常是反代超时或上游流中断）。"
+        } else if isEmptyResponseTruncated {
+            diagnosisNote = "⚠️ 诊断结论：上游流已结束 (finish_reason=\(fr), [DONE]=\(receivedDoneMarker))，但既未返回正文内容也未返回工具调用（思考长度: \(accumulatedReasoning.count) 字），属于空正文截断。"
+        } else if toolCallCountResult > 0 && !hasTextContent {
+            diagnosisNote = "✅ 诊断结论：上游正常结束本步流式传输并触发工具调用 (finish_reason=\(fr), 触发工具: \(toolCallCountResult) 个；工具调用中间步通常不输出正文，待工具执行完成后进入下一步继续生成)。"
         } else {
             diagnosisNote = "✅ 诊断结论：上游正常结束流式传输 (finish_reason=\(fr), [DONE]=\(receivedDoneMarker))。"
         }
 
+        let logTitle: String
+        if isAbnormalTruncation {
+            logTitle = isEmptyResponseTruncated
+                ? "\(stepPrefix)流式响应无正文截断 [\(settings.modelName)]"
+                : "\(stepPrefix)流式输出异常截断 [\(settings.modelName)]"
+        } else if toolCallCountResult > 0 && !hasTextContent {
+            logTitle = "\(stepPrefix)AI 触发工具调用 [\(settings.modelName)]"
+        } else {
+            logTitle = "\(stepPrefix)AI 响应完成 [\(settings.modelName)]"
+        }
+
         let tailPreview = String(accumulatedContent.suffix(160))
-        let toolCallCountResult = finalToolCalls?.count ?? 0
         let summarySuffix = toolCallCountResult > 0 ? " · 触发工具: \(toolCallCountResult) 个" : ""
         await MainActor.run {
             AppLogManager.shared.updateLog(
                 id: requestLogId,
-                category: .aiStop,
+                category: isAbnormalTruncation ? .aiTruncated : .aiStop,
                 level: isAbnormalTruncation ? .warning : .info,
-                title: isAbnormalTruncation ? "\(stepPrefix)流式输出疑似截断 [\(settings.modelName)]" : "\(stepPrefix)AI 响应完成 [\(settings.modelName)]",
+                title: logTitle,
                 summary: "耗时: \(elapsedStr) · 原因: \(fr) · [DONE]: \(receivedDoneMarker ? "是" : "否") · 正文: \(accumulatedContent.count) 字 · 帧数: \(sseChunkCount)\(summarySuffix)",
                 details: "\(diagnosisNote)\n\n--- 请求参数 ---\n\(requestHeaderDetails)\n\n--- 流式响应统计 ---\nSSE Frames: \(sseChunkCount)\nFinish Reason: \(fr)\nReceived [DONE]: \(receivedDoneMarker)\nUsage: \(usageSummary.isEmpty ? "未返回" : usageSummary)\nContent Length: \(accumulatedContent.count) chars\nReasoning Length: \(accumulatedReasoning.count) chars\nTool Calls: \(toolCallCountResult)\nContent Tail (最后160字):\n\(tailPreview)\n\nLast SSE Data Frame:\n\(lastRawDataLine)"
             )
