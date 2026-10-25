@@ -251,6 +251,7 @@ struct ChatDetailView: View {
                                             coordinator.streamingState.setDisplayPaused(false)
                                         },
                                         onScrollSettled: {
+                                            coordinator.streamingState.setDisplayPaused(false)
                                         }
                                     )
                                 )
