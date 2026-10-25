@@ -14,7 +14,6 @@ struct ChatDetailView: View {
     @State private var previewingStagedAttachment: ChatAttachment? = nil
     @State private var selectedTurnId: String? = nil
     @State private var autoFollowOutput: Bool = true
-    @State private var lastAutoScrollTime: TimeInterval = 0
     @FocusState private var isInputFocused: Bool
 
     private var theme: AppThemePalette {
@@ -127,13 +126,17 @@ struct ChatDetailView: View {
                                     let turns = displayTurns
                                     ForEach(Array(turns.enumerated()), id: \.element.id) { index, turn in
                                         let isLastAssistant = (index == turns.count - 1 && turn.role == .assistant)
+                                        let activeGenerating = coordinator.isGenerating && isLastAssistant
+
                                         MessageBubbleView(
                                             turn: turn,
+                                            theme: theme,
                                             modelName: storage.settings.modelName,
                                             isGenerating: coordinator.isGenerating,
-                                            isActiveGeneratingTurn: coordinator.isGenerating && isLastAssistant,
-                                            statusText: coordinator.statusText,
-                                            thinkingStartTime: coordinator.thinkingStartTime,
+                                            isActiveGeneratingTurn: activeGenerating,
+                                            statusText: activeGenerating ? coordinator.statusText : "",
+                                            thinkingStartTime: activeGenerating ? coordinator.thinkingStartTime : nil,
+                                            streamingState: activeGenerating ? coordinator.streamingState : nil,
                                             isSelected: selectedTurnId == turn.id,
                                             onSelectToggle: {
                                                 if isInputFocused {
@@ -160,28 +163,24 @@ struct ChatDetailView: View {
                                                 dismissKeyboard()
                                                 selectedTurnId = nil
                                                 autoFollowOutput = true
-                                                Task {
-                                                    await coordinator.retryFromMessage(
-                                                        conversationId: conversationId,
-                                                        messageId: turn.primaryMessageId,
-                                                        newPrompt: newContent,
-                                                        settings: storage.settings,
-                                                        servers: storage.servers
-                                                    )
-                                                }
+                                                coordinator.startRetryFromMessage(
+                                                    conversationId: conversationId,
+                                                    messageId: turn.primaryMessageId,
+                                                    newPrompt: newContent,
+                                                    settings: storage.settings,
+                                                    servers: storage.servers
+                                                )
                                             },
                                             onRetry: {
                                                 dismissKeyboard()
                                                 selectedTurnId = nil
                                                 autoFollowOutput = true
-                                                Task {
-                                                    await coordinator.retryFromMessage(
-                                                        conversationId: conversationId,
-                                                        messageId: turn.primaryMessageId,
-                                                        settings: storage.settings,
-                                                        servers: storage.servers
-                                                    )
-                                                }
+                                                coordinator.startRetryFromMessage(
+                                                    conversationId: conversationId,
+                                                    messageId: turn.primaryMessageId,
+                                                    settings: storage.settings,
+                                                    servers: storage.servers
+                                                )
                                             },
                                             onDelete: {
                                                 dismissKeyboard()
@@ -207,41 +206,38 @@ struct ChatDetailView: View {
                                             .id("error_status")
                                     }
 
-                                    Color.clear
-                                        .frame(height: 2)
-                                        .id("bottom_anchor")
+                                    StreamingScrollFollowerView(
+                                        streamingState: coordinator.streamingState,
+                                        autoFollowOutput: autoFollowOutput,
+                                        onScrollToBottom: {
+                                            scrollToBottomImmediate(proxy: proxy)
+                                        }
+                                    )
+                                    .frame(height: 2)
+                                    .id("bottom_anchor")
                                 }
                                 .padding(.horizontal, 10)
                                 .padding(.top, 10)
                                 .padding(.bottom, 14)
+                                .background(
+                                    ChatScrollViewIntrospector(
+                                        onUserDragUp: {
+                                            if autoFollowOutput {
+                                                autoFollowOutput = false
+                                            }
+                                        },
+                                        onReachBottom: {
+                                            if !autoFollowOutput {
+                                                autoFollowOutput = true
+                                            }
+                                        }
+                                    )
+                                )
                             }
                         }
-                        .background(
-                            Color.clear
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    handleBackgroundTap()
-                                }
-                        )
-                        .simultaneousGesture(
-                            DragGesture(minimumDistance: 5)
-                                .onChanged { value in
-                                    if value.translation.height > 2 || coordinator.isGenerating {
-                                        autoFollowOutput = false
-                                    }
-                                }
-                        )
                         .scrollDismissesKeyboard(.interactively)
                         .onChange(of: currentConversation.messages.count) { _ in
                             if autoFollowOutput {
-                                scrollToBottomImmediate(proxy: proxy)
-                            }
-                        }
-                        .onChange(of: currentConversation.messages.last?.content) { _ in
-                            guard autoFollowOutput else { return }
-                            let now = CFAbsoluteTimeGetCurrent()
-                            if now - lastAutoScrollTime >= 0.08 {
-                                lastAutoScrollTime = now
                                 scrollToBottomImmediate(proxy: proxy)
                             }
                         }
@@ -297,6 +293,9 @@ struct ChatDetailView: View {
                     Menu {
                         Button(role: .destructive, action: {
                             selectedTurnId = nil
+                            if coordinator.isGenerating {
+                                coordinator.stopGeneration()
+                            }
                             storage.clearConversationMessages(id: conversationId)
                         }) {
                             Label("清空当前对话消息", systemImage: "trash")
@@ -463,28 +462,26 @@ struct ChatDetailView: View {
                     .textSelection(.enabled)
 
                 if let lastTurn = displayTurns.last {
-                    Button(action: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.clockwise")
+                        Text("立即重试")
+                    }
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 5)
+                    .background(theme.accent)
+                    .clipShape(Capsule())
+                    .contentShape(Capsule())
+                    .onTapGesture {
                         dismissKeyboard()
                         autoFollowOutput = true
-                        Task {
-                            await coordinator.retryFromMessage(
-                                conversationId: conversationId,
-                                messageId: lastTurn.primaryMessageId,
-                                settings: storage.settings,
-                                servers: storage.servers
-                            )
-                        }
-                    }) {
-                        HStack(spacing: 4) {
-                            Image(systemName: "arrow.clockwise")
-                            Text("立即重试")
-                        }
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 5)
-                        .background(theme.accent)
-                        .clipShape(Capsule())
+                        coordinator.startRetryFromMessage(
+                            conversationId: conversationId,
+                            messageId: lastTurn.primaryMessageId,
+                            settings: storage.settings,
+                            servers: storage.servers
+                        )
                     }
                 }
             }
@@ -501,7 +498,8 @@ struct ChatDetailView: View {
     }
 
     private func composerDock(proxy: ScrollViewProxy) -> some View {
-        let canSend = (!inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pendingAttachments.isEmpty) && !coordinator.isGenerating
+        let hasInput = !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pendingAttachments.isEmpty
+        let canSend = hasInput && !coordinator.isGenerating
 
         return VStack(alignment: .leading, spacing: 8) {
             if !pendingAttachments.isEmpty {
@@ -525,9 +523,7 @@ struct ChatDetailView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
                     .onTapGesture {
-                        if !coordinator.isGenerating {
-                            isInputFocused = true
-                        }
+                        isInputFocused = true
                     }
                     .onChange(of: inputText) { newValue in
                         if newValue.count >= 650 {
@@ -539,23 +535,42 @@ struct ChatDetailView: View {
                             inputText = ""
                         }
                     }
-                    .disabled(coordinator.isGenerating)
 
-                Button(action: {
-                    sendMessage(proxy: proxy)
-                }) {
-                    ZStack {
-                        Circle()
-                            .fill(canSend ? theme.accent : theme.elevatedBackground)
-                            .frame(width: 32, height: 32)
+                if coordinator.isGenerating {
+                    Button(action: {
+                        coordinator.stopGeneration()
+                    }) {
+                        ZStack {
+                            Circle()
+                                .fill(theme.accent)
+                                .frame(width: 32, height: 32)
 
-                        Image(systemName: coordinator.isGenerating ? "hourglass" : "arrow.up")
-                            .font(.system(size: 13.5, weight: .bold))
-                            .foregroundColor(canSend ? .white : theme.mutedText)
+                            RoundedRectangle(cornerRadius: 2.5, style: .continuous)
+                                .fill(Color.white)
+                                .frame(width: 11, height: 11)
+                        }
                     }
+                    .buttonStyle(.plain)
+                    .transition(.scale.combined(with: .opacity))
+                } else {
+                    Button(action: {
+                        sendMessage(proxy: proxy)
+                    }) {
+                        ZStack {
+                            Circle()
+                                .fill(canSend ? theme.accent : theme.elevatedBackground)
+                                .frame(width: 32, height: 32)
+
+                            Image(systemName: "arrow.up")
+                                .font(.system(size: 13.5, weight: .bold))
+                                .foregroundColor(canSend ? .white : theme.mutedText)
+                        }
+                    }
+                    .disabled(!canSend)
+                    .transition(.scale.combined(with: .opacity))
                 }
-                .disabled(!canSend)
             }
+            .animation(.easeInOut(duration: 0.16), value: coordinator.isGenerating)
 
             HStack(spacing: 12) {
                 Menu {
@@ -563,7 +578,7 @@ struct ChatDetailView: View {
                         dismissKeyboard()
                         showingPhotoPicker = true
                     }) {
-                        Label("上传图片", systemImage: "photo.on.rectangle.angled")
+                        Label("图片上传", systemImage: "photo.on.rectangle.angled")
                     }
 
                     Button(action: {
@@ -577,7 +592,7 @@ struct ChatDetailView: View {
                         dismissKeyboard()
                         showingDocumentPicker = true
                     }) {
-                        Label("上传文件", systemImage: "doc.badge.plus")
+                        Label("文件上传", systemImage: "doc.badge.plus")
                     }
                 } label: {
                     Image(systemName: "plus.circle")
@@ -701,14 +716,14 @@ struct ChatDetailView: View {
             }
             .frame(maxWidth: 130, alignment: .leading)
 
-            Button(action: {
-                pendingAttachments.removeAll { $0.id == att.id }
-            }) {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 15))
-                    .foregroundColor(theme.mutedText)
-            }
-            .buttonStyle(.plain)
+            Image(systemName: "xmark.circle.fill")
+                .font(.system(size: 15))
+                .foregroundColor(theme.mutedText)
+                .padding(2)
+                .contentShape(Circle())
+                .onTapGesture {
+                    pendingAttachments.removeAll { $0.id == att.id }
+                }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
@@ -718,6 +733,7 @@ struct ChatDetailView: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(theme.border, lineWidth: 1)
         )
+        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .onTapGesture {
             previewingStagedAttachment = att
         }
@@ -817,29 +833,25 @@ struct ChatDetailView: View {
         selectedTurnId = nil
         autoFollowOutput = true
         dismissKeyboard()
-        Task {
-            await coordinator.sendMessage(
-                conversationId: conversationId,
-                userPrompt: prompt,
-                attachments: attachmentsToSend,
-                settings: storage.settings,
-                servers: storage.servers
-            )
-        }
+        coordinator.startSendMessage(
+            conversationId: conversationId,
+            userPrompt: prompt,
+            attachments: attachmentsToSend,
+            settings: storage.settings,
+            servers: storage.servers
+        )
     }
 
     private func sendSpecificPrompt(_ prompt: String) {
         selectedTurnId = nil
         autoFollowOutput = true
         dismissKeyboard()
-        Task {
-            await coordinator.sendMessage(
-                conversationId: conversationId,
-                userPrompt: prompt,
-                settings: storage.settings,
-                servers: storage.servers
-            )
-        }
+        coordinator.startSendMessage(
+            conversationId: conversationId,
+            userPrompt: prompt,
+            settings: storage.settings,
+            servers: storage.servers
+        )
     }
 
     private func scrollToBottomImmediate(proxy: ScrollViewProxy) {
@@ -847,6 +859,92 @@ struct ChatDetailView: View {
         transaction.disablesAnimations = true
         withTransaction(transaction) {
             proxy.scrollTo("bottom_anchor", anchor: .bottom)
+        }
+    }
+}
+
+private struct StreamingScrollFollowerView: View {
+    @ObservedObject var streamingState: StreamingTurnState
+    let autoFollowOutput: Bool
+    let onScrollToBottom: () -> Void
+    @State private var lastScrollTime: TimeInterval = 0
+
+    var body: some View {
+        Color.clear
+            .onChange(of: streamingState.displayedText.count) { _ in
+                guard autoFollowOutput else { return }
+                let now = CFAbsoluteTimeGetCurrent()
+                if now - lastScrollTime >= 0.085 {
+                    lastScrollTime = now
+                    onScrollToBottom()
+                }
+            }
+    }
+}
+
+private struct ChatScrollViewIntrospector: UIViewRepresentable {
+    var onUserDragUp: () -> Void
+    var onReachBottom: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onUserDragUp: onUserDragUp, onReachBottom: onReachBottom)
+    }
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView(frame: .zero)
+        view.isUserInteractionEnabled = false
+        view.backgroundColor = .clear
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.onUserDragUp = onUserDragUp
+        context.coordinator.onReachBottom = onReachBottom
+        DispatchQueue.main.async {
+            context.coordinator.attachIfNeeded(from: uiView)
+        }
+    }
+
+    final class Coordinator: NSObject {
+        var onUserDragUp: () -> Void
+        var onReachBottom: () -> Void
+        private weak var attachedScrollView: UIScrollView?
+
+        init(onUserDragUp: @escaping () -> Void, onReachBottom: @escaping () -> Void) {
+            self.onUserDragUp = onUserDragUp
+            self.onReachBottom = onReachBottom
+        }
+
+        func attachIfNeeded(from view: UIView) {
+            var current: UIView? = view.superview
+            while let candidate = current {
+                if let sv = candidate as? UIScrollView {
+                    if attachedScrollView !== sv {
+                        attachedScrollView = sv
+                        sv.delaysContentTouches = true
+                        sv.canCancelContentTouches = true
+                        sv.panGestureRecognizer.addTarget(self, action: #selector(handlePan(_:)))
+                    }
+                    break
+                }
+                current = candidate.superview
+            }
+        }
+
+        @objc private func handlePan(_ recognizer: UIPanGestureRecognizer) {
+            guard let sv = attachedScrollView else { return }
+            let translation = recognizer.translation(in: sv)
+
+            if recognizer.state == .began || recognizer.state == .changed {
+                if translation.y > 4 {
+                    onUserDragUp()
+                }
+            } else if recognizer.state == .ended || recognizer.state == .cancelled {
+                let distanceFromBottom = sv.contentSize.height - sv.contentOffset.y - sv.bounds.height
+                if distanceFromBottom < 28 {
+                    onReachBottom()
+                }
+            }
         }
     }
 }

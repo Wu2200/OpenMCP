@@ -51,77 +51,86 @@ struct ThinkingStatusView: View {
 struct AttachmentFileCardView: View {
     let attachment: ChatAttachment
     let theme: AppThemePalette
-    var onTap: () -> Void
+    var isSelected: Bool = false
+    var onCardTap: () -> Void
+    var onPreviewTap: () -> Void
 
     var body: some View {
-        Button(action: onTap) {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 10) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 9, style: .continuous)
-                            .fill(theme.accent.opacity(0.14))
-                            .frame(width: 34, height: 34)
-                        Image(systemName: attachment.iconName)
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundColor(theme.accent)
-                    }
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(attachment.fileName)
-                            .font(.system(size: 13.5, weight: .semibold))
-                            .foregroundColor(theme.primaryText)
-                            .lineLimit(1)
-
-                        Text(attachment.metadataSummary)
-                            .font(.system(size: 11, weight: .medium, design: .rounded))
-                            .foregroundColor(theme.secondaryText)
-                            .lineLimit(1)
-                    }
-
-                    Spacer(minLength: 8)
-
-                    HStack(spacing: 3) {
-                        Image(systemName: "doc.text.magnifyingglass")
-                            .font(.system(size: 11, weight: .semibold))
-                        Text("查看")
-                            .font(.system(size: 11.5, weight: .semibold))
-                    }
-                    .foregroundColor(theme.accent)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 5)
-                    .background(theme.accent.opacity(0.12))
-                    .clipShape(Capsule())
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(theme.accent.opacity(0.14))
+                        .frame(width: 34, height: 34)
+                    Image(systemName: attachment.iconName)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(theme.accent)
                 }
 
-                if !attachment.previewSnippet.isEmpty {
-                    Text(attachment.previewSnippet)
-                        .font(.system(size: 12, design: .monospaced))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(attachment.fileName)
+                        .font(.system(size: 13.5, weight: .semibold))
+                        .foregroundColor(theme.primaryText)
+                        .lineLimit(1)
+
+                    Text(attachment.metadataSummary)
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
                         .foregroundColor(theme.secondaryText)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 6)
-                        .background(theme.elevatedBackground.opacity(0.75))
-                        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 8)
+
+                HStack(spacing: 3) {
+                    Image(systemName: "doc.text.magnifyingglass")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text("查看")
+                        .font(.system(size: 11.5, weight: .semibold))
+                }
+                .foregroundColor(theme.accent)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5.5)
+                .background(theme.accent.opacity(0.12))
+                .clipShape(Capsule())
+                .contentShape(Capsule())
+                .onTapGesture {
+                    onPreviewTap()
                 }
             }
-            .padding(10)
-            .frame(maxWidth: 280, alignment: .leading)
-            .background(theme.cardBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(theme.border, lineWidth: 1)
-            )
+
+            if !attachment.previewSnippet.isEmpty {
+                Text(attachment.previewSnippet)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundColor(theme.secondaryText)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+                    .background(theme.elevatedBackground.opacity(0.75))
+                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            }
         }
-        .buttonStyle(.plain)
+        .padding(10)
+        .frame(maxWidth: 280, alignment: .leading)
+        .background(theme.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(isSelected ? theme.accent.opacity(0.55) : theme.border, lineWidth: 1)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .onTapGesture {
+            onCardTap()
+        }
     }
 }
 
 struct AttachmentImageGridView: View {
     let attachments: [ChatAttachment]
     let theme: AppThemePalette
+    var isSelected: Bool = false
+    var onCardTap: () -> Void
     var onSelectImage: (ChatAttachment) -> Void
 
     var body: some View {
@@ -130,9 +139,7 @@ struct AttachmentImageGridView: View {
                 if let b64 = att.imageDataBase64,
                    let data = Data(base64Encoded: b64),
                    let uiImage = UIImage(data: data) {
-                    Button(action: {
-                        onSelectImage(att)
-                    }) {
+                    ZStack(alignment: .bottomTrailing) {
                         Image(uiImage: uiImage)
                             .resizable()
                             .scaledToFill()
@@ -143,10 +150,30 @@ struct AttachmentImageGridView: View {
                             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                             .overlay(
                                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .stroke(theme.border, lineWidth: 1)
+                                    .stroke(isSelected ? theme.accent.opacity(0.55) : theme.border, lineWidth: 1)
                             )
+                            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .onTapGesture {
+                                onCardTap()
+                            }
+
+                        HStack(spacing: 3) {
+                            Image(systemName: "arrow.up.left.and.arrow.down.right")
+                                .font(.system(size: 9.5, weight: .bold))
+                            Text("查看")
+                                .font(.system(size: 10.5, weight: .semibold))
+                        }
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 4)
+                        .background(Color.black.opacity(0.58))
+                        .clipShape(Capsule())
+                        .padding(6)
+                        .contentShape(Capsule())
+                        .onTapGesture {
+                            onSelectImage(att)
+                        }
                     }
-                    .buttonStyle(.plain)
                 }
             }
         }

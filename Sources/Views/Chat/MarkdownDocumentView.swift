@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-enum MarkdownBlock: Identifiable {
+enum MarkdownBlock: Identifiable, Equatable {
     case heading(id: Int, level: Int, text: String)
     case paragraph(id: Int, text: String)
     case list(id: Int, items: [MarkdownListItem])
@@ -23,8 +23,8 @@ enum MarkdownBlock: Identifiable {
     }
 }
 
-struct MarkdownListItem: Identifiable {
-    enum Marker {
+struct MarkdownListItem: Identifiable, Equatable {
+    enum Marker: Equatable {
         case bullet
         case ordered(String)
         case task(Bool)
@@ -112,58 +112,80 @@ final class MarkdownRenderCache {
 struct MarkdownDocumentView: View {
     let content: String
     let theme: AppThemePalette
+    var isStreaming: Bool = false
 
     var body: some View {
         let blocks = MarkdownRenderCache.shared.blocks(for: content)
         VStack(alignment: .leading, spacing: 8) {
             ForEach(blocks) { block in
-                switch block {
-                case .heading(_, let level, let text):
-                    headingView(level: level, text: text)
-
-                case .paragraph(_, let text):
-                    MarkdownInlineText(text: text, fontSize: 15, weight: .regular, theme: theme)
-                        .lineSpacing(3.5)
-
-                case .list(_, let items):
-                    let minIndent = items.map(\.indent).min() ?? 0
-                    VStack(alignment: .leading, spacing: 5) {
-                        ForEach(items) { item in
-                            listItemView(item, baseIndent: minIndent)
-                        }
-                    }
-                    .padding(.vertical, 1)
-
-                case .blockquote(_, let text):
-                    MarkdownInlineText(text: text, fontSize: 14, weight: .regular, theme: theme, isSecondary: true)
-                        .lineSpacing(3.5)
-                        .padding(.leading, 12)
-                        .padding(.trailing, 10)
-                        .padding(.vertical, 7)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(theme.elevatedBackground.opacity(0.6))
-                        .overlay(alignment: .leading) {
-                            RoundedRectangle(cornerRadius: 2)
-                                .fill(theme.accent.opacity(0.8))
-                                .frame(width: 3.5)
-                        }
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-
-                case .codeBlock(_, let language, let code):
-                    CodeBlockCard(language: language, code: code, theme: theme)
-
-                case .table(_, let headers, let alignments, let rows):
-                    MarkdownTableView(headers: headers, alignments: alignments, rows: rows, theme: theme)
-
-                case .divider:
-                    Rectangle()
-                        .fill(theme.border)
-                        .frame(height: 1)
-                        .padding(.vertical, 2)
-                }
+                MarkdownBlockItemView(
+                    block: block,
+                    theme: theme,
+                    isStreaming: isStreaming && (block.id == blocks.last?.id)
+                )
+                .equatable()
+                .transition(.opacity.combined(with: .offset(y: 2)))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .animation(isStreaming ? .easeOut(duration: 0.16) : nil, value: blocks.count)
+    }
+}
+
+struct MarkdownBlockItemView: View, Equatable {
+    let block: MarkdownBlock
+    let theme: AppThemePalette
+    let isStreaming: Bool
+
+    static func == (lhs: MarkdownBlockItemView, rhs: MarkdownBlockItemView) -> Bool {
+        lhs.block == rhs.block && lhs.theme == rhs.theme && lhs.isStreaming == rhs.isStreaming
+    }
+
+    var body: some View {
+        switch block {
+        case .heading(_, let level, let text):
+            headingView(level: level, text: text)
+
+        case .paragraph(_, let text):
+            MarkdownInlineText(text: text, fontSize: 15, weight: .regular, theme: theme, isStreaming: isStreaming)
+                .lineSpacing(3.5)
+
+        case .list(_, let items):
+            let minIndent = items.map(\.indent).min() ?? 0
+            VStack(alignment: .leading, spacing: 5) {
+                ForEach(items) { item in
+                    listItemView(item, baseIndent: minIndent)
+                }
+            }
+            .padding(.vertical, 1)
+
+        case .blockquote(_, let text):
+            MarkdownInlineText(text: text, fontSize: 14, weight: .regular, theme: theme, isSecondary: true, isStreaming: isStreaming)
+                .lineSpacing(3.5)
+                .padding(.leading, 12)
+                .padding(.trailing, 10)
+                .padding(.vertical, 7)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(theme.elevatedBackground.opacity(0.6))
+                .overlay(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(theme.accent.opacity(0.8))
+                        .frame(width: 3.5)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+        case .codeBlock(_, let language, let code):
+            CodeBlockCard(language: language, code: code, theme: theme)
+
+        case .table(_, let headers, let alignments, let rows):
+            MarkdownTableView(headers: headers, alignments: alignments, rows: rows, theme: theme)
+
+        case .divider:
+            Rectangle()
+                .fill(theme.border)
+                .frame(height: 1)
+                .padding(.vertical, 2)
+        }
     }
 
     @ViewBuilder
@@ -178,7 +200,7 @@ struct MarkdownDocumentView: View {
         }()
 
         VStack(alignment: .leading, spacing: 4) {
-            MarkdownInlineText(text: text, fontSize: size, weight: .bold, theme: theme)
+            MarkdownInlineText(text: text, fontSize: size, weight: .bold, theme: theme, isStreaming: isStreaming)
                 .lineSpacing(2.5)
 
             if level == 1 {
@@ -214,7 +236,7 @@ struct MarkdownDocumentView: View {
                     .frame(width: 15, alignment: .center)
             }
 
-            MarkdownInlineText(text: item.text, fontSize: 15, weight: .regular, theme: theme)
+            MarkdownInlineText(text: item.text, fontSize: 15, weight: .regular, theme: theme, isStreaming: isStreaming)
                 .lineSpacing(3.5)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -228,6 +250,7 @@ struct MarkdownInlineText: View {
     var weight: Font.Weight = .regular
     let theme: AppThemePalette
     var isSecondary: Bool = false
+    var isStreaming: Bool = false
 
     var body: some View {
         Text(MarkdownRenderCache.shared.attributedString(for: text, fontSize: fontSize, theme: theme))
@@ -235,6 +258,8 @@ struct MarkdownInlineText: View {
             .foregroundColor(isSecondary ? theme.secondaryText : theme.primaryText)
             .tint(theme.accent)
             .textSelection(.enabled)
+            .contentTransition(.opacity)
+            .animation(isStreaming ? .easeOut(duration: 0.14) : nil, value: text)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

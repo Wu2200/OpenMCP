@@ -13,13 +13,14 @@ struct MessageDisplayTurn: Identifiable, Equatable {
 }
 
 struct MessageBubbleView: View {
-    @EnvironmentObject var storage: DataStorage
     let turn: MessageDisplayTurn
+    let theme: AppThemePalette
     var modelName: String = "Assistant"
     var isGenerating: Bool = false
     var isActiveGeneratingTurn: Bool = false
     var statusText: String = ""
     var thinkingStartTime: Date? = nil
+    var streamingState: StreamingTurnState? = nil
     var isSelected: Bool = false
     var onSelectToggle: (() -> Void)? = nil
     var onEditSave: ((String) -> Void)? = nil
@@ -33,10 +34,6 @@ struct MessageBubbleView: View {
     @State private var previewingFileAttachment: ChatAttachment? = nil
     @State private var previewingImageAttachment: ChatAttachment? = nil
     @FocusState private var isEditFieldFocused: Bool
-
-    private var theme: AppThemePalette {
-        storage.settings.currentTheme
-    }
 
     private var editableRawText: String {
         if !turn.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -85,6 +82,10 @@ struct MessageBubbleView: View {
                             AttachmentImageGridView(
                                 attachments: imageAtts,
                                 theme: theme,
+                                isSelected: isSelected,
+                                onCardTap: {
+                                    onSelectToggle?()
+                                },
                                 onSelectImage: { img in
                                     previewingImageAttachment = img
                                 }
@@ -95,7 +96,11 @@ struct MessageBubbleView: View {
                             AttachmentFileCardView(
                                 attachment: fileAtt,
                                 theme: theme,
-                                onTap: {
+                                isSelected: isSelected,
+                                onCardTap: {
+                                    onSelectToggle?()
+                                },
+                                onPreviewTap: {
                                     previewingFileAttachment = fileAtt
                                 }
                             )
@@ -105,7 +110,11 @@ struct MessageBubbleView: View {
                             AttachmentFileCardView(
                                 attachment: packaged,
                                 theme: theme,
-                                onTap: {
+                                isSelected: isSelected,
+                                onCardTap: {
+                                    onSelectToggle?()
+                                },
+                                onPreviewTap: {
                                     previewingFileAttachment = packaged
                                 }
                             )
@@ -120,17 +129,13 @@ struct MessageBubbleView: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 15, style: .continuous)
-                                        .stroke(isSelected ? theme.accent.opacity(0.45) : theme.accent.opacity(0.18), lineWidth: 1)
+                                        .stroke(isSelected ? theme.accent.opacity(0.55) : theme.accent.opacity(0.18), lineWidth: 1)
                                 )
                                 .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
                                 .onTapGesture {
                                     onSelectToggle?()
                                 }
                         }
-                    }
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        onSelectToggle?()
                     }
                 }
 
@@ -149,10 +154,7 @@ struct MessageBubbleView: View {
     }
 
     private var assistantTurnView: some View {
-        let trimmed = turn.content.trimmingCharacters(in: .whitespacesAndNewlines)
-        let isPureThinking = isActiveGeneratingTurn && trimmed.isEmpty && turn.toolCalls.isEmpty
-
-        return VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .top, spacing: 6) {
                 compactAvatar(isUser: false)
                     .onTapGesture {
@@ -161,56 +163,18 @@ struct MessageBubbleView: View {
 
                 if isEditing {
                     editEditorBox(allowResend: false)
-                } else if isPureThinking {
-                    ThinkingStatusView(
+                } else if isActiveGeneratingTurn, let streamState = streamingState {
+                    ActiveStreamingAssistantBubbleContent(
+                        turn: turn,
+                        theme: theme,
                         statusText: statusText,
-                        startDate: thinkingStartTime ?? turn.createdAt,
-                        theme: theme
+                        thinkingStartTime: thinkingStartTime,
+                        isSelected: isSelected,
+                        streamingState: streamState,
+                        onSelectToggle: onSelectToggle
                     )
-                    .padding(.horizontal, 13)
-                    .padding(.vertical, 9)
-                    .background(theme.cardBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 15, style: .continuous)
-                            .stroke(isSelected ? theme.accent.opacity(0.45) : theme.border, lineWidth: 1)
-                    )
-                    .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-                    .onTapGesture {
-                        onSelectToggle?()
-                    }
-
-                    Spacer(minLength: 36)
                 } else {
-                    VStack(alignment: .leading, spacing: 8) {
-                        if !turn.toolCalls.isEmpty {
-                            ToolCallSummaryGroupView(toolCalls: turn.toolCalls)
-                        }
-
-                        if !trimmed.isEmpty {
-                            MarkdownDocumentView(content: trimmed, theme: theme)
-                        } else if isActiveGeneratingTurn {
-                            ThinkingStatusView(
-                                statusText: statusText,
-                                startDate: thinkingStartTime ?? turn.createdAt,
-                                theme: theme
-                            )
-                            .padding(.top, 2)
-                        }
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(theme.cardBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 15, style: .continuous)
-                            .stroke(isSelected ? theme.accent.opacity(0.45) : theme.border, lineWidth: 1)
-                    )
-                    .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-                    .onTapGesture {
-                        onSelectToggle?()
-                    }
+                    staticAssistantBubbleContent
                 }
             }
 
@@ -219,6 +183,32 @@ struct MessageBubbleView: View {
                     .padding(.leading, 30)
                     .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .topLeading)))
             }
+        }
+    }
+
+    private var staticAssistantBubbleContent: some View {
+        let trimmed = turn.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        return VStack(alignment: .leading, spacing: 8) {
+            if !turn.toolCalls.isEmpty {
+                ToolCallSummaryGroupView(toolCalls: turn.toolCalls, theme: theme)
+            }
+
+            if !trimmed.isEmpty {
+                MarkdownDocumentView(content: trimmed, theme: theme, isStreaming: false)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(theme.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 15, style: .continuous)
+                .stroke(isSelected ? theme.accent.opacity(0.45) : theme.border, lineWidth: 1)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+        .onTapGesture {
+            onSelectToggle?()
         }
     }
 
@@ -233,100 +223,93 @@ struct MessageBubbleView: View {
                 .foregroundColor(isUser ? .white : theme.accent)
         }
         .padding(.top, 2)
+        .contentShape(Circle())
     }
 
     private var floatingActionPill: some View {
         let copyTarget = editableRawText
 
         return HStack(spacing: 4) {
-            Button(action: {
-                onRetry?()
-            }) {
-                HStack(spacing: 4) {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 11, weight: .semibold))
-                    Text("重试")
-                        .font(.system(size: 11.5, weight: .medium))
-                }
-                .foregroundColor(theme.secondaryText)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
-                .contentShape(Capsule())
+            HStack(spacing: 4) {
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("重试")
+                    .font(.system(size: 11.5, weight: .medium))
             }
-            .buttonStyle(.plain)
-            .disabled(isGenerating)
+            .foregroundColor(isGenerating ? theme.mutedText : theme.secondaryText)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .contentShape(Capsule())
+            .onTapGesture {
+                guard !isGenerating else { return }
+                onRetry?()
+            }
 
             Divider()
                 .frame(height: 12)
                 .overlay(theme.border)
 
-            Button(action: {
+            HStack(spacing: 4) {
+                Image(systemName: "pencil")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("编辑")
+                    .font(.system(size: 11.5, weight: .medium))
+            }
+            .foregroundColor(isGenerating ? theme.mutedText : theme.secondaryText)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .contentShape(Capsule())
+            .onTapGesture {
+                guard !isGenerating else { return }
                 draftText = editableRawText
                 withAnimation(.easeInOut(duration: 0.15)) {
                     isEditing = true
                 }
                 isEditFieldFocused = true
-            }) {
-                HStack(spacing: 4) {
-                    Image(systemName: "pencil")
-                        .font(.system(size: 11, weight: .semibold))
-                    Text("编辑")
-                        .font(.system(size: 11.5, weight: .medium))
-                }
-                .foregroundColor(theme.secondaryText)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
-                .contentShape(Capsule())
             }
-            .buttonStyle(.plain)
-            .disabled(isGenerating)
 
             if !copyTarget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Divider()
                     .frame(height: 12)
                     .overlay(theme.border)
 
-                Button(action: {
+                HStack(spacing: 4) {
+                    Image(systemName: isCopied ? "checkmark" : "doc.on.doc")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text(isCopied ? "已复制" : "复制")
+                        .font(.system(size: 11.5, weight: .medium))
+                }
+                .foregroundColor(isCopied ? theme.accent : theme.secondaryText)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .contentShape(Capsule())
+                .onTapGesture {
                     UIPasteboard.general.string = copyTarget
                     withAnimation { isCopied = true }
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                         withAnimation { isCopied = false }
                     }
-                }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: isCopied ? "checkmark" : "doc.on.doc")
-                            .font(.system(size: 11, weight: .semibold))
-                        Text(isCopied ? "已复制" : "复制")
-                            .font(.system(size: 11.5, weight: .medium))
-                    }
-                    .foregroundColor(isCopied ? theme.accent : theme.secondaryText)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 5)
-                    .contentShape(Capsule())
                 }
-                .buttonStyle(.plain)
             }
 
             Divider()
                 .frame(height: 12)
                 .overlay(theme.border)
 
-            Button(action: {
-                onDelete?()
-            }) {
-                HStack(spacing: 4) {
-                    Image(systemName: "trash")
-                        .font(.system(size: 11, weight: .semibold))
-                    Text("删除")
-                        .font(.system(size: 11.5, weight: .medium))
-                }
-                .foregroundColor(Color.red.opacity(0.8))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
-                .contentShape(Capsule())
+            HStack(spacing: 4) {
+                Image(systemName: "trash")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("删除")
+                    .font(.system(size: 11.5, weight: .medium))
             }
-            .buttonStyle(.plain)
-            .disabled(isGenerating)
+            .foregroundColor(isGenerating ? theme.mutedText : Color.red.opacity(0.8))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .contentShape(Capsule())
+            .onTapGesture {
+                guard !isGenerating else { return }
+                onDelete?()
+            }
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 3)
@@ -355,46 +338,56 @@ struct MessageBubbleView: View {
                 )
 
             HStack(spacing: 8) {
-                Button(action: {
-                    isEditFieldFocused = false
-                    withAnimation(.easeInOut(duration: 0.15)) {
-                        isEditing = false
+                Text("取消")
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundColor(theme.secondaryText)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(theme.cardBackground)
+                    .clipShape(Capsule())
+                    .overlay(Capsule().stroke(theme.border, lineWidth: 1))
+                    .contentShape(Capsule())
+                    .onTapGesture {
+                        isEditFieldFocused = false
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            isEditing = false
+                        }
                     }
-                }) {
-                    Text("取消")
-                        .font(.system(size: 12.5, weight: .semibold))
-                        .foregroundColor(theme.secondaryText)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(theme.cardBackground)
-                        .clipShape(Capsule())
-                        .overlay(Capsule().stroke(theme.border, lineWidth: 1))
-                }
-                .buttonStyle(.plain)
 
                 Spacer()
 
-                Button(action: {
-                    let trimmed = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !trimmed.isEmpty else { return }
-                    isEditFieldFocused = false
-                    withAnimation(.easeInOut(duration: 0.15)) {
-                        isEditing = false
+                Text("仅保存")
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundColor(theme.accent)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(theme.accent.opacity(0.14))
+                    .clipShape(Capsule())
+                    .contentShape(Capsule())
+                    .onTapGesture {
+                        let trimmed = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !trimmed.isEmpty else { return }
+                        isEditFieldFocused = false
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            isEditing = false
+                        }
+                        onEditSave?(trimmed)
                     }
-                    onEditSave?(trimmed)
-                }) {
-                    Text("仅保存")
-                        .font(.system(size: 12.5, weight: .semibold))
-                        .foregroundColor(theme.accent)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(theme.accent.opacity(0.14))
-                        .clipShape(Capsule())
-                }
-                .buttonStyle(.plain)
 
                 if allowResend {
-                    Button(action: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "paperplane.fill")
+                            .font(.system(size: 10.5))
+                        Text("保存并重发")
+                            .font(.system(size: 12.5, weight: .semibold))
+                    }
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(theme.accent)
+                    .clipShape(Capsule())
+                    .contentShape(Capsule())
+                    .onTapGesture {
                         let trimmed = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
                         guard !trimmed.isEmpty else { return }
                         isEditFieldFocused = false
@@ -402,24 +395,93 @@ struct MessageBubbleView: View {
                             isEditing = false
                         }
                         onEditAndResend?(trimmed)
-                    }) {
-                        HStack(spacing: 4) {
-                            Image(systemName: "paperplane.fill")
-                                .font(.system(size: 10.5))
-                            Text("保存并重发")
-                                .font(.system(size: 12.5, weight: .semibold))
-                        }
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(theme.accent)
-                        .clipShape(Capsule())
                     }
-                    .buttonStyle(.plain)
                 }
             }
         }
         .frame(maxWidth: .infinity)
+    }
+}
+
+private struct ActiveStreamingAssistantBubbleContent: View {
+    let turn: MessageDisplayTurn
+    let theme: AppThemePalette
+    let statusText: String
+    let thinkingStartTime: Date?
+    let isSelected: Bool
+    @ObservedObject var streamingState: StreamingTurnState
+    var onSelectToggle: (() -> Void)?
+
+    private var combinedContent: String {
+        let base = turn.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        let live = streamingState.displayedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !live.isEmpty {
+            if base.isEmpty || turn.underlyingMessageIds.contains(streamingState.activeMessageId ?? "") && base == live {
+                return live
+            }
+            if !turn.content.isEmpty && live != base {
+                return base + "\n\n" + live
+            }
+            return live
+        }
+        return base
+    }
+
+    var body: some View {
+        let currentText = combinedContent
+        let isPureThinking = currentText.isEmpty && turn.toolCalls.isEmpty
+
+        if isPureThinking {
+            ThinkingStatusView(
+                statusText: statusText,
+                startDate: thinkingStartTime ?? turn.createdAt,
+                theme: theme
+            )
+            .padding(.horizontal, 13)
+            .padding(.vertical, 9)
+            .background(theme.cardBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                    .stroke(isSelected ? theme.accent.opacity(0.45) : theme.border, lineWidth: 1)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+            .onTapGesture {
+                onSelectToggle?()
+            }
+
+            Spacer(minLength: 36)
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                if !turn.toolCalls.isEmpty {
+                    ToolCallSummaryGroupView(toolCalls: turn.toolCalls, theme: theme)
+                }
+
+                if !currentText.isEmpty {
+                    MarkdownDocumentView(content: currentText, theme: theme, isStreaming: true)
+                } else {
+                    ThinkingStatusView(
+                        statusText: statusText,
+                        startDate: thinkingStartTime ?? turn.createdAt,
+                        theme: theme
+                    )
+                    .padding(.top, 2)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(theme.cardBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                    .stroke(isSelected ? theme.accent.opacity(0.45) : theme.border, lineWidth: 1)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+            .onTapGesture {
+                onSelectToggle?()
+            }
+        }
     }
 }
 
@@ -458,71 +520,81 @@ struct CodeBlockCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 10) {
-                HStack(spacing: 6) {
+            HStack(spacing: 8) {
+                HStack(spacing: 5) {
                     Text(language.lowercased())
                         .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
                         .foregroundColor(theme.secondaryText)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
 
                     Text("\(totalLines) 行")
                         .font(.system(size: 10.5, weight: .medium, design: .monospaced))
                         .foregroundColor(theme.mutedText)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 1.5)
                         .background(theme.cardBackground.opacity(0.7))
                         .clipShape(Capsule())
                 }
 
-                Spacer()
+                Spacer(minLength: 4)
 
                 if isCollapsible {
-                    Button(action: {
-                        showingFullViewer = true
-                    }) {
-                        HStack(spacing: 3) {
-                            Image(systemName: "doc.text.magnifyingglass")
-                                .font(.system(size: 10.5, weight: .semibold))
-                            Text("查看全文")
-                                .font(.system(size: 11, weight: .medium))
-                        }
-                        .foregroundColor(theme.secondaryText)
+                    HStack(spacing: 3) {
+                        Image(systemName: "doc.text.magnifyingglass")
+                            .font(.system(size: 10.5, weight: .semibold))
+                        Text("查看全文")
+                            .font(.system(size: 11, weight: .medium))
+                            .lineLimit(1)
                     }
-                    .buttonStyle(.plain)
+                    .foregroundColor(theme.secondaryText)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 3)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        showingFullViewer = true
+                    }
 
-                    Button(action: {
+                    HStack(spacing: 3) {
+                        Image(systemName: isExpanded ? "rectangle.compress.vertical" : "rectangle.expand.vertical")
+                            .font(.system(size: 10.5, weight: .semibold))
+                        Text(isExpanded ? "收起" : "展开")
+                            .font(.system(size: 11, weight: .medium))
+                            .lineLimit(1)
+                    }
+                    .foregroundColor(theme.accent)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 3)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
                         withAnimation(.easeInOut(duration: 0.18)) {
                             isExpanded.toggle()
                         }
-                    }) {
-                        HStack(spacing: 3) {
-                            Image(systemName: isExpanded ? "rectangle.compress.vertical" : "rectangle.expand.vertical")
-                                .font(.system(size: 10.5, weight: .semibold))
-                            Text(isExpanded ? "收起" : "展开")
-                                .font(.system(size: 11, weight: .medium))
-                        }
-                        .foregroundColor(theme.accent)
                     }
-                    .buttonStyle(.plain)
                 }
 
-                Button(action: {
+                HStack(spacing: 3) {
+                    Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                        .font(.system(size: 10.5, weight: .semibold))
+                    Text(copied ? "已复制" : "复制")
+                        .font(.system(size: 11, weight: .medium))
+                        .lineLimit(1)
+                }
+                .foregroundColor(copied ? theme.accent : theme.secondaryText)
+                .padding(.horizontal, 4)
+                .padding(.vertical, 3)
+                .contentShape(Rectangle())
+                .onTapGesture {
                     UIPasteboard.general.string = code
                     withAnimation { copied = true }
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                         withAnimation { copied = false }
                     }
-                }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                            .font(.system(size: 10.5, weight: .semibold))
-                        Text(copied ? "已复制" : "复制")
-                            .font(.system(size: 11, weight: .medium))
-                    }
-                    .foregroundColor(copied ? theme.accent : theme.secondaryText)
                 }
-                .buttonStyle(.plain)
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, 10)
             .padding(.vertical, 7)
             .background(theme.elevatedBackground)
 
@@ -544,24 +616,22 @@ struct CodeBlockCard: View {
                     .fill(theme.border.opacity(0.75))
                     .frame(height: 1)
 
-                Button(action: {
+                HStack(spacing: 5) {
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 10.5, weight: .bold))
+                    Text(isExpanded ? "收起代码" : "展开剩余 \(hiddenLineCount) 行代码")
+                        .font(.system(size: 11.5, weight: .semibold))
+                }
+                .foregroundColor(theme.accent)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .background(theme.elevatedBackground.opacity(0.6))
+                .contentShape(Rectangle())
+                .onTapGesture {
                     withAnimation(.easeInOut(duration: 0.18)) {
                         isExpanded.toggle()
                     }
-                }) {
-                    HStack(spacing: 5) {
-                        Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                            .font(.system(size: 10.5, weight: .bold))
-                        Text(isExpanded ? "收起代码" : "展开剩余 \(hiddenLineCount) 行代码")
-                            .font(.system(size: 11.5, weight: .semibold))
-                    }
-                    .foregroundColor(theme.accent)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 7)
-                    .background(theme.elevatedBackground.opacity(0.6))
-                    .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
             }
         }
         .background(theme.cardBackground)

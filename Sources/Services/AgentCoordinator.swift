@@ -3,11 +3,150 @@ import SwiftUI
 import Combine
 
 @MainActor
+final class StreamingTurnState: ObservableObject {
+    @Published var activeMessageId: String? = nil
+    @Published var displayedText: String = ""
+
+    private var targetText: String = ""
+    private var animationTimer: Timer? = nil
+
+    func begin(messageId: String) {
+        stopTimer()
+        activeMessageId = messageId
+        targetText = ""
+        displayedText = ""
+    }
+
+    func pushPartialText(_ newText: String) {
+        targetText = newText
+        if displayedText.isEmpty && newText.count <= 12 {
+            displayedText = newText
+            return
+        }
+        startTimerIfNeeded()
+    }
+
+    func finish(with finalText: String) {
+        stopTimer()
+        targetText = finalText
+        displayedText = finalText
+    }
+
+    func reset() {
+        stopTimer()
+        activeMessageId = nil
+        targetText = ""
+        displayedText = ""
+    }
+
+    private func startTimerIfNeeded() {
+        guard animationTimer == nil else { return }
+        animationTimer = Timer.scheduledTimer(withTimeInterval: 0.028, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.tick()
+            }
+        }
+    }
+
+    private func stopTimer() {
+        animationTimer?.invalidate()
+        animationTimer = nil
+    }
+
+    private func tick() {
+        guard displayedText.count < targetText.count else {
+            if displayedText != targetText {
+                displayedText = targetText
+            }
+            stopTimer()
+            return
+        }
+
+        let remaining = targetText.count - displayedText.count
+        let step = max(3, min(remaining, max(4, remaining / 3)))
+        let nextCount = min(targetText.count, displayedText.count + step)
+        let idx = targetText.index(targetText.startIndex, offsetBy: nextCount)
+        displayedText = String(targetText[..<idx])
+
+        if displayedText.count >= targetText.count {
+            stopTimer()
+        }
+    }
+}
+
+@MainActor
 class AgentCoordinator: ObservableObject {
     @Published var isGenerating: Bool = false
     @Published var statusText: String = ""
     @Published var errorMessage: String? = nil
     @Published var thinkingStartTime: Date? = nil
+
+    let streamingState = StreamingTurnState()
+
+    private var generationTask: Task<Void, Never>? = nil
+    private var activeConversationId: String? = nil
+    private var currentRunGeneratedMessageIds: Set<String> = []
+    private var isCancelledByUser: Bool = false
+
+    func startSendMessage(
+        conversationId: String,
+        userPrompt: String,
+        attachments: [ChatAttachment] = [],
+        settings: OpenAISettings,
+        servers: [MCPServer]
+    ) {
+        generationTask?.cancel()
+        generationTask = Task { @MainActor in
+            await sendMessage(
+                conversationId: conversationId,
+                userPrompt: userPrompt,
+                attachments: attachments,
+                settings: settings,
+                servers: servers
+            )
+        }
+    }
+
+    func startRetryFromMessage(
+        conversationId: String,
+        messageId: String,
+        newPrompt: String? = nil,
+        settings: OpenAISettings,
+        servers: [MCPServer]
+    ) {
+        generationTask?.cancel()
+        generationTask = Task { @MainActor in
+            await retryFromMessage(
+                conversationId: conversationId,
+                messageId: messageId,
+                newPrompt: newPrompt,
+                settings: settings,
+                servers: servers
+            )
+        }
+    }
+
+    func stopGeneration() {
+        guard isGenerating else { return }
+        isCancelledByUser = true
+        generationTask?.cancel()
+        generationTask = nil
+
+        let convId = activeConversationId
+        let idsToDelete = currentRunGeneratedMessageIds
+        currentRunGeneratedMessageIds.removeAll()
+        streamingState.reset()
+
+        withAnimation(.spring(response: 0.26, dampingFraction: 0.86)) {
+            if let convId = convId, !idsToDelete.isEmpty {
+                DataStorage.shared.deleteMessageTurn(conversationId: convId, messageIds: Array(idsToDelete))
+            }
+            isGenerating = false
+            thinkingStartTime = nil
+            statusText = ""
+            errorMessage = nil
+        }
+    }
 
     func sendMessage(
         conversationId: String,
@@ -99,6 +238,9 @@ class AgentCoordinator: ObservableObject {
     ) async {
         guard var conversation = DataStorage.shared.conversations.first(where: { $0.id == conversationId }) else { return }
 
+        isCancelledByUser = false
+        activeConversationId = conversationId
+        currentRunGeneratedMessageIds.removeAll()
         errorMessage = nil
         isGenerating = true
         thinkingStartTime = Date()
@@ -125,6 +267,9 @@ class AgentCoordinator: ObservableObject {
 
         var maxIterations = 8
         while maxIterations > 0 {
+            if isCancelledByUser || Task.isCancelled {
+                return
+            }
             maxIterations -= 1
             let contextMessages = conversation.messages
 
@@ -133,6 +278,9 @@ class AgentCoordinator: ObservableObject {
                 content: "",
                 toolCalls: nil
             )
+            currentRunGeneratedMessageIds.insert(placeholderMsg.id)
+            streamingState.begin(messageId: placeholderMsg.id)
+
             conversation.messages.append(placeholderMsg)
             let msgIndex = conversation.messages.count - 1
             DataStorage.shared.updateConversation(conversation, persistImmediately: false)
@@ -143,16 +291,18 @@ class AgentCoordinator: ObservableObject {
                     messages: contextMessages,
                     tools: openAITools.isEmpty ? nil : openAITools,
                     onPartialUpdate: { [weak self] partialText in
-                        guard let self = self else { return }
-                        self.statusText = "思考中"
-                        if msgIndex < conversation.messages.count {
-                            conversation.messages[msgIndex].content = partialText
-                            DataStorage.shared.updateConversation(conversation, persistImmediately: false)
-                        }
+                        guard let self = self, !self.isCancelledByUser, !Task.isCancelled else { return }
+                        self.streamingState.pushPartialText(partialText)
                     }
                 )
 
-                conversation.messages[msgIndex].content = content ?? ""
+                if isCancelledByUser || Task.isCancelled {
+                    return
+                }
+
+                let finalText = content ?? ""
+                streamingState.finish(with: finalText)
+                conversation.messages[msgIndex].content = finalText
 
                 if let calls = toolCalls, !calls.isEmpty {
                     var executingCalls = calls.map { c -> ToolCallItem in
@@ -161,9 +311,12 @@ class AgentCoordinator: ObservableObject {
                         return item
                     }
                     conversation.messages[msgIndex].toolCalls = executingCalls
-                    DataStorage.shared.updateConversation(conversation)
+                    DataStorage.shared.updateConversation(conversation, persistImmediately: false)
 
                     for i in executingCalls.indices {
+                        if isCancelledByUser || Task.isCancelled {
+                            return
+                        }
                         let call = executingCalls[i]
                         statusText = "调用工具中"
 
@@ -177,6 +330,9 @@ class AgentCoordinator: ObservableObject {
                                 )
                                 executingCalls[i].result = toolOutput
                             } catch {
+                                if isCancelledByUser || Task.isCancelled || error is CancellationError {
+                                    return
+                                }
                                 let errStr = "Error: \(error.localizedDescription)"
                                 toolOutput = errStr
                                 executingCalls[i].error = error.localizedDescription
@@ -188,6 +344,10 @@ class AgentCoordinator: ObservableObject {
                             executingCalls[i].result = toolOutput
                         }
 
+                        if isCancelledByUser || Task.isCancelled {
+                            return
+                        }
+
                         executingCalls[i].isExecuting = false
                         conversation.messages[msgIndex].toolCalls = executingCalls
 
@@ -196,10 +356,12 @@ class AgentCoordinator: ObservableObject {
                             content: toolOutput,
                             toolCallId: call.id
                         )
+                        currentRunGeneratedMessageIds.insert(toolMsg.id)
                         conversation.messages.append(toolMsg)
-                        DataStorage.shared.updateConversation(conversation)
+                        DataStorage.shared.updateConversation(conversation, persistImmediately: false)
                     }
 
+                    DataStorage.shared.saveConversations()
                     statusText = "思考中"
                 } else {
                     conversation.updatedAt = Date()
@@ -207,6 +369,10 @@ class AgentCoordinator: ObservableObject {
                     break
                 }
             } catch {
+                if isCancelledByUser || Task.isCancelled || error is CancellationError || (error as NSError).code == NSURLErrorCancelled {
+                    return
+                }
+                streamingState.reset()
                 if msgIndex < conversation.messages.count,
                    conversation.messages[msgIndex].content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                    (conversation.messages[msgIndex].toolCalls ?? []).isEmpty {
@@ -218,8 +384,12 @@ class AgentCoordinator: ObservableObject {
             }
         }
 
-        isGenerating = false
-        thinkingStartTime = nil
-        statusText = ""
+        if !isCancelledByUser && !Task.isCancelled {
+            streamingState.reset()
+            isGenerating = false
+            thinkingStartTime = nil
+            statusText = ""
+            currentRunGeneratedMessageIds.removeAll()
+        }
     }
 }

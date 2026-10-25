@@ -102,6 +102,8 @@ class OpenAIService {
         req.timeoutInterval = 120
 
         let (bytes, response) = try await URLSession.shared.bytes(for: req)
+        try Task.checkCancellation()
+
         guard let httpRes = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
         }
@@ -109,6 +111,7 @@ class OpenAIService {
         guard (200...299).contains(httpRes.statusCode) else {
             var errorData = Data()
             for try await byte in bytes {
+                try Task.checkCancellation()
                 errorData.append(byte)
                 if errorData.count > 4096 { break }
             }
@@ -125,6 +128,7 @@ class OpenAIService {
         if !contentType.contains("event-stream") {
             var rawData = Data()
             for try await byte in bytes {
+                try Task.checkCancellation()
                 rawData.append(byte)
             }
             if let json = try? JSONSerialization.jsonObject(with: rawData) as? [String: Any],
@@ -149,6 +153,7 @@ class OpenAIService {
         var lastYieldTime = CFAbsoluteTimeGetCurrent()
 
         for try await rawLine in bytes.lines {
+            try Task.checkCancellation()
             let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
             if line.isEmpty { continue }
 
@@ -177,7 +182,7 @@ class OpenAIService {
                     if let piece = delta["content"] as? String, !piece.isEmpty {
                         accumulatedContent += piece
                         let now = CFAbsoluteTimeGetCurrent()
-                        if now - lastYieldTime >= 0.065 {
+                        if now - lastYieldTime >= 0.032 {
                             lastYieldTime = now
                             await onPartialUpdate?(accumulatedContent)
                         }
@@ -222,6 +227,8 @@ class OpenAIService {
                 nonSSELines.append(rawLine)
             }
         }
+
+        try Task.checkCancellation()
 
         if !receivedSSEEvent && !nonSSELines.isEmpty {
             let joined = nonSSELines.joined(separator: "\n")
