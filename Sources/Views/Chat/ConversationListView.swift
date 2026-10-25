@@ -266,6 +266,7 @@ struct ConversationListView: View {
     private func conversationCard(for conv: Conversation) -> some View {
         let lastMessage = conv.messages.last(where: { $0.role != .tool && (!$0.content.isEmpty || ($0.attachments?.isEmpty == false)) })
         let hasTools = conv.messages.contains(where: { ($0.toolCalls?.isEmpty == false) })
+        let convModel = storage.settings.resolvedSettings(for: conv).modelName
         let previewText: String? = {
             guard let msg = lastMessage else { return nil }
             let trimmed = msg.content.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -327,6 +328,19 @@ struct ConversationListView: View {
                     }
 
                     HStack(spacing: 8) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "atom")
+                                .font(.system(size: 10, weight: .semibold))
+                            Text(convModel)
+                                .lineLimit(1)
+                        }
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(theme.accent)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(theme.accent.opacity(0.12))
+                        .clipShape(Capsule())
+
                         Text("\(conv.messages.filter { $0.role != .tool }.count) 条对话")
                             .font(.system(size: 11, weight: .medium))
                             .foregroundColor(theme.secondaryText)
