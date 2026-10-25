@@ -582,12 +582,9 @@ struct CodeBlockCard: View {
     var cardWidth: CGFloat? = nil
     var isStreaming: Bool = false
     @State private var copied: Bool = false
-    @State private var isExpanded: Bool = false
     @State private var showingFullViewer: Bool = false
 
     private let previewLineThreshold = 8
-    private let maxInlineExpandLines = 180
-    private let maxInlineExpandChars = 9000
 
     private var totalLines: Int {
         var count = 1
@@ -601,25 +598,14 @@ struct CodeBlockCard: View {
         totalLines > previewLineThreshold || code.count > 360
     }
 
-    private var exceedsInlineRenderSafetyLimit: Bool {
-        totalLines > maxInlineExpandLines || code.count > maxInlineExpandChars
-    }
-
     private var displayedCode: String {
         if !isCollapsible {
             return code
-        }
-        if isExpanded {
-            return Self.extractFirstLines(from: code, maxLines: maxInlineExpandLines, maxChars: maxInlineExpandChars)
         }
         if isStreaming {
             return Self.extractLastLinesStable(from: code, exactLines: previewLineThreshold, maxChars: 1400)
         }
         return Self.extractFirstLines(from: code, maxLines: previewLineThreshold, maxChars: 1400)
-    }
-
-    private var hiddenLineCount: Int {
-        max(1, totalLines - previewLineThreshold)
     }
 
     private static func extractFirstLines(from text: String, maxLines: Int, maxChars: Int) -> String {
@@ -685,7 +671,7 @@ struct CodeBlockCard: View {
     }
 
     var body: some View {
-        let isStreamingCollapsedWindow = isStreaming && isCollapsible && !isExpanded
+        let isStreamingCollapsedWindow = isStreaming && isCollapsible
 
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
@@ -724,25 +710,6 @@ struct CodeBlockCard: View {
                         .contentShape(Rectangle())
                         .onTapGesture {
                             showingFullViewer = true
-                        }
-
-                        if !exceedsInlineRenderSafetyLimit {
-                            HStack(spacing: 2.5) {
-                                Image(systemName: isExpanded ? "rectangle.compress.vertical" : "rectangle.expand.vertical")
-                                    .font(.system(size: 10.5, weight: .semibold))
-                                Text(isExpanded ? "收起" : "展开")
-                                    .font(.system(size: 11, weight: .medium))
-                                    .lineLimit(1)
-                            }
-                            .foregroundColor(theme.accent)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 3)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                withAnimation(.easeInOut(duration: 0.16)) {
-                                    isExpanded.toggle()
-                                }
-                            }
                         }
                     }
 
@@ -803,38 +770,6 @@ struct CodeBlockCard: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            if isCollapsible {
-                Rectangle()
-                    .fill(theme.border.opacity(0.75))
-                    .frame(height: 1)
-
-                HStack(spacing: 5) {
-                    Image(systemName: exceedsInlineRenderSafetyLimit
-                          ? "arrow.up.left.and.arrow.down.right"
-                          : (isExpanded ? "chevron.up" : "chevron.down"))
-                        .font(.system(size: 10.5, weight: .bold))
-                    Text(
-                        exceedsInlineRenderSafetyLimit
-                            ? "查看全部 \(totalLines) 行完整代码"
-                            : (isExpanded ? "收起代码" : "展开剩余 \(hiddenLineCount) 行代码")
-                    )
-                    .font(.system(size: 11.5, weight: .semibold))
-                }
-                .foregroundColor(theme.accent)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
-                .background(theme.elevatedBackground.opacity(0.6))
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    if exceedsInlineRenderSafetyLimit {
-                        showingFullViewer = true
-                    } else {
-                        withAnimation(.easeInOut(duration: 0.16)) {
-                            isExpanded.toggle()
-                        }
-                    }
-                }
-            }
         }
         .frame(width: cardWidth)
         .background(theme.cardBackground)
