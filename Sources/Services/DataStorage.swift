@@ -66,10 +66,10 @@ class DataStorage: ObservableObject {
         if let data = UserDefaults.standard.data(forKey: settingsKey),
            let decoded = try? JSONDecoder().decode(OpenAISettings.self, from: data) {
             var migratedSettings = decoded
-            migrateSettingsCredentials(&migratedSettings)
+            Self.migrateSettingsCredentials(&migratedSettings)
             loadedSettings = migratedSettings
             var persistedSettings = migratedSettings
-            saveSettingsCredentials(&persistedSettings)
+            Self.saveSettingsCredentials(&persistedSettings)
             if let encoded = try? JSONEncoder().encode(persistedSettings) {
                 UserDefaults.standard.set(encoded, forKey: settingsKey)
             }
@@ -81,10 +81,10 @@ class DataStorage: ObservableObject {
         if let data = UserDefaults.standard.data(forKey: serversKey),
            let decoded = try? JSONDecoder().decode([MCPServer].self, from: data) {
             var migratedServers = decoded
-            migrateServerCredentials(&migratedServers)
+            Self.migrateServerCredentials(&migratedServers)
             self.servers = migratedServers
             var persistedServers = migratedServers
-            saveServerCredentials(&persistedServers)
+            Self.saveServerCredentials(&persistedServers)
             if let encoded = try? JSONEncoder().encode(persistedServers) {
                 UserDefaults.standard.set(encoded, forKey: serversKey)
             }
@@ -121,7 +121,7 @@ class DataStorage: ObservableObject {
 
     func saveSettings() {
         var persistedSettings = settings
-        saveSettingsCredentials(&persistedSettings)
+        Self.saveSettingsCredentials(&persistedSettings)
         if let data = try? JSONEncoder().encode(persistedSettings) {
             UserDefaults.standard.set(data, forKey: settingsKey)
         }
@@ -129,13 +129,13 @@ class DataStorage: ObservableObject {
 
     func saveServers() {
         var persistedServers = servers
-        saveServerCredentials(&persistedServers)
+        Self.saveServerCredentials(&persistedServers)
         if let data = try? JSONEncoder().encode(persistedServers) {
             UserDefaults.standard.set(data, forKey: serversKey)
         }
     }
 
-    private func saveSettingsCredentials(_ value: inout OpenAISettings) {
+    private static func saveSettingsCredentials(_ value: inout OpenAISettings) {
         if SecureStore.save(value.apiKey, key: "settings.apiKey") {
             value.apiKey = ""
         }
@@ -147,7 +147,7 @@ class DataStorage: ObservableObject {
         }
     }
 
-    private func migrateSettingsCredentials(_ value: inout OpenAISettings) {
+    private static func migrateSettingsCredentials(_ value: inout OpenAISettings) {
         if let saved = SecureStore.load(key: "settings.apiKey") {
             value.apiKey = saved
         } else if !value.apiKey.isEmpty {
@@ -164,7 +164,7 @@ class DataStorage: ObservableObject {
         value.syncActiveProfileFromTopLevel()
     }
 
-    private func saveServerCredentials(_ value: inout [MCPServer]) {
+    private static func saveServerCredentials(_ value: inout [MCPServer]) {
         for index in value.indices {
             let key = "server.\(value[index].id).token"
             if SecureStore.save(value[index].token, key: key) {
@@ -173,7 +173,7 @@ class DataStorage: ObservableObject {
         }
     }
 
-    private func migrateServerCredentials(_ value: inout [MCPServer]) {
+    private static func migrateServerCredentials(_ value: inout [MCPServer]) {
         for index in value.indices {
             let key = "server.\(value[index].id).token"
             if let saved = SecureStore.load(key: key) {
