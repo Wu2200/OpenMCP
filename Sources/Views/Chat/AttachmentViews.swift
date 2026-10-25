@@ -213,11 +213,11 @@ struct NativeCodeTextView: UIViewRepresentable {
             context.coordinator.lastWrapLines = wrapLines
             if wrapLines {
                 uiView.textContainer.widthTracksTextView = true
-                uiView.textContainer.size = CGSize(width: uiView.bounds.width, height: .greatestFiniteMagnitude)
+                uiView.textContainer.size = CGSize(width: uiView.bounds.width, height: CGFloat.greatestFiniteMagnitude)
                 uiView.alwaysBounceHorizontal = false
             } else {
                 uiView.textContainer.widthTracksTextView = false
-                uiView.textContainer.size = CGSize(width: 20_000, height: .greatestFiniteMagnitude)
+                uiView.textContainer.size = CGSize(width: CGFloat(20_000), height: CGFloat.greatestFiniteMagnitude)
                 uiView.alwaysBounceHorizontal = true
             }
         }
