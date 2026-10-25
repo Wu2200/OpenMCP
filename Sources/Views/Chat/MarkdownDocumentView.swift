@@ -262,6 +262,65 @@ struct MarkdownBlockItemView: View, Equatable {
     }
 }
 
+final class StreamingRevealTracker {
+    struct Segment {
+        let start: Int
+        let date: Date
+    }
+
+    static let fadeDuration: TimeInterval = 0.45
+
+    private(set) var segments: [Segment] = []
+    private var lastLength: Int = 0
+
+    func register(length: Int, now: Date) -> Bool {
+        if length < lastLength {
+            segments.removeAll { $0.start >= length }
+        } else if length > lastLength {
+            segments.append(Segment(start: lastLength, date: now))
+        }
+        lastLength = length
+        segments.removeAll { now.timeIntervalSince($0.date) >= Self.fadeDuration }
+        return !segments.isEmpty
+    }
+
+    static func opacity(for segment: Segment, at date: Date) -> Double {
+        let progress = min(1, max(0, date.timeIntervalSince(segment.date) / fadeDuration))
+        let eased = 1 - pow(1 - progress, 3)
+        return 0.06 + 0.94 * eased
+    }
+
+    static func apply(
+        to attr: AttributedString,
+        segments: [Segment],
+        at date: Date,
+        baseColor: Color,
+        linkColor: Color
+    ) -> AttributedString {
+        guard !segments.isEmpty else { return attr }
+        var result = attr
+        let total = result.characters.count
+        var pending: [(Range<AttributedString.Index>, Color)] = []
+        for (offset, segment) in segments.enumerated() {
+            let start = min(segment.start, total)
+            let end = offset + 1 < segments.count ? min(segments[offset + 1].start, total) : total
+            guard end > start else { continue }
+            let alpha = opacity(for: segment, at: date)
+            guard alpha < 0.995 else { continue }
+            let lower = result.characters.index(result.startIndex, offsetBy: start)
+            let upper = result.characters.index(result.startIndex, offsetBy: end)
+            for run in result[lower..<upper].runs {
+                let color: Color = run.link != nil ? linkColor : baseColor
+                pending.append((run.range, color.opacity(alpha)))
+            }
+        }
+        for (range, color) in pending {
+            result[range].foregroundColor = color
+        }
+        return result
+    }
+}
+
 struct MarkdownInlineText: View {
     let text: String
     var fontSize: CGFloat = 15
@@ -270,6 +329,8 @@ struct MarkdownInlineText: View {
     var isSecondary: Bool = false
     var isStreaming: Bool = false
 
+    @State private var revealTracker = StreamingRevealTracker()
+
     var body: some View {
         let attr = MarkdownRenderCache.shared.attributedString(
             for: text,
@@ -277,12 +338,25 @@ struct MarkdownInlineText: View {
             theme: theme,
             isStreaming: isStreaming
         )
+        let baseColor: Color = isSecondary ? theme.secondaryText : theme.primaryText
         if isStreaming {
-            Text(attr)
+            let isRevealing = revealTracker.register(length: attr.characters.count, now: Date())
+            let segments = revealTracker.segments
+            TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: !isRevealing)) { context in
+                Text(
+                    StreamingRevealTracker.apply(
+                        to: attr,
+                        segments: segments,
+                        at: context.date,
+                        baseColor: baseColor,
+                        linkColor: theme.accent
+                    )
+                )
                 .font(.system(size: fontSize, weight: weight))
-                .foregroundColor(isSecondary ? theme.secondaryText : theme.primaryText)
+                .foregroundColor(baseColor)
                 .tint(theme.accent)
                 .frame(maxWidth: .infinity, alignment: .leading)
+            }
         } else {
             Text(attr)
                 .font(.system(size: fontSize, weight: weight))
