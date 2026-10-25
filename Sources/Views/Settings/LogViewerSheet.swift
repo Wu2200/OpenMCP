@@ -68,11 +68,19 @@ struct LogViewerSheet: View {
             if selectedCategory != .all {
                 switch selectedCategory {
                 case .aiRequest:
-                    if entry.category != .aiRequest && entry.category != .aiStop {
+                    if entry.category != .aiRequest && entry.category != .aiStop && entry.category != .aiTruncated {
+                        return false
+                    }
+                case .aiStop:
+                    if entry.category != .aiStop {
+                        return false
+                    }
+                case .aiTruncated:
+                    if entry.category != .aiTruncated {
                         return false
                     }
                 case .error:
-                    if entry.category != .error && entry.level == .info {
+                    if entry.category != .error && entry.level != .error {
                         return false
                     }
                 default:
@@ -113,11 +121,11 @@ struct LogViewerSheet: View {
             let title = logger.resolvedConversationTitle(for: rawConvId, fallback: fallbackTitle)
             let latest = entries.map { $0.timestamp }.max() ?? Date()
 
-            let aiCount = entries.filter { $0.category == .aiRequest || $0.category == .aiStop }.count
+            let aiCount = entries.filter { $0.category == .aiRequest || $0.category == .aiStop || $0.category == .aiTruncated }.count
             let toolCount = entries.filter { $0.category == .mcpTool }.reduce(0) { acc, item in
                 acc + max(1, item.toolItems?.count ?? 1)
             }
-            let issues = entries.filter { $0.level != .info || $0.category == .error }.count
+            let issues = entries.filter { $0.level != .info || $0.category == .error || $0.category == .aiTruncated }.count
 
             var turnOrder: [String] = []
             var turnMap: [String: [AppLogEntry]] = [:]
@@ -711,10 +719,10 @@ struct LogViewerSheet: View {
 
                 Text(entry.category.rawValue)
                     .font(.system(size: 10.5, weight: .semibold))
-                    .foregroundColor(theme.secondaryText)
+                    .foregroundColor(entry.category == .aiTruncated ? .orange : (entry.category == .error ? .red : theme.secondaryText))
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
-                    .background(theme.elevatedBackground)
+                    .background(entry.category == .aiTruncated ? Color.orange.opacity(0.14) : (entry.category == .error ? Color.red.opacity(0.14) : theme.elevatedBackground))
                     .clipShape(Capsule())
 
                 if showConversationBadge {
