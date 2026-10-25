@@ -327,7 +327,7 @@ struct SettingsView: View {
                         Text(success)
                     }
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(.green)
+                    .foregroundColor(theme.accent)
                 }
 
                 if let err = fetchErrorMessage {

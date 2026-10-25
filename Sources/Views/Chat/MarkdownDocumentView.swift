@@ -53,11 +53,14 @@ final class MarkdownRenderCache {
     }
 
     private init() {
-        blockCache.countLimit = 300
-        attrCache.countLimit = 800
+        blockCache.countLimit = 80
+        attrCache.countLimit = 400
     }
 
-    func blocks(for content: String) -> [MarkdownBlock] {
+    func blocks(for content: String, isStreaming: Bool = false) -> [MarkdownBlock] {
+        if isStreaming || content.utf8.count > 12_000 {
+            return MarkdownParser.parse(content)
+        }
         let key = content as NSString
         if let cached = blockCache.object(forKey: key) {
             return cached.blocks
@@ -75,7 +78,7 @@ final class MarkdownRenderCache {
     ) -> AttributedString {
         let normalizedInput = isStreaming ? MarkdownParser.stabilizeStreamingInline(text) : text
         let cacheKey = "\(theme.backgroundHex)-\(theme.accentHex)-\(Int(fontSize * 10))-\(normalizedInput)" as NSString
-        if let cached = attrCache.object(forKey: cacheKey) {
+        if !isStreaming, normalizedInput.utf8.count < 4000, let cached = attrCache.object(forKey: cacheKey) {
             return cached.attr
         }
 
@@ -85,7 +88,9 @@ final class MarkdownRenderCache {
             options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         ) else {
             let fallback = AttributedString(normalizedInput)
-            attrCache.setObject(AttrBox(fallback), forKey: cacheKey)
+            if !isStreaming, normalizedInput.utf8.count < 4000 {
+                attrCache.setObject(AttrBox(fallback), forKey: cacheKey)
+            }
             return fallback
         }
 
@@ -106,7 +111,9 @@ final class MarkdownRenderCache {
             }
         }
 
-        attrCache.setObject(AttrBox(attr), forKey: cacheKey)
+        if !isStreaming, normalizedInput.utf8.count < 4000 {
+            attrCache.setObject(AttrBox(attr), forKey: cacheKey)
+        }
         return attr
     }
 }
@@ -118,7 +125,7 @@ struct MarkdownDocumentView: View {
     var isStreaming: Bool = false
 
     var body: some View {
-        let blocks = MarkdownRenderCache.shared.blocks(for: content)
+        let blocks = MarkdownRenderCache.shared.blocks(for: content, isStreaming: isStreaming)
         VStack(alignment: .leading, spacing: 8) {
             ForEach(blocks) { block in
                 MarkdownBlockItemView(
@@ -180,7 +187,13 @@ struct MarkdownBlockItemView: View, Equatable {
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
         case .codeBlock(_, let language, let code):
-            CodeBlockCard(language: language, code: code, theme: theme, cardWidth: contentWidth)
+            CodeBlockCard(
+                language: language,
+                code: code,
+                theme: theme,
+                cardWidth: contentWidth,
+                isStreaming: isStreaming
+            )
 
         case .table(_, let headers, let alignments, let rows):
             MarkdownTableView(headers: headers, alignments: alignments, rows: rows, theme: theme, tableMaxWidth: contentWidth)

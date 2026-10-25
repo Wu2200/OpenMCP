@@ -182,6 +182,58 @@ struct AttachmentImageGridView: View {
     }
 }
 
+struct NativeCodeTextView: UIViewRepresentable {
+    let text: String
+    let wrapLines: Bool
+    let theme: AppThemePalette
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeUIView(context: Context) -> UITextView {
+        let tv = UITextView()
+        tv.isEditable = false
+        tv.isSelectable = true
+        tv.alwaysBounceVertical = true
+        tv.showsVerticalScrollIndicator = true
+        tv.showsHorizontalScrollIndicator = true
+        tv.textContainerInset = UIEdgeInsets(top: 14, left: 14, bottom: 24, right: 14)
+        tv.font = UIFont.monospacedSystemFont(ofSize: 13.0, weight: .regular)
+        tv.layoutManager.allowsNonContiguousLayout = true
+        return tv
+    }
+
+    func updateUIView(_ uiView: UITextView, context: Context) {
+        uiView.backgroundColor = UIColor(theme.background)
+        uiView.textColor = UIColor(theme.primaryText)
+        uiView.tintColor = UIColor(theme.accent)
+
+        if context.coordinator.lastWrapLines != wrapLines {
+            context.coordinator.lastWrapLines = wrapLines
+            if wrapLines {
+                uiView.textContainer.widthTracksTextView = true
+                uiView.textContainer.size = CGSize(width: uiView.bounds.width, height: .greatestFiniteMagnitude)
+                uiView.alwaysBounceHorizontal = false
+            } else {
+                uiView.textContainer.widthTracksTextView = false
+                uiView.textContainer.size = CGSize(width: 20_000, height: .greatestFiniteMagnitude)
+                uiView.alwaysBounceHorizontal = true
+            }
+        }
+
+        if context.coordinator.lastText != text {
+            context.coordinator.lastText = text
+            uiView.text = text
+        }
+    }
+
+    final class Coordinator {
+        var lastText: String?
+        var lastWrapLines: Bool?
+    }
+}
+
 struct AttachmentFilePreviewSheet: View {
     @Environment(\.dismiss) private var dismiss
     let attachment: ChatAttachment
@@ -290,27 +342,12 @@ struct AttachmentFilePreviewSheet: View {
                         alignment: .bottom
                     )
 
-                    if wrapLines {
-                        ScrollView(.vertical, showsIndicators: true) {
-                            Text(displayedText)
-                                .font(.system(size: 13.5, design: .monospaced))
-                                .foregroundColor(theme.primaryText)
-                                .lineSpacing(4)
-                                .textSelection(.enabled)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(14)
-                        }
-                    } else {
-                        ScrollView([.vertical, .horizontal], showsIndicators: true) {
-                            Text(displayedText)
-                                .font(.system(size: 13.5, design: .monospaced))
-                                .foregroundColor(theme.primaryText)
-                                .lineSpacing(4)
-                                .textSelection(.enabled)
-                                .fixedSize(horizontal: true, vertical: false)
-                                .padding(14)
-                        }
-                    }
+                    NativeCodeTextView(
+                        text: displayedText,
+                        wrapLines: wrapLines,
+                        theme: theme
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
             .navigationTitle(attachment.fileName)

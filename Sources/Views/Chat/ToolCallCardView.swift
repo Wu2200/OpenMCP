@@ -18,10 +18,10 @@ struct ToolCallSummaryGroupView: View {
     }
 
     private var summaryStatusColor: Color {
-        guard let latest = latestCall else { return .green }
+        guard let latest = latestCall else { return theme.accent }
         if latest.isExecuting { return theme.accent }
         if latest.error != nil { return .orange }
-        return .green
+        return theme.accent
     }
 
     private var summaryStatusIcon: String {
@@ -191,7 +191,11 @@ struct ToolCallCardView: View {
                             .font(.system(size: 10, weight: .semibold))
                             .foregroundColor(theme.secondaryText)
 
-                        Text(toolCall.arguments)
+                        let displayArgs = toolCall.arguments.count > 2000
+                            ? String(toolCall.arguments.prefix(2000)) + "\n...(参数过长已省略)..."
+                            : toolCall.arguments
+
+                        Text(displayArgs)
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundColor(theme.primaryText)
                             .textSelection(.enabled)
@@ -223,7 +227,11 @@ struct ToolCallCardView: View {
                                     }
                             }
 
-                            Text(res)
+                            let displayRes = res.count > 2000
+                                ? String(res.prefix(2000)) + "\n...(结果过长已省略)..."
+                                : res
+
+                            Text(displayRes)
                                 .font(.system(size: 11, design: .monospaced))
                                 .foregroundColor(theme.primaryText)
                                 .lineLimit(12)
@@ -250,7 +258,7 @@ struct ToolCallCardView: View {
     private var statusColor: Color {
         if toolCall.isExecuting { return theme.accent }
         if toolCall.error != nil { return .orange }
-        return .green
+        return theme.accent
     }
 
     private var statusLabel: String {
