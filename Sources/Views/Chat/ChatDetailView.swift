@@ -1237,6 +1237,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
                 let distanceToTarget = self.bottomOffset(for: sv) - sv.contentOffset.y
                 self.lastObservedHeight = newHeight
                 guard abs(heightDelta) >= 0.5 || (self.isGenerating && distanceToTarget > 1.0) else { return }
+                guard !self.userScrollActive, !sv.isTracking, !sv.isDragging, !sv.isDecelerating else { return }
                 self.scheduleBottomFollow()
             }
         }
