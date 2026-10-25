@@ -13,6 +13,8 @@ struct SettingsView: View {
     @State private var showingAddProfileAlert: Bool = false
     @State private var newProfileName: String = ""
     @State private var isThemeSectionExpanded: Bool = false
+    @State private var showingLogViewerSheet: Bool = false
+    @ObservedObject private var logger = AppLogManager.shared
 
     private enum SettingsField: Hashable {
         case profileName
@@ -88,6 +90,8 @@ struct SettingsView: View {
                         apiAndModelCard
 
                         generationParametersCard
+
+                        diagnosticLogCard
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 8)
@@ -127,6 +131,9 @@ struct SettingsView: View {
             .sheet(isPresented: $showingModelManagerSheet) {
                 modelManagerSheet
             }
+            .sheet(isPresented: $showingLogViewerSheet) {
+                LogViewerSheet(theme: theme)
+            }
             .alert("新建接口配置", isPresented: $showingAddProfileAlert) {
                 TextField("配置名称，如 OpenAI / DeepSeek / 反代", text: $newProfileName)
                 Button("取消", role: .cancel) {
@@ -148,156 +155,191 @@ struct SettingsView: View {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 
+    private var currentThemeSummaryName: String {
+        if storage.settings.useCustomBackground {
+            return "自定义 (#\(storage.settings.customBackgroundHex))"
+        }
+        return (SoftThemePreset(rawValue: storage.settings.themePreset) ?? .warmOat).displayName
+    }
+
     private var themeCustomizationCard: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("全局柔和背景色")
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundColor(theme.primaryText)
-                    Text("选择柔和护眼配色或自由调色，实时应用于全站所有页面")
-                        .font(.system(size: 12))
-                        .foregroundColor(theme.secondaryText)
+            Button(action: {
+                dismissKeyboard()
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    isThemeSectionExpanded.toggle()
                 }
-                Spacer()
-                Image(systemName: "paintpalette.fill")
-                    .font(.system(size: 18))
-                    .foregroundColor(theme.accent)
-            }
-
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
-                ForEach(SoftThemePreset.allCases) { preset in
-                    let isSelected = !storage.settings.useCustomBackground && storage.settings.themePreset == preset.rawValue
-                    let previewPalette = AppThemePalette.make(backgroundHex: preset.backgroundHex, accentHex: preset.accentHex)
-
-                    Button(action: {
-                        dismissKeyboard()
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            storage.settings.useCustomBackground = false
-                            storage.settings.themePreset = preset.rawValue
-                        }
-                    }) {
-                        HStack(spacing: 10) {
-                            ZStack {
-                                Circle()
-                                    .fill(previewPalette.background)
-                                    .frame(width: 32, height: 32)
-                                    .overlay(
-                                        Circle()
-                                            .stroke(previewPalette.accent.opacity(0.5), lineWidth: 1.5)
-                                    )
-                                Circle()
-                                    .fill(previewPalette.accent)
-                                    .frame(width: 12, height: 12)
-                            }
-
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(preset.displayName)
-                                    .font(.system(size: 13, weight: .semibold))
-                                    .foregroundColor(theme.primaryText)
-                                    .lineLimit(1)
-                                Text(preset.subtitle)
-                                    .font(.system(size: 10))
-                                    .foregroundColor(theme.secondaryText)
-                                    .lineLimit(1)
-                            }
-
-                            Spacer(minLength: 0)
-
-                            if isSelected {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .font(.system(size: 15))
-                                    .foregroundColor(theme.accent)
-                            }
-                        }
-                        .padding(10)
-                        .background(isSelected ? theme.accent.opacity(0.1) : theme.elevatedBackground)
-                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .stroke(isSelected ? theme.accent : theme.border, lineWidth: isSelected ? 1.5 : 1)
-                        )
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-
-            Divider()
-                .overlay(theme.border)
-
-            Toggle(isOn: $storage.settings.useCustomBackground) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("启用自定义全局柔和背景色")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(theme.primaryText)
-                    Text("自由选择任意柔和背景色与主题强调色")
-                        .font(.system(size: 11))
-                        .foregroundColor(theme.secondaryText)
-                }
-            }
-            .tint(theme.accent)
-
-            if storage.settings.useCustomBackground {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        ColorPicker("全局背景颜色", selection: Binding(
-                            get: { Color(hex: storage.settings.customBackgroundHex) },
-                            set: { newColor in
-                                storage.settings.customBackgroundHex = newColor.toHex()
-                            }
-                        ), supportsOpacity: false)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(theme.primaryText)
-
-                        Text("#\(storage.settings.customBackgroundHex)")
-                            .font(.system(size: 11, design: .monospaced))
+            }) {
+                HStack(spacing: 10) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("全局柔和背景色")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundColor(theme.primaryText)
+                        Text(isThemeSectionExpanded ? "选择柔和护眼配色或自由调色，实时应用于全站所有页面" : "当前配色：\(currentThemeSummaryName) · 点击展开切换")
+                            .font(.system(size: 12))
                             .foregroundColor(theme.secondaryText)
                     }
-
-                    HStack {
-                        ColorPicker("主题强调颜色", selection: Binding(
-                            get: { Color(hex: storage.settings.customAccentHex) },
-                            set: { newColor in
-                                storage.settings.customAccentHex = newColor.toHex()
-                            }
-                        ), supportsOpacity: false)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(theme.primaryText)
-
-                        Text("#\(storage.settings.customAccentHex)")
-                            .font(.system(size: 11, design: .monospaced))
+                    Spacer()
+                    HStack(spacing: 8) {
+                        ZStack {
+                            Circle()
+                                .fill(theme.background)
+                                .frame(width: 24, height: 24)
+                                .overlay(
+                                    Circle()
+                                        .stroke(theme.accent.opacity(0.55), lineWidth: 1.5)
+                                )
+                            Circle()
+                                .fill(theme.accent)
+                                .frame(width: 10, height: 10)
+                        }
+                        Image(systemName: isThemeSectionExpanded ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 13, weight: .semibold))
                             .foregroundColor(theme.secondaryText)
                     }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
 
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            ForEach(customSoftSwatches, id: \.name) { swatch in
-                                Button(action: {
-                                    storage.settings.customBackgroundHex = swatch.bg
-                                    storage.settings.customAccentHex = swatch.accent
-                                }) {
-                                    HStack(spacing: 6) {
-                                        Circle()
-                                            .fill(Color(hex: swatch.bg))
-                                            .frame(width: 14, height: 14)
-                                            .overlay(Circle().stroke(Color(hex: swatch.accent), lineWidth: 1.5))
-                                        Text(swatch.name)
-                                            .font(.system(size: 11, weight: .medium))
-                                            .foregroundColor(theme.primaryText)
+            if isThemeSectionExpanded {
+                Divider()
+                    .overlay(theme.border)
+
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+                    ForEach(SoftThemePreset.allCases) { preset in
+                        let isSelected = !storage.settings.useCustomBackground && storage.settings.themePreset == preset.rawValue
+                        let previewPalette = AppThemePalette.make(backgroundHex: preset.backgroundHex, accentHex: preset.accentHex)
+
+                        Button(action: {
+                            dismissKeyboard()
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                storage.settings.useCustomBackground = false
+                                storage.settings.themePreset = preset.rawValue
+                            }
+                        }) {
+                            HStack(spacing: 10) {
+                                ZStack {
+                                    Circle()
+                                        .fill(previewPalette.background)
+                                        .frame(width: 32, height: 32)
+                                        .overlay(
+                                            Circle()
+                                                .stroke(previewPalette.accent.opacity(0.5), lineWidth: 1.5)
+                                        )
+                                    Circle()
+                                        .fill(previewPalette.accent)
+                                        .frame(width: 12, height: 12)
+                                }
+
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(preset.displayName)
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundColor(theme.primaryText)
+                                        .lineLimit(1)
+                                    Text(preset.subtitle)
+                                        .font(.system(size: 10))
+                                        .foregroundColor(theme.secondaryText)
+                                        .lineLimit(1)
+                                }
+
+                                Spacer(minLength: 0)
+
+                                if isSelected {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .font(.system(size: 15))
+                                        .foregroundColor(theme.accent)
+                                }
+                            }
+                            .padding(10)
+                            .background(isSelected ? theme.accent.opacity(0.1) : theme.elevatedBackground)
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .stroke(isSelected ? theme.accent : theme.border, lineWidth: isSelected ? 1.5 : 1)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+
+                Divider()
+                    .overlay(theme.border)
+
+                Toggle(isOn: $storage.settings.useCustomBackground) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("启用自定义全局柔和背景色")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(theme.primaryText)
+                        Text("自由选择任意柔和背景色与主题强调色")
+                            .font(.system(size: 11))
+                            .foregroundColor(theme.secondaryText)
+                    }
+                }
+                .tint(theme.accent)
+
+                if storage.settings.useCustomBackground {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            ColorPicker("全局背景颜色", selection: Binding(
+                                get: { Color(hex: storage.settings.customBackgroundHex) },
+                                set: { newColor in
+                                    storage.settings.customBackgroundHex = newColor.toHex()
+                                }
+                            ), supportsOpacity: false)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundColor(theme.primaryText)
+
+                            Text("#\(storage.settings.customBackgroundHex)")
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundColor(theme.secondaryText)
+                        }
+
+                        HStack {
+                            ColorPicker("主题强调颜色", selection: Binding(
+                                get: { Color(hex: storage.settings.customAccentHex) },
+                                set: { newColor in
+                                    storage.settings.customAccentHex = newColor.toHex()
+                                }
+                            ), supportsOpacity: false)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundColor(theme.primaryText)
+
+                            Text("#\(storage.settings.customAccentHex)")
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundColor(theme.secondaryText)
+                        }
+
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(customSoftSwatches, id: \.name) { swatch in
+                                    Button(action: {
+                                        storage.settings.customBackgroundHex = swatch.bg
+                                        storage.settings.customAccentHex = swatch.accent
+                                    }) {
+                                        HStack(spacing: 6) {
+                                            Circle()
+                                                .fill(Color(hex: swatch.bg))
+                                                .frame(width: 14, height: 14)
+                                                .overlay(Circle().stroke(Color(hex: swatch.accent), lineWidth: 1.5))
+                                            Text(swatch.name)
+                                                .font(.system(size: 11, weight: .medium))
+                                                .foregroundColor(theme.primaryText)
+                                        }
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 6)
+                                        .background(theme.cardBackground)
+                                        .clipShape(Capsule())
+                                        .overlay(Capsule().stroke(theme.border, lineWidth: 1))
                                     }
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 6)
-                                    .background(theme.cardBackground)
-                                    .clipShape(Capsule())
-                                    .overlay(Capsule().stroke(theme.border, lineWidth: 1))
                                 }
                             }
                         }
                     }
+                    .padding(12)
+                    .background(theme.elevatedBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
-                .padding(12)
-                .background(theme.elevatedBackground)
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
         }
         .padding(16)
@@ -726,6 +768,78 @@ struct SettingsView: View {
                     .onTapGesture {
                         focusedField = .systemPrompt
                     }
+            }
+        }
+        .padding(16)
+        .background(theme.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(theme.border, lineWidth: 1)
+        )
+    }
+
+    private var diagnosticLogCard: some View {
+        let warningOrErrorCount = logger.logs.filter { $0.level != .info }.count
+
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("运行与流式截断诊断日志")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundColor(theme.primaryText)
+                    Text("记录每次 AI 请求参数、SSE 流式帧数、finish_reason 结束原因与 [DONE] 标记，快速定位是上游截断还是网络中断")
+                        .font(.system(size: 11.5))
+                        .foregroundColor(theme.secondaryText)
+                }
+                Spacer()
+                Image(systemName: "doc.text.magnifyingglass")
+                    .font(.system(size: 18))
+                    .foregroundColor(theme.accent)
+            }
+
+            HStack(spacing: 10) {
+                Button(action: {
+                    dismissKeyboard()
+                    showingLogViewerSheet = true
+                }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "list.bullet.rectangle.portrait")
+                        Text("查看诊断日志 (\(logger.logs.count))")
+                        if warningOrErrorCount > 0 {
+                            Text("\(warningOrErrorCount) 异常/截断")
+                                .font(.system(size: 10.5, weight: .bold))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.orange)
+                                .clipShape(Capsule())
+                        }
+                    }
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 11)
+                    .background(theme.accent)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .buttonStyle(.plain)
+
+                if !logger.logs.isEmpty {
+                    Button(role: .destructive, action: {
+                        dismissKeyboard()
+                        logger.clearLogs()
+                    }) {
+                        Image(systemName: "trash")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(.red)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 11)
+                            .background(Color.red.opacity(0.1))
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                }
             }
         }
         .padding(16)
