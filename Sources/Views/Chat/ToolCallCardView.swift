@@ -30,18 +30,28 @@ struct ToolCallSummaryGroupView: View {
         return "checkmark.circle.fill"
     }
 
+    static func cleanToolDisplayName(_ rawName: String) -> String {
+        let parts = rawName.split(separator: "_", maxSplits: 1, omittingEmptySubsequences: false)
+        if parts.count == 2, parts[0].count == 6,
+           parts[0].allSatisfy({ $0.isHexDigit }) {
+            return String(parts[1])
+        }
+        return rawName
+    }
+
     private var summaryHeadline: String {
         guard let latest = latestCall else { return "工具调用" }
+        let cleanName = Self.cleanToolDisplayName(latest.name)
         if latest.isExecuting {
-            return "正在调用: \(latest.name)"
+            return "正在调用: \(cleanName)"
         }
         if latest.error != nil {
-            return "调用异常: \(latest.name)"
+            return "调用异常: \(cleanName)"
         }
         if toolCalls.count == 1 {
-            return "已调用工具: \(latest.name)"
+            return "已调用工具: \(cleanName)"
         }
-        return "最新完成: \(latest.name)"
+        return "最新完成: \(cleanName)"
     }
 
     private var summarySubtext: String {
@@ -152,7 +162,7 @@ struct ToolCallCardView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(toolCall.name)
+                    Text(ToolCallSummaryGroupView.cleanToolDisplayName(toolCall.name))
                         .font(.system(size: 12, weight: .semibold, design: .monospaced))
                         .foregroundColor(theme.primaryText)
                         .lineLimit(1)
