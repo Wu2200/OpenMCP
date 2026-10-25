@@ -35,7 +35,19 @@ class DataStorage: ObservableObject {
 
         if let data = UserDefaults.standard.data(forKey: conversationsKey),
            let decoded = try? JSONDecoder().decode([Conversation].self, from: data) {
-            self.conversations = decoded
+            var migrated = decoded
+            var didMigrate = false
+            for idx in migrated.indices {
+                if migrated[idx].selectedProfileId == nil && migrated[idx].selectedModelName == nil {
+                    migrated[idx].selectedProfileId = loadedSettings.activeProfileId
+                    migrated[idx].selectedModelName = loadedSettings.modelName
+                    didMigrate = true
+                }
+            }
+            self.conversations = migrated
+            if didMigrate, let encoded = try? JSONEncoder().encode(migrated) {
+                UserDefaults.standard.set(encoded, forKey: conversationsKey)
+            }
         } else {
             self.conversations = [
                 Conversation(
