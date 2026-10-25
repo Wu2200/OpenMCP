@@ -203,6 +203,8 @@ class AgentCoordinator: ObservableObject {
     private var generationTask: Task<Void, Never>? = nil
     private var activeGenerationToken: UUID? = nil
     private var activeConversationId: String? = nil
+    private var activeTurnId: String? = nil
+    private var activeTurnPrompt: String? = nil
     private var currentRunGeneratedMessageIds: Set<String> = []
     private var isCancelledByUser: Bool = false
     private static var activeCoordinators: [String: AgentCoordinator] = [:]
