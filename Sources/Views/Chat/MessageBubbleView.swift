@@ -377,8 +377,7 @@ struct MessageBubbleView: View {
                                     content: currentText,
                                     theme: theme,
                                     contentWidth: innerContentWidth,
-                                    isStreaming: isActiveGeneratingTurn,
-                                    isScrollInteracting: scrollInteracting
+                                    isStreaming: isActiveGeneratingTurn
                                 )
                                 .frame(width: innerContentWidth, alignment: .leading)
                             } else if isActiveGeneratingTurn && currentReasoning.isEmpty {
