@@ -4,6 +4,47 @@ import SwiftUI
 class DataStorage: ObservableObject {
     static let shared = DataStorage()
 
+    private enum SecureStore {
+        static func load(key: String) -> String? {
+            let query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: Bundle.main.bundleIdentifier ?? "OpenMCP",
+                kSecAttrAccount as String: key,
+                kSecReturnData as String: true,
+                kSecMatchLimit as String: kSecMatchLimitOne
+            ]
+            var result: CFTypeRef?
+            guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+                  let data = result as? Data else { return nil }
+            return String(data: data, encoding: .utf8)
+        }
+
+        static func save(_ value: String, key: String) {
+            let query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: Bundle.main.bundleIdentifier ?? "OpenMCP",
+                kSecAttrAccount as String: key
+            ]
+            guard let data = value.data(using: .utf8) else { return }
+            let attributes: [String: Any] = [kSecValueData as String: data]
+            let status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+            if status == errSecItemNotFound {
+                var insertQuery = query
+                insertQuery[kSecValueData as String] = data
+                SecItemAdd(insertQuery as CFDictionary, nil)
+            }
+        }
+
+        static func remove(key: String) {
+            let query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: Bundle.main.bundleIdentifier ?? "OpenMCP",
+                kSecAttrAccount as String: key
+            ]
+            SecItemDelete(query as CFDictionary)
+        }
+    }
+
     @Published var settings: OpenAISettings {
         didSet { saveSettings() }
     }
@@ -20,7 +61,13 @@ class DataStorage: ObservableObject {
         let loadedSettings: OpenAISettings
         if let data = UserDefaults.standard.data(forKey: settingsKey),
            let decoded = try? JSONDecoder().decode(OpenAISettings.self, from: data) {
-            loadedSettings = decoded
+            var migratedSettings = decoded
+            migrateSettingsCredentials(&migratedSettings)
+            loadedSettings = migratedSettings
+            if migratedSettings != decoded,
+               let encoded = try? JSONEncoder().encode(migratedSettings) {
+                UserDefaults.standard.set(encoded, forKey: settingsKey)
+            }
         } else {
             loadedSettings = OpenAISettings()
         }
@@ -28,7 +75,13 @@ class DataStorage: ObservableObject {
 
         if let data = UserDefaults.standard.data(forKey: serversKey),
            let decoded = try? JSONDecoder().decode([MCPServer].self, from: data) {
-            self.servers = decoded
+            var migratedServers = decoded
+            migrateServerCredentials(&migratedServers)
+            self.servers = migratedServers
+            if migratedServers != decoded,
+               let encoded = try? JSONEncoder().encode(migratedServers) {
+                UserDefaults.standard.set(encoded, forKey: serversKey)
+            }
         } else {
             self.servers = []
         }
@@ -61,14 +114,64 @@ class DataStorage: ObservableObject {
     }
 
     func saveSettings() {
-        if let data = try? JSONEncoder().encode(settings) {
+        var persistedSettings = settings
+        saveSettingsCredentials(&persistedSettings)
+        if let data = try? JSONEncoder().encode(persistedSettings) {
             UserDefaults.standard.set(data, forKey: settingsKey)
         }
     }
 
     func saveServers() {
-        if let data = try? JSONEncoder().encode(servers) {
+        var persistedServers = servers
+        saveServerCredentials(&persistedServers)
+        if let data = try? JSONEncoder().encode(persistedServers) {
             UserDefaults.standard.set(data, forKey: serversKey)
+        }
+    }
+
+    private func saveSettingsCredentials(_ value: inout OpenAISettings) {
+        SecureStore.save(value.apiKey, key: "settings.apiKey")
+        value.apiKey = ""
+        for index in value.providerProfiles.indices {
+            let key = "profile.\(value.providerProfiles[index].id).apiKey"
+            SecureStore.save(value.providerProfiles[index].apiKey, key: key)
+            value.providerProfiles[index].apiKey = ""
+        }
+    }
+
+    private func migrateSettingsCredentials(_ value: inout OpenAISettings) {
+        if let saved = SecureStore.load(key: "settings.apiKey") {
+            value.apiKey = saved
+        } else if !value.apiKey.isEmpty {
+            SecureStore.save(value.apiKey, key: "settings.apiKey")
+        }
+        for index in value.providerProfiles.indices {
+            let key = "profile.\(value.providerProfiles[index].id).apiKey"
+            if let saved = SecureStore.load(key: key) {
+                value.providerProfiles[index].apiKey = saved
+            } else if !value.providerProfiles[index].apiKey.isEmpty {
+                SecureStore.save(value.providerProfiles[index].apiKey, key: key)
+            }
+        }
+        value.syncActiveProfileFromTopLevel()
+    }
+
+    private func saveServerCredentials(_ value: inout [MCPServer]) {
+        for index in value.indices {
+            let key = "server.\(value[index].id).token"
+            SecureStore.save(value[index].token, key: key)
+            value[index].token = ""
+        }
+    }
+
+    private func migrateServerCredentials(_ value: inout [MCPServer]) {
+        for index in value.indices {
+            let key = "server.\(value[index].id).token"
+            if let saved = SecureStore.load(key: key) {
+                value[index].token = saved
+            } else if !value[index].token.isEmpty {
+                SecureStore.save(value[index].token, key: key)
+            }
         }
     }
 
