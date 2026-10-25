@@ -240,8 +240,20 @@ struct ConversationListView: View {
     }
 
     private func conversationCard(for conv: Conversation) -> some View {
-        let lastMessage = conv.messages.last(where: { $0.role != .tool && !$0.content.isEmpty })
+        let lastMessage = conv.messages.last(where: { $0.role != .tool && (!$0.content.isEmpty || ($0.attachments?.isEmpty == false)) })
         let hasTools = conv.messages.contains(where: { ($0.toolCalls?.isEmpty == false) })
+        let previewText: String? = {
+            guard let msg = lastMessage else { return nil }
+            let trimmed = msg.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return trimmed }
+            if let firstAtt = msg.attachments?.first {
+                if let snippet = firstAtt.textContent?.trimmingCharacters(in: .whitespacesAndNewlines), !snippet.isEmpty {
+                    return "[\(firstAtt.fileName)] \(snippet)"
+                }
+                return "[附件] \(firstAtt.fileName)"
+            }
+            return nil
+        }()
 
         return Button(action: {
             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
