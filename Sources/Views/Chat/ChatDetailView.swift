@@ -250,9 +250,7 @@ struct ChatDetailView: View {
                                             autoFollowOutput = true
                                             coordinator.streamingState.setDisplayPaused(false)
                                         },
-                                        onScrollSettled: {
-                                            coordinator.streamingState.setDisplayPaused(false)
-                                        }
+                                        onScrollSettled: {}
                                     )
                                 )
                             }
