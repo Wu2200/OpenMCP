@@ -36,6 +36,8 @@ struct LogViewerSheet: View {
     @State private var isCopiedAll: Bool = false
     @State private var copiedConversationKey: String? = nil
     @State private var didInitializeExpansion: Bool = false
+    @State private var showingClearAllConfirm: Bool = false
+    @State private var pendingClearConversationId: String? = nil
 
     init(theme: AppThemePalette, filterConversationId: String? = nil) {
         self.theme = theme
@@ -195,6 +197,8 @@ struct LogViewerSheet: View {
             .onAppear {
                 initializeDefaultExpansionIfNeeded()
             }
+            .toolbarBackground(theme.background, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     HStack(spacing: 10) {
@@ -213,20 +217,57 @@ struct LogViewerSheet: View {
                         .disabled(filteredLogs.isEmpty)
 
                         Button(role: .destructive, action: {
-                            logger.clearLogs(forConversationId: onlyCurrentConversation ? filterConversationId : nil)
+                            showingClearAllConfirm = true
                         }) {
                             Text("清空")
-                                .font(.system(size: 13))
+                                .font(.system(size: 13, weight: .semibold))
                                 .foregroundColor(.red)
                         }
                         .disabled(filteredLogs.isEmpty)
                     }
                 }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("关闭") {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(action: {
                         dismiss()
+                    }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 14, weight: .semibold))
+                            Text("关闭")
+                                .font(.system(size: 13, weight: .semibold))
+                        }
+                        .foregroundColor(theme.primaryText)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(theme.elevatedBackground)
+                        .clipShape(Capsule())
                     }
+                    .buttonStyle(.plain)
                 }
+            }
+            .alert(onlyCurrentConversation && filterConversationId != nil ? "确认清空本对话日志？" : "确认清空全部日志？", isPresented: $showingClearAllConfirm) {
+                Button("取消", role: .cancel) {}
+                Button("清空", role: .destructive) {
+                    logger.clearLogs(forConversationId: onlyCurrentConversation ? filterConversationId : nil)
+                }
+            } message: {
+                Text(onlyCurrentConversation && filterConversationId != nil ? "将清空当前对话下的所有诊断日志记录，此操作不可恢复。" : "将清空所有诊断日志记录，此操作不可恢复。")
+            }
+            .alert("确认删除该对话日志？", isPresented: Binding(
+                get: { pendingClearConversationId != nil },
+                set: { if !$0 { pendingClearConversationId = nil } }
+            )) {
+                Button("取消", role: .cancel) {
+                    pendingClearConversationId = nil
+                }
+                Button("删除", role: .destructive) {
+                    if let cid = pendingClearConversationId {
+                        logger.clearLogs(forConversationId: cid)
+                    }
+                    pendingClearConversationId = nil
+                }
+            } message: {
+                Text("将清空该对话关联的所有请求诊断与工具调用日志。")
             }
         }
     }
@@ -407,7 +448,7 @@ struct LogViewerSheet: View {
 
                     if let cid = section.conversationId {
                         Button(role: .destructive, action: {
-                            logger.clearLogs(forConversationId: cid)
+                            pendingClearConversationId = cid
                         }) {
                             Image(systemName: "trash")
                                 .font(.system(size: 11))
