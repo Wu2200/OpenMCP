@@ -8,6 +8,7 @@ struct ChatDetailView: View {
     @State private var inputText: String = ""
     @State private var pendingAttachments: [ChatAttachment] = []
     @State private var showingToolsSheet: Bool = false
+    @State private var showingLogViewerSheet: Bool = false
     @State private var showingPhotoPicker: Bool = false
     @State private var showingCameraPicker: Bool = false
     @State private var showingDocumentPicker: Bool = false
@@ -29,6 +30,10 @@ struct ChatDetailView: View {
 
     private var currentConversation: Conversation {
         storage.conversations.first(where: { $0.id == conversationId }) ?? Conversation(title: "对话", messages: [])
+    }
+
+    private var effectiveSettings: OpenAISettings {
+        storage.settings.resolvedSettings(for: currentConversation)
     }
 
     private var displayTurns: [MessageDisplayTurn] {
@@ -147,7 +152,7 @@ struct ChatDetailView: View {
                                             turn: turn,
                                             theme: theme,
                                             availableWidth: rowAvailableWidth,
-                                            modelName: storage.settings.modelName,
+                                            modelName: effectiveSettings.modelName,
                                             isGenerating: coordinator.isGenerating,
                                             isActiveGeneratingTurn: activeGenerating,
                                             statusText: activeGenerating ? coordinator.statusText : "",
@@ -353,6 +358,13 @@ struct ChatDetailView: View {
                     }
 
                     Menu {
+                        Button(action: {
+                            dismissKeyboard()
+                            showingLogViewerSheet = true
+                        }) {
+                            Label("查看本对话日志", systemImage: "doc.text.magnifyingglass")
+                        }
+
                         Button(role: .destructive, action: {
                             selectedTurnId = nil
                             if coordinator.isGenerating {
@@ -373,6 +385,9 @@ struct ChatDetailView: View {
         }
         .sheet(isPresented: $showingToolsSheet) {
             activeToolsSheet
+        }
+        .sheet(isPresented: $showingLogViewerSheet) {
+            LogViewerSheet(theme: theme, filterConversationId: conversationId)
         }
         .sheet(isPresented: $showingPhotoPicker) {
             PhotoLibraryPicker { images in
@@ -425,7 +440,7 @@ struct ChatDetailView: View {
                     .foregroundColor(theme.accent)
 
                 HStack(spacing: 8) {
-                    Label(storage.settings.modelName, systemImage: "cpu")
+                    Label(effectiveSettings.modelName, systemImage: "cpu")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundColor(theme.accent)
                         .padding(.horizontal, 10)
@@ -720,11 +735,15 @@ struct ChatDetailView: View {
                             Section(profile.name) {
                                 ForEach(profile.enabledModels, id: \.self) { m in
                                     Button(action: {
-                                        storage.settings.selectChatModel(profileId: profile.id, model: m)
+                                        storage.updateConversationModel(
+                                            conversationId: conversationId,
+                                            profileId: profile.id,
+                                            modelName: m
+                                        )
                                     }) {
                                         HStack {
                                             Text(m)
-                                            if storage.settings.activeProfileId == profile.id && storage.settings.modelName == m {
+                                            if effectiveSettings.activeProfileId == profile.id && effectiveSettings.modelName == m {
                                                 Image(systemName: "checkmark")
                                             }
                                         }
@@ -734,13 +753,17 @@ struct ChatDetailView: View {
                         }
                     } else {
                         Section("已启用对话模型") {
-                            ForEach(storage.settings.chatSelectableModelEntries, id: \.model) { entry in
+                            ForEach(storage.settings.chatSelectableModelEntries, id: \.id) { entry in
                                 Button(action: {
-                                    storage.settings.selectChatModel(profileId: entry.profileId, model: entry.model)
+                                    storage.updateConversationModel(
+                                        conversationId: conversationId,
+                                        profileId: entry.profileId,
+                                        modelName: entry.model
+                                    )
                                 }) {
                                     HStack {
                                         Text(entry.model)
-                                        if storage.settings.modelName == entry.model {
+                                        if effectiveSettings.activeProfileId == entry.profileId && effectiveSettings.modelName == entry.model {
                                             Image(systemName: "checkmark")
                                         }
                                     }
@@ -753,7 +776,7 @@ struct ChatDetailView: View {
                         Image(systemName: "atom")
                             .font(.system(size: 12.5, weight: .semibold))
                             .foregroundColor(theme.accent)
-                        Text(storage.settings.modelName)
+                        Text(effectiveSettings.modelName)
                             .font(.system(size: 12.5, weight: .medium))
                             .foregroundColor(theme.primaryText)
                             .lineLimit(1)
