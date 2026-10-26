@@ -145,20 +145,87 @@ struct MarkdownDocumentView: View {
 
     var body: some View {
         let blocks = MarkdownRenderCache.shared.blocks(for: content, isStreaming: isStreaming)
-        let container = VStack(alignment: .leading, spacing: 8) {
-            ForEach(blocks) { block in
-                MarkdownBlockItemView(
-                    block: block,
-                    theme: theme,
-                    contentWidth: contentWidth,
-                    isStreaming: isStreaming && (block.id == blocks.last?.id)
-                )
+        VStack(alignment: .leading, spacing: 8) {
+            if isStreaming {
+                ForEach(blocks) { block in
+                    MarkdownBlockItemView(
+                        block: block,
+                        theme: theme,
+                        contentWidth: contentWidth,
+                        isStreaming: block.id == blocks.last?.id
+                    )
+                }
+            } else {
+                ForEach(MarkdownRenderSegment.make(from: blocks)) { segment in
+                    if segment.isMergedText {
+                        MarkdownMergedTextView(blocks: segment.blocks, theme: theme)
+                    } else if let block = segment.blocks.first {
+                        MarkdownBlockItemView(
+                            block: block,
+                            theme: theme,
+                            contentWidth: contentWidth,
+                            isStreaming: false
+                        )
+                    }
+                }
             }
         }
         .tint(theme.accent)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
 
-        container
+extension MarkdownBlock {
+    var isMergeableText: Bool {
+        switch self {
+        case .paragraph, .list:
+            return true
+        case .heading(_, let level, _):
+            return level >= 2
+        default:
+            return false
+        }
+    }
+}
+
+struct MarkdownRenderSegment: Identifiable {
+    let id: Int
+    let blocks: [MarkdownBlock]
+    let isMergedText: Bool
+
+    static func make(from blocks: [MarkdownBlock]) -> [MarkdownRenderSegment] {
+        var result: [MarkdownRenderSegment] = []
+        var buffer: [MarkdownBlock] = []
+
+        func flush() {
+            guard let first = buffer.first else { return }
+            result.append(MarkdownRenderSegment(id: first.id, blocks: buffer, isMergedText: true))
+            buffer.removeAll()
+        }
+
+        for block in blocks {
+            if block.isMergeableText {
+                buffer.append(block)
+            } else {
+                flush()
+                result.append(MarkdownRenderSegment(id: block.id, blocks: [block], isMergedText: false))
+            }
+        }
+        flush()
+        return result
+    }
+}
+
+struct MarkdownMergedTextView: View {
+    let blocks: [MarkdownBlock]
+    let theme: AppThemePalette
+
+    var body: some View {
+        SelectableRichTextView(
+            attributedText: RichTextFormatter.makeDocumentNSAttributedString(blocks: blocks, theme: theme),
+            theme: theme
+        )
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -954,6 +1021,193 @@ enum MarkdownParser {
 }
 
 enum RichTextFormatter {
+    static func makeDocumentNSAttributedString(
+        blocks: [MarkdownBlock],
+        theme: AppThemePalette
+    ) -> NSAttributedString {
+        let result = NSMutableAttributedString()
+        let primary = theme.primaryText
+
+        for (index, block) in blocks.enumerated() {
+            let isLastBlock = index == blocks.count - 1
+            var blockSpacing: CGFloat = 0
+            if !isLastBlock {
+                blockSpacing = 8
+                if case .heading(_, let nextLevel, _) = blocks[index + 1] {
+                    blockSpacing += nextLevel <= 2 ? 4 : 2
+                }
+            }
+
+            switch block {
+            case .paragraph(_, let text):
+                let body = inlineBody(text: text, fontSize: 15, weight: .regular, theme: theme)
+                appendPiece(
+                    to: result,
+                    prefix: nil,
+                    body: body,
+                    fontSize: 15,
+                    weight: .regular,
+                    color: primary,
+                    firstLineIndent: 0,
+                    headIndent: 0,
+                    tabLocation: nil,
+                    lineSpacing: 3.5,
+                    spacingAfter: blockSpacing,
+                    appendNewline: !isLastBlock
+                )
+
+            case .heading(_, let level, let text):
+                let size: CGFloat
+                switch level {
+                case 1: size = 19.0
+                case 2: size = 17.0
+                case 3: size = 15.8
+                default: size = 15.0
+                }
+                let body = inlineBody(text: text, fontSize: size, weight: .bold, theme: theme)
+                appendPiece(
+                    to: result,
+                    prefix: nil,
+                    body: body,
+                    fontSize: size,
+                    weight: .bold,
+                    color: primary,
+                    firstLineIndent: 0,
+                    headIndent: 0,
+                    tabLocation: nil,
+                    lineSpacing: 2.5,
+                    spacingAfter: blockSpacing,
+                    appendNewline: !isLastBlock
+                )
+
+            case .list(_, let items):
+                let minIndent = items.map(\.indent).min() ?? 0
+                for (itemIndex, item) in items.enumerated() {
+                    let isLastItem = itemIndex == items.count - 1
+                    let normalized = max(0, min(item.indent - minIndent, 4))
+                    var markerColor = UIColor(primary)
+                    let markerText: String
+                    switch item.marker {
+                    case .bullet:
+                        markerText = normalized == 0 ? "•" : (normalized == 1 ? "◦" : "▪")
+                    case .ordered(let number):
+                        markerText = number
+                    case .task(let checked):
+                        markerText = checked ? "☑" : "☐"
+                        if checked {
+                            markerColor = UIColor(theme.accent)
+                        }
+                    }
+                    let indentPoints = CGFloat(normalized) * 14
+                    let markerWidth: CGFloat = 22
+                    let marker = NSAttributedString(
+                        string: markerText + "\t",
+                        attributes: [
+                            .font: UIFont.systemFont(ofSize: 15, weight: .semibold),
+                            .foregroundColor: markerColor
+                        ]
+                    )
+                    let body = inlineBody(text: item.text, fontSize: 15, weight: .regular, theme: theme)
+                    appendPiece(
+                        to: result,
+                        prefix: marker,
+                        body: body,
+                        fontSize: 15,
+                        weight: .regular,
+                        color: primary,
+                        firstLineIndent: indentPoints,
+                        headIndent: indentPoints + markerWidth,
+                        tabLocation: indentPoints + markerWidth,
+                        lineSpacing: 3.5,
+                        spacingAfter: isLastItem ? blockSpacing : 5,
+                        appendNewline: !(isLastBlock && isLastItem)
+                    )
+                }
+
+            default:
+                continue
+            }
+        }
+
+        while result.length > 0, result.string.hasSuffix("\n") {
+            result.deleteCharacters(in: NSRange(location: result.length - 1, length: 1))
+        }
+        return result
+    }
+
+    private static func inlineBody(
+        text: String,
+        fontSize: CGFloat,
+        weight: Font.Weight,
+        theme: AppThemePalette
+    ) -> NSAttributedString {
+        let attr = MarkdownRenderCache.shared.attributedString(
+            for: text,
+            fontSize: fontSize,
+            weight: weight,
+            theme: theme
+        )
+        return makeNSAttributedString(
+            from: attr,
+            fontSize: fontSize,
+            weight: weight,
+            baseColor: theme.primaryText
+        )
+    }
+
+    private static func appendPiece(
+        to result: NSMutableAttributedString,
+        prefix: NSAttributedString?,
+        body: NSAttributedString,
+        fontSize: CGFloat,
+        weight: UIFont.Weight,
+        color: Color,
+        firstLineIndent: CGFloat,
+        headIndent: CGFloat,
+        tabLocation: CGFloat?,
+        lineSpacing: CGFloat,
+        spacingAfter: CGFloat,
+        appendNewline: Bool
+    ) {
+        guard body.length > 0 || prefix != nil else { return }
+
+        let piece = NSMutableAttributedString()
+        if let prefix = prefix {
+            piece.append(prefix)
+        }
+        piece.append(body)
+        if appendNewline {
+            piece.append(NSAttributedString(
+                string: "\n",
+                attributes: [
+                    .font: UIFont.systemFont(ofSize: fontSize, weight: weight),
+                    .foregroundColor: UIColor(color)
+                ]
+            ))
+        }
+
+        let nsString = piece.string as NSString
+        var location = 0
+        var isFirstParagraph = true
+        while location < piece.length {
+            let paragraphRange = nsString.paragraphRange(for: NSRange(location: location, length: 0))
+            let isLastParagraph = NSMaxRange(paragraphRange) >= piece.length
+            let style = NSMutableParagraphStyle()
+            style.lineSpacing = lineSpacing
+            style.firstLineHeadIndent = isFirstParagraph ? firstLineIndent : headIndent
+            style.headIndent = headIndent
+            style.paragraphSpacing = isLastParagraph ? spacingAfter : 0
+            if let tabLocation = tabLocation {
+                style.tabStops = [NSTextTab(textAlignment: .left, location: tabLocation, options: [:])]
+            }
+            piece.addAttribute(.paragraphStyle, value: style, range: paragraphRange)
+            location = NSMaxRange(paragraphRange)
+            isFirstParagraph = false
+        }
+
+        result.append(piece)
+    }
+
     static func makeNSAttributedString(
         from attr: AttributedString,
         fontSize: CGFloat,
