@@ -126,7 +126,7 @@ struct MarkdownDocumentView: View {
 
     var body: some View {
         let blocks = MarkdownRenderCache.shared.blocks(for: content, isStreaming: isStreaming)
-        VStack(alignment: .leading, spacing: 8) {
+        let container = VStack(alignment: .leading, spacing: 8) {
             ForEach(blocks) { block in
                 MarkdownBlockItemView(
                     block: block,
@@ -136,7 +136,14 @@ struct MarkdownDocumentView: View {
                 )
             }
         }
+        .tint(theme.accent)
         .frame(maxWidth: .infinity, alignment: .leading)
+
+        if isStreaming {
+            container
+        } else {
+            container.textSelection(.enabled)
+        }
     }
 }
 
