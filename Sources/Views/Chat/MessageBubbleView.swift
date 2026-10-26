@@ -120,15 +120,13 @@ struct ReasoningFoldCardView: View {
 
     @ViewBuilder
     private func reasoningBodyText(_ text: String) -> some View {
-        let nsAttr = RichTextFormatter.makePlainTextNSAttributedString(
-            text: text,
-            fontSize: 12.5,
-            weight: .regular,
-            color: UIColor(theme.secondaryText),
-            lineSpacing: 3
-        )
-        SelectableRichTextView(attributedText: nsAttr, theme: theme)
+        Text(text)
+            .font(.system(size: 12.5))
+            .foregroundColor(theme.secondaryText)
+            .lineSpacing(3)
+            .textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
     }
@@ -164,12 +162,6 @@ struct MessageBubbleView: View {
     }
 
     private var editableRawText: String {
-        if turn.role == .assistant {
-            let text = effectiveAssistantText
-            if !text.isEmpty {
-                return text
-            }
-        }
         if !turn.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return turn.content
         }
@@ -258,14 +250,10 @@ struct MessageBubbleView: View {
                             }
                         )
                     } else if !trimmed.isEmpty {
-                        let nsAttr = RichTextFormatter.makePlainTextNSAttributedString(
-                            text: turn.content,
-                            fontSize: 15,
-                            weight: .regular,
-                            color: UIColor(theme.primaryText),
-                            lineSpacing: 3.5
-                        )
-                        SelectableRichTextView(attributedText: nsAttr, theme: theme)
+                        Text(turn.content)
+                            .font(.system(size: 15, weight: .regular))
+                            .foregroundColor(theme.primaryText)
+                            .lineSpacing(3.5)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 9)
                             .background(theme.userMessageBackground)
@@ -817,7 +805,7 @@ struct CodeBlockCard: View {
                             .foregroundColor(theme.primaryText)
                             .lineSpacing(3)
                             .fixedSize(horizontal: true, vertical: true)
-                            .tint(theme.accent)
+                            .textSelection(.enabled)
                             .padding(10)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
