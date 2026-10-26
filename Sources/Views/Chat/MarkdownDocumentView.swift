@@ -454,7 +454,6 @@ struct MarkdownInlineText: View {
         }
     }
 
-    @ViewBuilder
     private func styledText(_ value: AttributedString, baseColor: Color) -> some View {
         let uiFontWeight: UIFont.Weight = {
             if weight == .bold { return .bold }
@@ -462,12 +461,55 @@ struct MarkdownInlineText: View {
             if weight == .medium { return .medium }
             return .regular
         }()
-        Text(value)
-            .font(.system(size: fontSize, weight: weight))
-            .foregroundColor(baseColor)
-            .lineSpacing(lineSpacing)
-            .textSelection(.enabled)
-            .frame(maxWidth: .infinity, alignment: .leading)
+        let baseFont = UIFont.systemFont(ofSize: fontSize, weight: uiFontWeight)
+        let text = NSMutableAttributedString(value)
+        let fullRange = NSRange(location: 0, length: text.length)
+
+        if text.length > 0 {
+            text.addAttribute(.font, value: baseFont, range: fullRange)
+
+            for run in value.runs {
+                let range = NSRange(run.range, in: value)
+                guard range.length > 0 else { continue }
+
+                if let intent = run.inlinePresentationIntent {
+                    if intent.contains(.code) {
+                        text.addAttribute(
+                            .font,
+                            value: UIFont.monospacedSystemFont(ofSize: max(12.5, fontSize - 1.5), weight: .medium),
+                            range: range
+                        )
+                        text.addAttribute(.foregroundColor, value: UIColor(theme.primaryText), range: range)
+                        text.addAttribute(.backgroundColor, value: UIColor(theme.elevatedBackground), range: range)
+                    } else if intent.contains(.stronglyEmphasized) || intent.contains(.emphasized) {
+                        var traits = baseFont.fontDescriptor.symbolicTraits
+                        if intent.contains(.stronglyEmphasized) {
+                            traits.insert(.traitBold)
+                        }
+                        if intent.contains(.emphasized) {
+                            traits.insert(.traitItalic)
+                        }
+                        if let descriptor = baseFont.fontDescriptor.withSymbolicTraits(traits) {
+                            text.addAttribute(.font, value: UIFont(descriptor: descriptor, size: fontSize), range: range)
+                        }
+                    }
+                }
+
+                if run.link != nil {
+                    text.addAttribute(.foregroundColor, value: UIColor(theme.accent), range: range)
+                    text.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: range)
+                }
+            }
+        }
+
+        return SelectableMessageTextView(
+            attributedText: text,
+            font: baseFont,
+            textColor: UIColor(baseColor),
+            tintColor: UIColor(theme.accent),
+            lineSpacing: lineSpacing
+        )
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
