@@ -519,7 +519,7 @@ struct MessageBubbleView: View {
                 Text("删除")
                     .font(.system(size: 11.5, weight: .medium))
             }
-            .foregroundColor(isGenerating ? theme.mutedText : Color.red.opacity(0.8))
+            .foregroundColor(isGenerating ? theme.mutedText : Color.red)
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
             .contentShape(Capsule())
