@@ -73,11 +73,13 @@ final class MarkdownRenderCache {
     func attributedString(
         for text: String,
         fontSize: CGFloat,
+        weight: Font.Weight = .regular,
         theme: AppThemePalette,
         isStreaming: Bool = false
     ) -> AttributedString {
         let normalizedInput = isStreaming ? MarkdownParser.stabilizeStreamingInline(text) : text
-        let cacheKey = "\(theme.backgroundHex)-\(theme.accentHex)-\(Int(fontSize * 10))-\(normalizedInput)" as NSString
+        let weightTag = weight == .bold ? "b" : "r"
+        let cacheKey = "\(theme.backgroundHex)-\(theme.accentHex)-\(Int(fontSize * 10))-\(weightTag)-\(normalizedInput)" as NSString
         if !isStreaming, normalizedInput.utf8.count < 4000, let cached = attrCache.object(forKey: cacheKey) {
             return cached.attr
         }
@@ -87,7 +89,9 @@ final class MarkdownRenderCache {
             markdown: prepared,
             options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         ) else {
-            let fallback = AttributedString(normalizedInput)
+            var fallback = AttributedString(normalizedInput)
+            fallback.font = .system(size: fontSize, weight: weight)
+            fallback.foregroundColor = UIColor(theme.primaryText)
             if !isStreaming, normalizedInput.utf8.count < 4000 {
                 attrCache.setObject(AttrBox(fallback), forKey: cacheKey)
             }
@@ -97,13 +101,28 @@ final class MarkdownRenderCache {
         let codeBg = UIColor(theme.elevatedBackground)
         let codeFg = UIColor(theme.primaryText)
         let linkFg = UIColor(theme.accent)
+        let primaryFg = UIColor(theme.primaryText)
 
         for run in attr.runs {
             let range = run.range
-            if let intent = run.inlinePresentationIntent, intent.contains(.code) {
-                attr[range].font = .system(size: max(12.5, fontSize - 1.5), weight: .medium, design: .monospaced)
-                attr[range].backgroundColor = codeBg
-                attr[range].foregroundColor = codeFg
+            if let intent = run.inlinePresentationIntent {
+                if intent.contains(.code) {
+                    attr[range].font = .system(size: max(12.5, fontSize - 1.5), weight: .medium, design: .monospaced)
+                    attr[range].backgroundColor = codeBg
+                    attr[range].foregroundColor = codeFg
+                } else if intent.contains(.stronglyEmphasized) {
+                    attr[range].font = .system(size: fontSize, weight: .bold)
+                    attr[range].foregroundColor = primaryFg
+                } else if intent.contains(.emphasized) {
+                    attr[range].font = .system(size: fontSize, weight: weight).italic()
+                    attr[range].foregroundColor = primaryFg
+                } else {
+                    attr[range].font = .system(size: fontSize, weight: weight)
+                    attr[range].foregroundColor = primaryFg
+                }
+            } else {
+                attr[range].font = .system(size: fontSize, weight: weight)
+                attr[range].foregroundColor = primaryFg
             }
             if run.link != nil {
                 attr[range].foregroundColor = linkFg
@@ -139,11 +158,7 @@ struct MarkdownDocumentView: View {
         .tint(theme.accent)
         .frame(maxWidth: .infinity, alignment: .leading)
 
-        if isStreaming {
-            container
-        } else {
-            container.textSelection(.enabled)
-        }
+        container
     }
 }
 
@@ -381,39 +396,47 @@ struct MarkdownInlineText: View {
         let attr = MarkdownRenderCache.shared.attributedString(
             for: text,
             fontSize: fontSize,
+            weight: weight,
             theme: theme,
             isStreaming: isStreaming
         )
         let baseColor: Color = isSecondary ? theme.secondaryText : theme.primaryText
         let activeSegments = revealTracker.register(length: attr.characters.count, now: Date(), isStreaming: isStreaming)
-        if let lastSegment = activeSegments.last {
-            let runs = StreamingRevealTracker.revealRuns(
-                in: attr,
-                segments: activeSegments,
-                baseColor: baseColor,
-                linkColor: theme.accent
-            )
-            TimelineView(StreamingRevealSchedule(end: lastSegment.date.addingTimeInterval(StreamingRevealTracker.fadeDuration))) { context in
-                styledText(StreamingRevealTracker.render(attr, runs: runs, at: context.date), baseColor: baseColor)
+        if isStreaming {
+            if let lastSegment = activeSegments.last {
+                let runs = StreamingRevealTracker.revealRuns(
+                    in: attr,
+                    segments: activeSegments,
+                    baseColor: baseColor,
+                    linkColor: theme.accent
+                )
+                TimelineView(StreamingRevealSchedule(end: lastSegment.date.addingTimeInterval(StreamingRevealTracker.fadeDuration))) { context in
+                    styledText(StreamingRevealTracker.render(attr, runs: runs, at: context.date), baseColor: baseColor)
+                }
+                .id(lastSegment.date)
+            } else {
+                styledText(attr, baseColor: baseColor)
             }
-            .id(lastSegment.date)
         } else {
-            styledText(attr, baseColor: baseColor)
+            let nsAttr = RichTextFormatter.makeNSAttributedString(
+                from: attr,
+                fontSize: fontSize,
+                weight: weight,
+                baseColor: baseColor,
+                lineSpacing: 3.5
+            )
+            SelectableRichTextView(attributedText: nsAttr, theme: theme)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
     @ViewBuilder
     private func styledText(_ value: AttributedString, baseColor: Color) -> some View {
-        let text = Text(value)
+        Text(value)
             .font(.system(size: fontSize, weight: weight))
             .foregroundColor(baseColor)
             .tint(theme.accent)
             .frame(maxWidth: .infinity, alignment: .leading)
-        if isStreaming {
-            text
-        } else {
-            text.textSelection(.enabled)
-        }
     }
 }
 
@@ -533,7 +556,6 @@ struct MarkdownTableView: View {
             .multilineTextAlignment(textAlignment(for: alignment))
             .lineSpacing(2.5)
             .fixedSize(horizontal: false, vertical: true)
-            .textSelection(.enabled)
     }
 
     private func frameAlignment(for align: HorizontalAlignment) -> Alignment {
@@ -928,5 +950,117 @@ enum MarkdownParser {
             }
         }
         return total
+    }
+}
+
+enum RichTextFormatter {
+    static func makeNSAttributedString(
+        from attr: AttributedString,
+        fontSize: CGFloat,
+        weight: Font.Weight,
+        baseColor: Color,
+        lineSpacing: CGFloat = 3.5
+    ) -> NSAttributedString {
+        let mutable: NSMutableAttributedString
+        if let converted = try? NSAttributedString(attr, including: \.uiKit) {
+            mutable = NSMutableAttributedString(attributedString: converted)
+        } else {
+            mutable = NSMutableAttributedString(string: String(attr.characters))
+        }
+
+        let fullRange = NSRange(location: 0, length: mutable.length)
+        guard fullRange.length > 0 else {
+            return NSAttributedString()
+        }
+
+        let uiWeight: UIFont.Weight = (weight == .bold) ? .bold : .regular
+        let defaultFont = UIFont.systemFont(ofSize: fontSize, weight: uiWeight)
+        let defaultColor = UIColor(baseColor)
+
+        mutable.enumerateAttribute(.font, in: fullRange, options: []) { value, range, _ in
+            if value == nil {
+                mutable.addAttribute(.font, value: defaultFont, range: range)
+            }
+        }
+
+        mutable.enumerateAttribute(.foregroundColor, in: fullRange, options: []) { value, range, _ in
+            if value == nil {
+                mutable.addAttribute(.foregroundColor, value: defaultColor, range: range)
+            }
+        }
+
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.lineSpacing = lineSpacing
+        mutable.addAttribute(.paragraphStyle, value: paragraphStyle, range: fullRange)
+
+        return mutable
+    }
+
+    static func makePlainTextNSAttributedString(
+        text: String,
+        fontSize: CGFloat,
+        weight: UIFont.Weight = .regular,
+        color: UIColor,
+        lineSpacing: CGFloat = 3.5
+    ) -> NSAttributedString {
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.lineSpacing = lineSpacing
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: fontSize, weight: weight),
+            .foregroundColor: color,
+            .paragraphStyle: paragraphStyle
+        ]
+        return NSAttributedString(string: text, attributes: attrs)
+    }
+}
+
+struct SelectableRichTextView: UIViewRepresentable {
+    let attributedText: NSAttributedString
+    let theme: AppThemePalette
+
+    func makeUIView(context: Context) -> UITextView {
+        let textView = UITextView()
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.isScrollEnabled = false
+        textView.backgroundColor = .clear
+        textView.textContainerInset = .zero
+        textView.textContainer.lineFragmentPadding = 0
+        textView.tintColor = UIColor(theme.accent)
+        textView.adjustsFontForContentSizeCategory = true
+        textView.delegate = context.coordinator
+        textView.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        textView.setContentHuggingPriority(.required, for: .vertical)
+        textView.setContentCompressionResistancePriority(.required, for: .vertical)
+        textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        textView.attributedText = attributedText
+        return textView
+    }
+
+    func updateUIView(_ uiView: UITextView, context: Context) {
+        if uiView.attributedText.string != attributedText.string || !uiView.attributedText.isEqual(to: attributedText) {
+            uiView.attributedText = attributedText
+        }
+        let accentColor = UIColor(theme.accent)
+        if uiView.tintColor != accentColor {
+            uiView.tintColor = accentColor
+        }
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
+        let targetWidth = proposal.width ?? UIScreen.main.bounds.width
+        let fit = uiView.sizeThatFits(CGSize(width: targetWidth, height: .greatestFiniteMagnitude))
+        return CGSize(width: targetWidth, height: ceil(fit.height))
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    final class Coordinator: NSObject, UITextViewDelegate {
+        func textView(_ textView: UITextView, shouldInteractWith URL: URL, in characterRange: NSRange, interaction: UITextItemInteraction) -> Bool {
+            UIApplication.shared.open(URL)
+            return false
+        }
     }
 }
