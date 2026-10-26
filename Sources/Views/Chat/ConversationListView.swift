@@ -100,6 +100,7 @@ struct ConversationListView: View {
             ), titleVisibility: .visible) {
                 Button("取消", role: .cancel) {
                     deletingConversation = nil
+                    revealedDeleteConversationId = nil
                 }
                 Button("删除对话", role: .destructive) {
                     if let target = deletingConversation {
