@@ -93,10 +93,12 @@ struct ConversationListView: View {
                         deletingConversation = nil
                     }
                     Button("删除对话", role: .destructive) {
-                        if let target = deletingConversation {
-                            storage.deleteConversation(id: target.id)
+                        withTransaction(Transaction(animation: nil)) {
+                            if let target = deletingConversation {
+                                storage.deleteConversation(id: target.id)
+                            }
+                            deletingConversation = nil
                         }
-                        deletingConversation = nil
                     }
                 } message: {
                     Text("将永久删除「\(deletingConversation?.title ?? "该对话")」及其所有消息记录，此操作不可恢复。")
