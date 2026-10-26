@@ -196,15 +196,6 @@ struct MessageBubbleView: View {
         let autoPackagedLongText: ChatAttachment? = (!trimmed.isEmpty && ChatAttachment.shouldPackageAsLongText(trimmed))
             ? ChatAttachment.makeLongTextAttachment(from: trimmed)
             : nil
-        let textFont = UIFont.systemFont(ofSize: 15)
-        let maxTextWidth = max(1, bubbleColumnWidth - 24)
-        let textBounds = (turn.content as NSString).boundingRect(
-            with: CGSize(width: maxTextWidth, height: .greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin, .usesFontLeading],
-            attributes: [.font: textFont],
-            context: nil
-        )
-        let textWidth = min(maxTextWidth, max(1, ceil(textBounds.width)))
 
         return HStack(alignment: .top, spacing: 6) {
             Spacer(minLength: 24)
@@ -259,18 +250,10 @@ struct MessageBubbleView: View {
                             }
                         )
                     } else if !trimmed.isEmpty {
-                        SelectableMessageTextView(
-                            attributedText: NSAttributedString(
-                                string: turn.content,
-                                attributes: [.font: textFont]
-                            ),
-                            font: textFont,
-                            textColor: UIColor(theme.primaryText),
-                            tintColor: UIColor(theme.accent),
-                            lineSpacing: 3.5,
-                            onTap: { onSelectToggle?() }
-                        )
-                            .frame(width: textWidth, alignment: .leading)
+                        Text(turn.content)
+                            .font(.system(size: 15, weight: .regular))
+                            .foregroundColor(theme.primaryText)
+                            .lineSpacing(3.5)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 9)
                             .background(theme.userMessageBackground)
@@ -280,6 +263,9 @@ struct MessageBubbleView: View {
                                     .stroke(isSelected ? theme.accent.opacity(0.55) : theme.accent.opacity(0.18), lineWidth: 1)
                             )
                             .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                            .onTapGesture {
+                                onSelectToggle?()
+                            }
                     }
 
                     if isSelected {
@@ -401,8 +387,7 @@ struct MessageBubbleView: View {
                                     content: currentText,
                                     theme: theme,
                                     contentWidth: innerContentWidth,
-                                    isStreaming: isActiveGeneratingTurn,
-                                    onTap: { onSelectToggle?() }
+                                    isStreaming: isActiveGeneratingTurn
                                 )
                                 .frame(width: innerContentWidth, alignment: .leading)
                             } else if isActiveGeneratingTurn && currentReasoning.isEmpty {
