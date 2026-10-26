@@ -9,6 +9,7 @@ struct ConversationListView: View {
     @State private var renameText: String = ""
     @State private var deletingConversation: Conversation? = nil
     @State private var clearingConversation: Conversation? = nil
+    @ObservedObject private var activity = GenerationActivityTracker.shared
     @FocusState private var isSearchFocused: Bool
 
     private var theme: AppThemePalette {
@@ -337,9 +338,27 @@ struct ConversationListView: View {
                                 .foregroundColor(theme.primaryText)
                                 .lineLimit(1)
 
-                            Text(conv.updatedAt, format: .dateTime.month().day().hour().minute())
-                                .font(.system(size: 11))
-                                .foregroundColor(theme.mutedText)
+                            HStack(spacing: 8) {
+                                Text(conv.updatedAt, format: .dateTime.month().day().hour().minute())
+                                    .font(.system(size: 11))
+                                    .foregroundColor(theme.mutedText)
+
+                                if let label = activity.labels[conv.id] {
+                                    HStack(spacing: 4) {
+                                        ProgressView()
+                                            .scaleEffect(0.55)
+                                            .tint(theme.accent)
+                                            .frame(width: 10, height: 10)
+                                        Text(label)
+                                            .font(.system(size: 11, weight: .semibold))
+                                    }
+                                    .foregroundColor(theme.accent)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 2)
+                                    .background(theme.accent.opacity(0.12))
+                                    .clipShape(Capsule())
+                                }
+                            }
                         }
 
                         Spacer()
