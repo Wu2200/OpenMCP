@@ -124,6 +124,7 @@ struct ReasoningFoldCardView: View {
             .font(.system(size: 12.5))
             .foregroundColor(theme.secondaryText)
             .lineSpacing(3)
+            .tint(theme.accent)
             .textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
             .fixedSize(horizontal: false, vertical: true)
@@ -162,6 +163,12 @@ struct MessageBubbleView: View {
     }
 
     private var editableRawText: String {
+        if turn.role == .assistant {
+            let text = effectiveAssistantText
+            if !text.isEmpty {
+                return text
+            }
+        }
         if !turn.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return turn.content
         }
@@ -254,6 +261,8 @@ struct MessageBubbleView: View {
                             .font(.system(size: 15, weight: .regular))
                             .foregroundColor(theme.primaryText)
                             .lineSpacing(3.5)
+                            .tint(theme.accent)
+                            .textSelection(.enabled)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 9)
                             .background(theme.userMessageBackground)
@@ -805,6 +814,7 @@ struct CodeBlockCard: View {
                             .foregroundColor(theme.primaryText)
                             .lineSpacing(3)
                             .fixedSize(horizontal: true, vertical: true)
+                            .tint(theme.accent)
                             .textSelection(.enabled)
                             .padding(10)
                     }
