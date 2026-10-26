@@ -8,7 +8,6 @@ struct ConversationListView: View {
     @State private var renamingConversation: Conversation? = nil
     @State private var renameText: String = ""
     @State private var deletingConversation: Conversation? = nil
-    @State private var revealedDeleteConversationId: String? = nil
     @State private var clearingConversation: Conversation? = nil
     @ObservedObject private var activity = GenerationActivityTracker.shared
     @FocusState private var isSearchFocused: Bool
@@ -66,19 +65,40 @@ struct ConversationListView: View {
                             .listRowBackground(Color.clear)
                     } else {
                         ForEach(filteredConversations) { conv in
-                            SwipeableConversationRow(
-                                conversationId: conv.id,
-                                revealedConversationId: $revealedDeleteConversationId,
-                                theme: theme,
-                                onDelete: {
-                                    withTransaction(Transaction(animation: nil)) {
-                                        deletingConversation = conv
+                            conversationCard(for: conv)
+                                .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                                    Button {
+                                        withTransaction(Transaction(animation: nil)) {
+                                            deletingConversation = conv
+                                        }
+                                    } label: {
+                                        Label("删除", systemImage: "trash.fill")
                                     }
+                                    .tint(theme.isDark ? Color(red: 0.78, green: 0.24, blue: 0.29) : Color(red: 0.76, green: 0.12, blue: 0.16))
+                                    .accessibilityLabel("删除对话")
                                 }
-                            ) {
-                                conversationCard(for: conv)
-                            }
-                            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                                .confirmationDialog("确认删除对话？", isPresented: Binding(
+                                    get: { deletingConversation?.id == conv.id },
+                                    set: {
+                                        if !$0 && deletingConversation?.id == conv.id {
+                                            deletingConversation = nil
+                                        }
+                                    }
+                                ), titleVisibility: .visible) {
+                                    Button("取消", role: .cancel) {
+                                        if deletingConversation?.id == conv.id {
+                                            deletingConversation = nil
+                                        }
+                                    }
+                                    Button("删除对话", role: .destructive) {
+                                        guard deletingConversation?.id == conv.id else { return }
+                                        storage.deleteConversation(id: conv.id)
+                                        deletingConversation = nil
+                                    }
+                                } message: {
+                                    Text("将永久删除「\(conv.title)」及其所有消息记录，此操作不可恢复。")
+                                }
+                                .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
                                 .listRowSeparator(.hidden)
                                 .listRowBackground(Color.clear)
                         }
@@ -88,29 +108,6 @@ struct ConversationListView: View {
                 .scrollContentBackground(.hidden)
                 .background(theme.background)
                 .scrollDismissesKeyboard(.interactively)
-            }
-            .confirmationDialog("确认删除对话？", isPresented: Binding(
-                get: { deletingConversation != nil },
-                set: {
-                    if !$0 {
-                        deletingConversation = nil
-                        revealedDeleteConversationId = nil
-                    }
-                }
-            ), titleVisibility: .visible) {
-                Button("取消", role: .cancel) {
-                    deletingConversation = nil
-                    revealedDeleteConversationId = nil
-                }
-                Button("删除对话", role: .destructive) {
-                    if let target = deletingConversation {
-                        storage.deleteConversation(id: target.id)
-                    }
-                    deletingConversation = nil
-                    revealedDeleteConversationId = nil
-                }
-            } message: {
-                Text("将永久删除「\(deletingConversation?.title ?? "该对话")」及其所有消息记录，此操作不可恢复。")
             }
             .navigationTitle("AI 工作台")
             .navigationBarTitleDisplayMode(.large)
