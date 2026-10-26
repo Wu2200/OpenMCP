@@ -572,7 +572,7 @@ struct ChatDetailView: View {
                 Text(message)
                     .font(.system(size: 13))
                     .foregroundColor(theme.primaryText)
-                    .tint(theme.accent)
+                    .textSelection(.enabled)
 
                 if let lastTurn = displayTurns.last {
                     HStack(spacing: 4) {
