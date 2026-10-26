@@ -17,6 +17,7 @@ struct ChatDetailView: View {
     @State private var pendingEditScrollTurnId: String? = nil
     @State private var isKeyboardVisible: Bool = false
     @State private var chatLayoutFrames = ChatLayoutFrames()
+    @State private var messageActionFrames: [String: CGRect] = [:]
     @State private var pendingDeleteTurn: MessageDisplayTurn? = nil
     @State private var showingClearConversationAlert: Bool = false
     @State private var autoFollowOutput: Bool = true
@@ -300,20 +301,18 @@ struct ChatDetailView: View {
                             }
                         )
                         .scrollDismissesKeyboard(.interactively)
-                        .overlay(alignment: .bottom) {
-                            if selectedTurnId == nil {
-                                LinearGradient(
-                                    stops: [
-                                        .init(color: theme.background.opacity(0), location: 0),
-                                        .init(color: theme.background.opacity(0.68), location: 0.55),
-                                        .init(color: theme.background, location: 1)
-                                    ],
-                                    startPoint: .top,
-                                    endPoint: .bottom
-                                )
-                                .frame(height: 40)
-                                .allowsHitTesting(false)
-                            }
+                        .background(alignment: .bottom) {
+                            LinearGradient(
+                                stops: [
+                                    .init(color: theme.background.opacity(0), location: 0),
+                                    .init(color: theme.background.opacity(0.68), location: 0.55),
+                                    .init(color: theme.background, location: 1)
+                                ],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                            .frame(height: 40)
+                            .allowsHitTesting(false)
                         }
                         .onChange(of: currentConversation.messages.count) { _ in
                             if autoFollowOutput {
@@ -356,6 +355,9 @@ struct ChatDetailView: View {
                 .frame(width: viewportWidth)
                 .onPreferenceChange(ChatLayoutFramesPreferenceKey.self) { frames in
                     chatLayoutFrames = frames
+                }
+                .onPreferenceChange(MessageActionFramePreferenceKey.self) { frames in
+                    messageActionFrames = frames
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidShowNotification)) { _ in
                     isKeyboardVisible = true
@@ -1013,17 +1015,13 @@ struct ChatDetailView: View {
     }
 
     private func scrollTurnIntoViewIfNeeded(_ turnId: String, using proxy: ScrollViewProxy) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-            guard let turnFrame = chatLayoutFrames.turns[turnId],
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+            guard let actionFrame = messageActionFrames[turnId],
                   chatLayoutFrames.viewport != .zero else { return }
-            let viewport = chatLayoutFrames.viewport
-            let threshold = min(56, max(36, viewport.height * 0.08))
-            guard turnFrame.maxY > viewport.maxY - threshold else { return }
-            let anchor = turnFrame.height > viewport.height * 0.82
-                ? UnitPoint.bottom
-                : UnitPoint(x: 0.5, y: 0.88)
-            withAnimation(.easeInOut(duration: 0.25)) {
-                proxy.scrollTo(turnId, anchor: anchor)
+            let visibleBottom = chatLayoutFrames.viewport.maxY - 10
+            guard actionFrame.maxY > visibleBottom else { return }
+            withAnimation(.easeOut(duration: 0.16)) {
+                proxy.scrollTo(turnId, anchor: .bottom)
             }
         }
     }
