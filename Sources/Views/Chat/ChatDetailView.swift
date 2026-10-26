@@ -304,17 +304,19 @@ struct ChatDetailView: View {
                         )
                         .scrollDismissesKeyboard(.interactively)
                         .overlay(alignment: .bottom) {
-                            LinearGradient(
-                                stops: [
-                                    .init(color: theme.background.opacity(0), location: 0),
-                                    .init(color: theme.background.opacity(0.68), location: 0.55),
-                                    .init(color: theme.background, location: 1)
-                                ],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
-                            .frame(height: 40)
-                            .allowsHitTesting(false)
+                            if selectedTurnId == nil {
+                                LinearGradient(
+                                    stops: [
+                                        .init(color: theme.background.opacity(0), location: 0),
+                                        .init(color: theme.background.opacity(0.68), location: 0.55),
+                                        .init(color: theme.background, location: 1)
+                                    ],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                                .frame(height: 40)
+                                .allowsHitTesting(false)
+                            }
                         }
                         .onChange(of: currentConversation.messages.count) { _ in
                             if autoFollowOutput {
@@ -1022,8 +1024,10 @@ struct ChatDetailView: View {
         let visibleBottom = chatLayoutFrames.viewport.maxY - 8
         let hiddenHeight = actionFrame.maxY - visibleBottom
         guard hiddenHeight > 0 else { return }
+        let shift = min(hiddenHeight + 8, 120)
+        let anchorY = max(0, 1 - shift / max(chatLayoutFrames.turns[turnId]?.height ?? 1, 1))
         withAnimation(.easeOut(duration: 0.18)) {
-            proxy.scrollTo(turnId, anchor: .bottom)
+            proxy.scrollTo(turnId, anchor: UnitPoint(x: 0.5, y: anchorY))
         }
     }
 
