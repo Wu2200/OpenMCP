@@ -254,7 +254,6 @@ struct MessageBubbleView: View {
                             .font(.system(size: 15, weight: .regular))
                             .foregroundColor(theme.primaryText)
                             .lineSpacing(3.5)
-                            .textSelection(.enabled)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 9)
                             .background(theme.userMessageBackground)
@@ -264,7 +263,9 @@ struct MessageBubbleView: View {
                                     .stroke(isSelected ? theme.accent.opacity(0.55) : theme.accent.opacity(0.18), lineWidth: 1)
                             )
                             .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-                            .simultaneousGesture(TapGesture().onEnded { onSelectToggle?() })
+                            .onTapGesture {
+                                onSelectToggle?()
+                            }
                     }
 
                     if isSelected {
@@ -409,6 +410,9 @@ struct MessageBubbleView: View {
                                 .stroke(isSelected ? theme.accent.opacity(0.45) : theme.border, lineWidth: 1)
                         )
                         .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                        .onTapGesture {
+                            onSelectToggle?()
+                        }
                     }
 
                     if isSelected {
