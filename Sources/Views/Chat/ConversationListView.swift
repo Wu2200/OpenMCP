@@ -68,7 +68,9 @@ struct ConversationListView: View {
                             conversationCard(for: conv)
                                 .swipeActions(edge: .leading, allowsFullSwipe: false) {
                                     Button {
-                                        deletingConversation = conv
+                                        withTransaction(Transaction(animation: nil)) {
+                                            deletingConversation = conv
+                                        }
                                     } label: {
                                         Label("删除", systemImage: "trash.fill")
                                             .foregroundStyle(.white)
