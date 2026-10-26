@@ -365,6 +365,7 @@ struct ChatDetailView: View {
                 .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidHideNotification)) { _ in
                     isKeyboardVisible = false
                 }
+                }
             }
         }
         .onAppear {
