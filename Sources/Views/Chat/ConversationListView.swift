@@ -47,34 +47,45 @@ struct ConversationListView: View {
                         isSearchFocused = false
                     }
 
-                ScrollView {
-                    VStack(spacing: 16) {
-                        studioHeroCard
+                List {
+                    studioHeroCard
+                        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
 
-                        searchBar
+                    searchBar
+                        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 8, trailing: 16))
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
 
-                        if filteredConversations.isEmpty {
-                            emptyStateCard
-                        } else {
-                            VStack(spacing: 12) {
-                                ForEach(filteredConversations) { conv in
-                                    conversationCard(for: conv)
+                    if filteredConversations.isEmpty {
+                        emptyStateCard
+                            .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 28, trailing: 16))
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
+                    } else {
+                        ForEach(filteredConversations) { conv in
+                            conversationCard(for: conv)
+                                .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                                    Button(role: .destructive) {
+                                        deletingConversation = conv
+                                    } label: {
+                                        Label("删除", systemImage: "trash")
+                                    }
                                 }
-                            }
+                                .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                                .listRowSeparator(.hidden)
+                                .listRowBackground(Color.clear)
                         }
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 8)
-                    .padding(.bottom, 28)
-                    .background(
-                        Color.clear
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                isSearchFocused = false
-                            }
-                    )
                 }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .background(theme.background)
                 .scrollDismissesKeyboard(.interactively)
+                .onTapGesture {
+                    isSearchFocused = false
+                }
             }
             .navigationTitle("AI 工作台")
             .navigationBarTitleDisplayMode(.large)
