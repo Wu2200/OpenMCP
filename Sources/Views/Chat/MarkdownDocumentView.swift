@@ -123,7 +123,6 @@ struct MarkdownDocumentView: View {
     let theme: AppThemePalette
     var contentWidth: CGFloat? = nil
     var isStreaming: Bool = false
-    var onTap: (() -> Void)? = nil
 
     var body: some View {
         let blocks = MarkdownRenderCache.shared.blocks(for: content, isStreaming: isStreaming)
@@ -133,8 +132,7 @@ struct MarkdownDocumentView: View {
                     block: block,
                     theme: theme,
                     contentWidth: contentWidth,
-                    isStreaming: isStreaming && (block.id == blocks.last?.id),
-                    onTap: onTap
+                    isStreaming: isStreaming && (block.id == blocks.last?.id)
                 )
             }
         }
@@ -147,7 +145,6 @@ struct MarkdownBlockItemView: View, Equatable {
     let theme: AppThemePalette
     let contentWidth: CGFloat?
     let isStreaming: Bool
-    var onTap: (() -> Void)? = nil
 
     static func == (lhs: MarkdownBlockItemView, rhs: MarkdownBlockItemView) -> Bool {
         lhs.block == rhs.block &&
@@ -162,7 +159,7 @@ struct MarkdownBlockItemView: View, Equatable {
             headingView(level: level, text: text)
 
         case .paragraph(_, let text):
-            MarkdownInlineText(text: text, fontSize: 15, weight: .regular, theme: theme, isStreaming: isStreaming, lineSpacing: 3.5, onTap: onTap)
+            MarkdownInlineText(text: text, fontSize: 15, weight: .regular, theme: theme, isStreaming: isStreaming, lineSpacing: 3.5)
 
         case .list(_, let items):
             let minIndent = items.map(\.indent).min() ?? 0
@@ -174,7 +171,7 @@ struct MarkdownBlockItemView: View, Equatable {
             .padding(.vertical, 1)
 
         case .blockquote(_, let text):
-            MarkdownInlineText(text: text, fontSize: 14, weight: .regular, theme: theme, isSecondary: true, isStreaming: isStreaming, lineSpacing: 3.5, onTap: onTap)
+            MarkdownInlineText(text: text, fontSize: 14, weight: .regular, theme: theme, isSecondary: true, isStreaming: isStreaming, lineSpacing: 3.5)
                 .padding(.leading, 12)
                 .padding(.trailing, 10)
                 .padding(.vertical, 7)
@@ -219,7 +216,7 @@ struct MarkdownBlockItemView: View, Equatable {
         }()
 
         VStack(alignment: .leading, spacing: 4) {
-            MarkdownInlineText(text: text, fontSize: size, weight: .bold, theme: theme, isStreaming: isStreaming, lineSpacing: 2.5, onTap: onTap)
+            MarkdownInlineText(text: text, fontSize: size, weight: .bold, theme: theme, isStreaming: isStreaming, lineSpacing: 2.5)
 
             if level == 1 {
                 Rectangle()
@@ -254,7 +251,7 @@ struct MarkdownBlockItemView: View, Equatable {
                     .frame(width: 15, alignment: .center)
             }
 
-            MarkdownInlineText(text: item.text, fontSize: 15, weight: .regular, theme: theme, isStreaming: isStreaming, lineSpacing: 3.5, onTap: onTap)
+            MarkdownInlineText(text: item.text, fontSize: 15, weight: .regular, theme: theme, isStreaming: isStreaming, lineSpacing: 3.5)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.leading, CGFloat(normalizedIndent) * 14)
@@ -460,7 +457,6 @@ struct MarkdownInlineText: View {
     var isSecondary: Bool = false
     var isStreaming: Bool = false
     var lineSpacing: CGFloat = 0
-    var onTap: (() -> Void)? = nil
 
     @State private var revealTracker = StreamingRevealTracker()
 
@@ -537,15 +533,11 @@ struct MarkdownInlineText: View {
             }
         }
 
-        return SelectableMessageTextView(
-            attributedText: text,
-            font: baseFont,
-            textColor: UIColor(baseColor),
-            tintColor: UIColor(theme.accent),
-            lineSpacing: lineSpacing,
-            onTap: onTap
-        )
-        .frame(maxWidth: .infinity, alignment: .leading)
+        return Text(value)
+            .font(.system(size: fontSize, weight: weight))
+            .foregroundColor(baseColor)
+            .lineSpacing(lineSpacing)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
