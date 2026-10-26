@@ -1026,7 +1026,7 @@ struct ChatDetailView: View {
               let scrollView = chatScrollView else { return }
         let visibleBottom = chatLayoutFrames.viewport.maxY - 44
         guard actionFrame.minY < visibleBottom, actionFrame.maxY > visibleBottom else { return }
-        let shift = actionFrame.maxY - visibleBottom + 6
+        let shift = min(actionFrame.maxY - visibleBottom + 6, 48)
         let currentOffset = scrollView.contentOffset.y
         let maximumOffset = max(
             -scrollView.adjustedContentInset.top,
