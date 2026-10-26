@@ -70,34 +70,10 @@ struct ConversationListView: View {
                                     Button(role: .destructive) {
                                         deletingConversation = conv
                                     } label: {
-                                        Image(systemName: "trash.fill")
-                                            .font(.system(size: 14, weight: .semibold))
-                                            .foregroundStyle(.white)
-                                            .frame(width: 36, height: 36)
-                                            .background(Color.white.opacity(0.18), in: Circle())
+                                        Label("删除", systemImage: "trash.fill")
                                     }
-                                    .tint(Color(red: 0.78, green: 0.24, blue: 0.22))
+                                    .tint(.red)
                                     .accessibilityLabel("删除对话")
-                                }
-                                .alert("确认删除对话？", isPresented: Binding(
-                                    get: { deletingConversation?.id == conv.id },
-                                    set: { isPresented in
-                                        if !isPresented && deletingConversation?.id == conv.id {
-                                            deletingConversation = nil
-                                        }
-                                    }
-                                )) {
-                                    Button("取消", role: .cancel) {
-                                        deletingConversation = nil
-                                    }
-                                    Button("删除对话", role: .destructive) {
-                                        withTransaction(Transaction(animation: nil)) {
-                                            storage.deleteConversation(id: conv.id)
-                                            deletingConversation = nil
-                                        }
-                                    }
-                                } message: {
-                                    Text("将永久删除「\(conv.title)」及其所有消息记录，此操作不可恢复。")
                                 }
                                 .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
                                 .listRowSeparator(.hidden)
@@ -109,6 +85,22 @@ struct ConversationListView: View {
                 .scrollContentBackground(.hidden)
                 .background(theme.background)
                 .scrollDismissesKeyboard(.interactively)
+                .alert("确认删除对话？", isPresented: Binding(
+                    get: { deletingConversation != nil },
+                    set: { if !$0 { deletingConversation = nil } }
+                )) {
+                    Button("取消", role: .cancel) {
+                        deletingConversation = nil
+                    }
+                    Button("删除对话", role: .destructive) {
+                        if let target = deletingConversation {
+                            storage.deleteConversation(id: target.id)
+                        }
+                        deletingConversation = nil
+                    }
+                } message: {
+                    Text("将永久删除「\(deletingConversation?.title ?? "该对话")」及其所有消息记录，此操作不可恢复。")
+                }
             }
             .navigationTitle("AI 工作台")
             .navigationBarTitleDisplayMode(.large)
