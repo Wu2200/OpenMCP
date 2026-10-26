@@ -303,7 +303,7 @@ struct ChatDetailView: View {
                             }
                         )
                         .scrollDismissesKeyboard(.interactively)
-                        .background(alignment: .bottom) {
+                        .overlay(alignment: .bottom) {
                             LinearGradient(
                                 stops: [
                                     .init(color: theme.background.opacity(0), location: 0),
@@ -1022,9 +1022,8 @@ struct ChatDetailView: View {
         let visibleBottom = chatLayoutFrames.viewport.maxY - 8
         let hiddenHeight = actionFrame.maxY - visibleBottom
         guard hiddenHeight > 0 else { return }
-        let shift = min(hiddenHeight + 8, 120)
         withAnimation(.easeOut(duration: 0.18)) {
-            proxy.scrollTo(turnId, anchor: UnitPoint(x: 0.5, y: min(1, 0.9 + shift / max(chatLayoutFrames.viewport.height, 1))) )
+            proxy.scrollTo(turnId, anchor: .bottom)
         }
     }
 
