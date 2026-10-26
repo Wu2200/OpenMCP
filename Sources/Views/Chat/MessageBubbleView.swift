@@ -13,14 +13,6 @@ struct MessageDisplayTurn: Identifiable, Equatable {
     var underlyingMessageIds: [String]
 }
 
-struct MessageActionFramePreferenceKey: PreferenceKey {
-    static var defaultValue: [String: CGRect] = [:]
-
-    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
-        value.merge(nextValue()) { _, latest in latest }
-    }
-}
-
 struct ReasoningFoldCardView: View {
     let reasoningText: String
     let isStreamingReasoning: Bool
@@ -545,14 +537,6 @@ struct MessageBubbleView: View {
                 .stroke(theme.border, lineWidth: 1)
         )
         .shadow(color: Color.black.opacity(theme.isDark ? 0.22 : 0.05), radius: 5, x: 0, y: 2)
-        .background(
-            GeometryReader { proxy in
-                Color.clear.preference(
-                    key: MessageActionFramePreferenceKey.self,
-                    value: [turn.id: proxy.frame(in: .global)]
-                )
-            }
-        )
     }
 
     private func editEditorBox(allowResend: Bool) -> some View {
