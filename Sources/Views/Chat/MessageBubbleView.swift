@@ -208,6 +208,7 @@ struct MessageBubbleView: View {
             if isEditing {
                 editEditorBox(allowResend: true)
                     .frame(width: bubbleColumnWidth)
+                    .id("message-editor-\(turn.id)")
             } else {
                 VStack(alignment: .trailing, spacing: 6) {
                     if !imageAtts.isEmpty {
@@ -336,6 +337,7 @@ struct MessageBubbleView: View {
             if isEditing {
                 editEditorBox(allowResend: false)
                     .frame(width: bubbleColumnWidth)
+                    .id("message-editor-\(turn.id)")
             } else {
                 VStack(alignment: .leading, spacing: 6) {
                     if isPureThinking {
@@ -479,8 +481,8 @@ struct MessageBubbleView: View {
                 withAnimation(.easeInOut(duration: 0.15)) {
                     isEditing = true
                 }
-                isEditFieldFocused = true
                 onEditBegin?()
+                isEditFieldFocused = true
             }
 
             if !copyTarget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
