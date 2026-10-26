@@ -8,6 +8,7 @@ struct ConversationListView: View {
     @State private var renamingConversation: Conversation? = nil
     @State private var renameText: String = ""
     @State private var deletingConversation: Conversation? = nil
+    @State private var revealedDeleteConversationId: String? = nil
     @State private var clearingConversation: Conversation? = nil
     @ObservedObject private var activity = GenerationActivityTracker.shared
     @FocusState private var isSearchFocused: Bool
@@ -65,19 +66,19 @@ struct ConversationListView: View {
                             .listRowBackground(Color.clear)
                     } else {
                         ForEach(filteredConversations) { conv in
-                            conversationCard(for: conv)
-                                .swipeActions(edge: .leading, allowsFullSwipe: false) {
-                                    Button {
-                                        withTransaction(Transaction(animation: nil)) {
-                                            deletingConversation = conv
-                                        }
-                                    } label: {
-                                        Label("删除", systemImage: "trash.fill")
+                            SwipeableConversationRow(
+                                conversationId: conv.id,
+                                revealedConversationId: $revealedDeleteConversationId,
+                                theme: theme,
+                                onDelete: {
+                                    withTransaction(Transaction(animation: nil)) {
+                                        deletingConversation = conv
                                     }
-                                    .tint(theme.isDark ? Color(red: 0.66, green: 0.18, blue: 0.22) : Color(red: 0.78, green: 0.20, blue: 0.22))
-                                    .accessibilityLabel("删除对话")
                                 }
-                                .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                            ) {
+                                conversationCard(for: conv)
+                            }
+                            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
                                 .listRowSeparator(.hidden)
                                 .listRowBackground(Color.clear)
                         }
@@ -90,18 +91,22 @@ struct ConversationListView: View {
             }
             .confirmationDialog("确认删除对话？", isPresented: Binding(
                 get: { deletingConversation != nil },
-                set: { if !$0 { deletingConversation = nil } }
+                set: {
+                    if !$0 {
+                        deletingConversation = nil
+                        revealedDeleteConversationId = nil
+                    }
+                }
             ), titleVisibility: .visible) {
                 Button("取消", role: .cancel) {
                     deletingConversation = nil
                 }
                 Button("删除对话", role: .destructive) {
-                    withTransaction(Transaction(animation: nil)) {
-                        if let target = deletingConversation {
-                            storage.deleteConversation(id: target.id)
-                        }
-                        deletingConversation = nil
+                    if let target = deletingConversation {
+                        storage.deleteConversation(id: target.id)
                     }
+                    deletingConversation = nil
+                    revealedDeleteConversationId = nil
                 }
             } message: {
                 Text("将永久删除「\(deletingConversation?.title ?? "该对话")」及其所有消息记录，此操作不可恢复。")
