@@ -172,8 +172,7 @@ struct MarkdownBlockItemView: View, Equatable {
             .padding(.vertical, 1)
 
         case .blockquote(_, let text):
-            MarkdownInlineText(text: text, fontSize: 14, weight: .regular, theme: theme, isSecondary: true, isStreaming: isStreaming)
-                .lineSpacing(3.5)
+            MarkdownInlineText(text: text, fontSize: 14, weight: .regular, theme: theme, isSecondary: true, isStreaming: isStreaming, lineSpacing: 3.5)
                 .padding(.leading, 12)
                 .padding(.trailing, 10)
                 .padding(.vertical, 7)
@@ -218,8 +217,7 @@ struct MarkdownBlockItemView: View, Equatable {
         }()
 
         VStack(alignment: .leading, spacing: 4) {
-            MarkdownInlineText(text: text, fontSize: size, weight: .bold, theme: theme, isStreaming: isStreaming)
-                .lineSpacing(2.5)
+            MarkdownInlineText(text: text, fontSize: size, weight: .bold, theme: theme, isStreaming: isStreaming, lineSpacing: 2.5)
 
             if level == 1 {
                 Rectangle()
@@ -254,8 +252,7 @@ struct MarkdownBlockItemView: View, Equatable {
                     .frame(width: 15, alignment: .center)
             }
 
-            MarkdownInlineText(text: item.text, fontSize: 15, weight: .regular, theme: theme, isStreaming: isStreaming)
-                .lineSpacing(3.5)
+            MarkdownInlineText(text: item.text, fontSize: 15, weight: .regular, theme: theme, isStreaming: isStreaming, lineSpacing: 3.5)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.leading, CGFloat(normalizedIndent) * 14)
@@ -360,6 +357,67 @@ struct StreamingRevealSchedule: TimelineSchedule {
     }
 }
 
+struct SelectableMessageTextView: UIViewRepresentable {
+    let attributedText: NSAttributedString
+    let font: UIFont
+    let textColor: UIColor
+    let tintColor: UIColor
+    let lineSpacing: CGFloat
+
+    func makeUIView(context: Context) -> UITextView {
+        let textView = UITextView()
+        textView.backgroundColor = .clear
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.isScrollEnabled = false
+        textView.textContainerInset = .zero
+        textView.textContainer.lineFragmentPadding = 0
+        textView.textContainer.widthTracksTextView = true
+        textView.font = font
+        textView.textColor = textColor
+        textView.tintColor = tintColor
+        textView.linkTextAttributes = [
+            .foregroundColor: tintColor,
+            .underlineStyle: NSUnderlineStyle.single.rawValue
+        ]
+        textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return textView
+    }
+
+    func updateUIView(_ textView: UITextView, context: Context) {
+        textView.font = font
+        textView.textColor = textColor
+        textView.tintColor = tintColor
+        textView.linkTextAttributes = [
+            .foregroundColor: tintColor,
+            .underlineStyle: NSUnderlineStyle.single.rawValue
+        ]
+
+        let updatedText = NSMutableAttributedString(attributedString: attributedText)
+        if updatedText.length > 0 {
+            let paragraphStyle = NSMutableParagraphStyle()
+            paragraphStyle.lineSpacing = lineSpacing
+            updatedText.addAttribute(
+                .paragraphStyle,
+                value: paragraphStyle,
+                range: NSRange(location: 0, length: updatedText.length)
+            )
+        }
+        if !textView.attributedText.isEqual(to: updatedText) {
+            textView.attributedText = updatedText
+        }
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
+        guard let width = proposal.width, width > 0 else { return nil }
+        let fittingSize = CGSize(width: width, height: CGFloat.greatestFiniteMagnitude)
+        uiView.textContainer.size = fittingSize
+        uiView.layoutManager.ensureLayout(for: uiView.textContainer)
+        let measuredSize = uiView.sizeThatFits(fittingSize)
+        return CGSize(width: width, height: ceil(measuredSize.height))
+    }
+}
+
 struct MarkdownInlineText: View {
     let text: String
     var fontSize: CGFloat = 15
@@ -367,6 +425,7 @@ struct MarkdownInlineText: View {
     let theme: AppThemePalette
     var isSecondary: Bool = false
     var isStreaming: Bool = false
+    var lineSpacing: CGFloat = 0
 
     @State private var revealTracker = StreamingRevealTracker()
 
@@ -397,12 +456,20 @@ struct MarkdownInlineText: View {
 
     @ViewBuilder
     private func styledText(_ value: AttributedString, baseColor: Color) -> some View {
-        let text = Text(value)
-            .font(.system(size: fontSize, weight: weight))
-            .foregroundColor(baseColor)
-            .tint(theme.accent)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        text.textSelection(.enabled)
+        let uiFontWeight: UIFont.Weight = {
+            if weight == .bold { return .bold }
+            if weight == .semibold { return .semibold }
+            if weight == .medium { return .medium }
+            return .regular
+        }()
+        SelectableMessageTextView(
+            attributedText: NSAttributedString(attributedString: value),
+            font: .systemFont(ofSize: fontSize, weight: uiFontWeight),
+            textColor: UIColor(baseColor),
+            tintColor: UIColor(theme.accent),
+            lineSpacing: lineSpacing
+        )
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -515,14 +582,15 @@ struct MarkdownTableView: View {
     @ViewBuilder
     private func cellContent(text: String, isHeader: Bool, alignment: HorizontalAlignment) -> some View {
         let fontSize: CGFloat = isHeader ? 13 : 13.5
-        Text(MarkdownRenderCache.shared.attributedString(for: text, fontSize: fontSize, theme: theme))
-            .font(.system(size: fontSize, weight: isHeader ? .semibold : .regular))
-            .foregroundColor(theme.primaryText)
-            .tint(theme.accent)
-            .multilineTextAlignment(textAlignment(for: alignment))
-            .lineSpacing(2.5)
-            .fixedSize(horizontal: false, vertical: true)
-            .textSelection(.enabled)
+        let weight: UIFont.Weight = isHeader ? .semibold : .regular
+        SelectableMessageTextView(
+            attributedText: NSAttributedString(attributedString: MarkdownRenderCache.shared.attributedString(for: text, fontSize: fontSize, theme: theme)),
+            font: .systemFont(ofSize: fontSize, weight: weight),
+            textColor: UIColor(theme.primaryText),
+            tintColor: UIColor(theme.accent),
+            lineSpacing: 2.5
+        )
+        .multilineTextAlignment(textAlignment(for: alignment))
     }
 
     private func frameAlignment(for align: HorizontalAlignment) -> Alignment {
