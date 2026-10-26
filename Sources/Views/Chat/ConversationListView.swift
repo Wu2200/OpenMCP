@@ -67,12 +67,13 @@ struct ConversationListView: View {
                         ForEach(filteredConversations) { conv in
                             conversationCard(for: conv)
                                 .swipeActions(edge: .leading, allowsFullSwipe: false) {
-                                    Button(role: .destructive) {
+                                    Button {
                                         deletingConversation = conv
                                     } label: {
                                         Label("删除", systemImage: "trash.fill")
+                                            .foregroundStyle(.white)
                                     }
-                                    .tint(.red)
+                                    .tint(theme.isDark ? Color(red: 0.68, green: 0.20, blue: 0.24) : Color(red: 0.80, green: 0.22, blue: 0.24))
                                     .accessibilityLabel("删除对话")
                                 }
                                 .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
@@ -93,12 +94,10 @@ struct ConversationListView: View {
                         deletingConversation = nil
                     }
                     Button("删除对话", role: .destructive) {
-                        withTransaction(Transaction(animation: nil)) {
-                            if let target = deletingConversation {
-                                storage.deleteConversation(id: target.id)
-                            }
-                            deletingConversation = nil
+                        if let target = deletingConversation {
+                            storage.deleteConversation(id: target.id)
                         }
+                        deletingConversation = nil
                     }
                 } message: {
                     Text("将永久删除「\(deletingConversation?.title ?? "该对话")」及其所有消息记录，此操作不可恢复。")
