@@ -402,11 +402,7 @@ struct MarkdownInlineText: View {
             .foregroundColor(baseColor)
             .tint(theme.accent)
             .frame(maxWidth: .infinity, alignment: .leading)
-        if isStreaming {
-            text
-        } else {
-            text.textSelection(.enabled)
-        }
+        text.textSelection(.enabled)
     }
 }
 
