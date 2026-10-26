@@ -365,6 +365,11 @@ struct SelectableMessageTextView: UIViewRepresentable {
     let textColor: UIColor
     let tintColor: UIColor
     let lineSpacing: CGFloat
+    var onTap: (() -> Void)? = nil
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onTap: onTap)
+    }
 
     func makeUIView(context: Context) -> UITextView {
         let textView = UITextView()
@@ -383,10 +388,18 @@ struct SelectableMessageTextView: UIViewRepresentable {
             .underlineStyle: NSUnderlineStyle.single.rawValue
         ]
         textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let tapRecognizer = UITapGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleTap)
+        )
+        tapRecognizer.cancelsTouchesInView = false
+        tapRecognizer.delegate = context.coordinator
+        textView.addGestureRecognizer(tapRecognizer)
         return textView
     }
 
     func updateUIView(_ textView: UITextView, context: Context) {
+        context.coordinator.onTap = onTap
         textView.font = font
         textView.textColor = textColor
         textView.tintColor = tintColor
@@ -417,6 +430,25 @@ struct SelectableMessageTextView: UIViewRepresentable {
         uiView.layoutManager.ensureLayout(for: uiView.textContainer)
         let measuredSize = uiView.sizeThatFits(fittingSize)
         return CGSize(width: width, height: ceil(measuredSize.height))
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var onTap: (() -> Void)?
+
+        init(onTap: (() -> Void)?) {
+            self.onTap = onTap
+        }
+
+        @objc func handleTap() {
+            onTap?()
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool {
+            true
+        }
     }
 }
 
