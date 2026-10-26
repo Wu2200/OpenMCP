@@ -15,6 +15,7 @@ struct ChatDetailView: View {
     @State private var previewingStagedAttachment: ChatAttachment? = nil
     @State private var selectedTurnId: String? = nil
     @State private var pendingEditScrollTurnId: String? = nil
+    @State private var isKeyboardVisible: Bool = false
     @State private var chatLayoutFrames = ChatLayoutFrames()
     @State private var pendingDeleteTurn: MessageDisplayTurn? = nil
     @State private var showingClearConversationAlert: Bool = false
@@ -226,10 +227,14 @@ struct ChatDetailView: View {
                                         .frame(width: rowAvailableWidth)
                                         .background(
                                             GeometryReader { proxy in
-                                                Color.clear.preference(
-                                                    key: ChatLayoutFramesPreferenceKey.self,
-                                                    value: ChatLayoutFrames(turns: [turn.id: proxy.frame(in: .global)])
-                                                )
+                                                if selectedTurnId == turn.id {
+                                                    Color.clear.preference(
+                                                        key: ChatLayoutFramesPreferenceKey.self,
+                                                        value: ChatLayoutFrames(turns: [turn.id: proxy.frame(in: .global)])
+                                                    )
+                                                } else {
+                                                    Color.clear
+                                                }
                                             }
                                         )
                                         .id(turn.id)
@@ -296,17 +301,19 @@ struct ChatDetailView: View {
                         )
                         .scrollDismissesKeyboard(.interactively)
                         .overlay(alignment: .bottom) {
-                            LinearGradient(
-                                stops: [
-                                    .init(color: theme.background.opacity(0), location: 0),
-                                    .init(color: theme.background.opacity(0.68), location: 0.55),
-                                    .init(color: theme.background, location: 1)
-                                ],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
-                            .frame(height: 40)
-                            .allowsHitTesting(false)
+                            if selectedTurnId == nil {
+                                LinearGradient(
+                                    stops: [
+                                        .init(color: theme.background.opacity(0), location: 0),
+                                        .init(color: theme.background.opacity(0.68), location: 0.55),
+                                        .init(color: theme.background, location: 1)
+                                    ],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                                .frame(height: 40)
+                                .allowsHitTesting(false)
+                            }
                         }
                         .onChange(of: currentConversation.messages.count) { _ in
                             if autoFollowOutput {
@@ -319,7 +326,7 @@ struct ChatDetailView: View {
                             }
                         }
 
-                        if !displayTurns.isEmpty {
+                        if !displayTurns.isEmpty && selectedTurnId == nil {
                             Button(action: {
                                 autoFollowOutput = true
                                 coordinator.streamingState.setDisplayPaused(false)
@@ -351,14 +358,12 @@ struct ChatDetailView: View {
                     chatLayoutFrames = frames
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidShowNotification)) { _ in
+                    isKeyboardVisible = true
                     guard let turnId = pendingEditScrollTurnId else { return }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-                        guard pendingEditScrollTurnId == turnId else { return }
-                        withAnimation(.easeInOut(duration: 0.25)) {
-                            scrollProxy.scrollTo(turnId, anchor: .center)
-                        }
-                        pendingEditScrollTurnId = nil
-                    }
+                    scrollEditorToCenter(turnId, using: scrollProxy)
+                }
+                .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidHideNotification)) { _ in
+                    isKeyboardVisible = false
                 }
             }
         }
@@ -1009,20 +1014,31 @@ struct ChatDetailView: View {
     private func scrollTurnIntoViewIfNeeded(_ turnId: String, using proxy: ScrollViewProxy) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
             guard let turnFrame = chatLayoutFrames.turns[turnId],
-                  chatLayoutFrames.viewport != .zero,
-                  turnFrame.maxY > chatLayoutFrames.viewport.maxY - 20 else { return }
-            withAnimation(.easeInOut(duration: 0.22)) {
-                proxy.scrollTo(turnId, anchor: .bottom)
+                  chatLayoutFrames.viewport != .zero else { return }
+            let viewport = chatLayoutFrames.viewport
+            let threshold = min(56, max(36, viewport.height * 0.08))
+            guard turnFrame.maxY > viewport.maxY - threshold else { return }
+            let anchor = turnFrame.height > viewport.height * 0.82
+                ? UnitPoint.bottom
+                : UnitPoint(x: 0.5, y: 0.88)
+            withAnimation(.easeInOut(duration: 0.25)) {
+                proxy.scrollTo(turnId, anchor: anchor)
             }
         }
     }
 
     private func centerTurnForEditing(_ turnId: String, using proxy: ScrollViewProxy) {
         pendingEditScrollTurnId = turnId
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+        if isKeyboardVisible {
+            scrollEditorToCenter(turnId, using: proxy)
+        }
+    }
+
+    private func scrollEditorToCenter(_ turnId: String, using proxy: ScrollViewProxy) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
             guard pendingEditScrollTurnId == turnId else { return }
             withAnimation(.easeInOut(duration: 0.25)) {
-                proxy.scrollTo(turnId, anchor: .center)
+                proxy.scrollTo("message-editor-\(turnId)", anchor: .center)
             }
             pendingEditScrollTurnId = nil
         }
