@@ -519,12 +519,13 @@ struct MarkdownTableView: View {
     @ViewBuilder
     private func cellContent(text: String, isHeader: Bool, alignment: HorizontalAlignment) -> some View {
         let fontSize: CGFloat = isHeader ? 13 : 13.5
-        let weight: UIFont.Weight = isHeader ? .semibold : .regular
         Text(MarkdownRenderCache.shared.attributedString(for: text, fontSize: fontSize, theme: theme))
             .font(.system(size: fontSize, weight: isHeader ? .semibold : .regular))
             .foregroundColor(theme.primaryText)
-            .lineSpacing(2.5)
+            .tint(theme.accent)
             .multilineTextAlignment(textAlignment(for: alignment))
+            .lineSpacing(2.5)
+            .fixedSize(horizontal: false, vertical: true)
             .textSelection(.enabled)
     }
 
