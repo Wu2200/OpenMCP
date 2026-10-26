@@ -259,11 +259,17 @@ struct MessageBubbleView: View {
                             }
                         )
                     } else if !trimmed.isEmpty {
-                        Text(turn.content)
-                            .font(.system(size: 15, weight: .regular))
-                            .foregroundColor(theme.primaryText)
-                            .lineSpacing(3.5)
-                            .textSelection(.enabled)
+                        SelectableMessageTextView(
+                            attributedText: NSAttributedString(
+                                string: turn.content,
+                                attributes: [.font: textFont]
+                            ),
+                            font: textFont,
+                            textColor: UIColor(theme.primaryText),
+                            tintColor: UIColor(theme.accent),
+                            lineSpacing: 3.5
+                        )
+                            .frame(width: textWidth, alignment: .leading)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 9)
                             .background(theme.userMessageBackground)
