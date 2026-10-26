@@ -175,7 +175,9 @@ struct ChatDetailView: View {
                                                     selectedTurnId = isSelecting ? turn.id : nil
                                                 }
                                                 if isSelecting {
-                                                    scrollTurnIntoViewIfNeeded(turn.id, using: scrollProxy)
+                                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) {
+                                                        scrollTurnIntoViewIfNeeded(turn.id, using: scrollProxy)
+                                                    }
                                                 }
                                             },
                                             onEditBegin: {
@@ -1015,21 +1017,32 @@ struct ChatDetailView: View {
     }
 
     private func scrollTurnIntoViewIfNeeded(_ turnId: String, using proxy: ScrollViewProxy) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-            guard let actionFrame = messageActionFrames[turnId],
-                  chatLayoutFrames.viewport != .zero else { return }
-            let visibleBottom = chatLayoutFrames.viewport.maxY - 10
-            guard actionFrame.maxY > visibleBottom else { return }
-            withAnimation(.easeOut(duration: 0.16)) {
-                proxy.scrollTo(turnId, anchor: .bottom)
-            }
+        guard let actionFrame = messageActionFrames[turnId],
+              chatLayoutFrames.viewport != .zero else { return }
+        let visibleBottom = chatLayoutFrames.viewport.maxY - 8
+        let hiddenHeight = actionFrame.maxY - visibleBottom
+        guard hiddenHeight > 0 else { return }
+        let shift = min(hiddenHeight + 8, 120)
+        withAnimation(.easeOut(duration: 0.18)) {
+            proxy.scrollTo(turnId, anchor: UnitPoint(x: 0.5, y: min(1, 0.9 + shift / max(chatLayoutFrames.viewport.height, 1))) )
         }
     }
 
     private func centerTurnForEditing(_ turnId: String, using proxy: ScrollViewProxy) {
         pendingEditScrollTurnId = turnId
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            withAnimation(.easeOut(duration: 0.2)) {
+                proxy.scrollTo("message-editor-\(turnId)", anchor: .center)
+            }
+            pendingEditScrollTurnId = nil
+        }
         if isKeyboardVisible {
-            scrollEditorToCenter(turnId, using: proxy)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                withAnimation(.easeOut(duration: 0.2)) {
+                    proxy.scrollTo("message-editor-\(turnId)", anchor: .center)
+                }
+                pendingEditScrollTurnId = nil
+            }
         }
     }
 
