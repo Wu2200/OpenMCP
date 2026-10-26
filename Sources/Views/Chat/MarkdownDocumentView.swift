@@ -159,8 +159,7 @@ struct MarkdownBlockItemView: View, Equatable {
             headingView(level: level, text: text)
 
         case .paragraph(_, let text):
-            MarkdownInlineText(text: text, fontSize: 15, weight: .regular, theme: theme, isStreaming: isStreaming)
-                .lineSpacing(3.5)
+            MarkdownInlineText(text: text, fontSize: 15, weight: .regular, theme: theme, isStreaming: isStreaming, lineSpacing: 3.5)
 
         case .list(_, let items):
             let minIndent = items.map(\.indent).min() ?? 0
