@@ -286,20 +286,19 @@ struct ChatDetailView: View {
                                 manualScrollTrigger &+= 1
                             }
                         }
-
-                        LinearGradient(
-                            stops: [
-                                .init(color: theme.background.opacity(0), location: 0),
-                                .init(color: theme.background.opacity(0.68), location: 0.55),
-                                .init(color: theme.background, location: 1)
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                        .frame(width: viewportWidth, height: 40)
-                        .frame(maxHeight: .infinity, alignment: .bottom)
-                        .allowsHitTesting(false)
-                        .zIndex(1)
+                        .overlay(alignment: .bottom) {
+                            LinearGradient(
+                                stops: [
+                                    .init(color: theme.background.opacity(0), location: 0),
+                                    .init(color: theme.background.opacity(0.68), location: 0.55),
+                                    .init(color: theme.background, location: 1)
+                                ],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                            .frame(height: 40)
+                            .allowsHitTesting(false)
+                        }
 
                         if !displayTurns.isEmpty && selectedTurnId == nil {
                             Button(action: {
