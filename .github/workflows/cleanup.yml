@@ -1,0 +1,49 @@
+name: Cleanup
+
+on:
+  schedule:
+    - cron: '17 3 * * 0'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Delete Releases and Tags
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 --json tagName -q '.[].tagName' | while read -r tag; do
+            gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --cleanup-tag -y
+          done
+          git fetch --tags
+          git tag -l | while read -r tag; do
+            git push origin ":refs/tags/$tag" || true
+          done
+
+      - name: Keep Latest 10 Build Runs and Delete Other Runs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mapfile -t build_runs < <(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/workflows/build-ipa.yml/runs?per_page=100" --jq '.workflow_runs[] | select(.status == "completed" and .conclusion == "success") | .id')
+          declare -A keep_runs=()
+          for run_id in "${build_runs[@]:0:10}"; do
+            [ -n "$run_id" ] && keep_runs["$run_id"]=1
+          done
+          mapfile -t all_runs < <(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs?per_page=100" --jq '.workflow_runs[] | select(.status == "completed") | .id')
+          for run_id in "${all_runs[@]}"; do
+            [ -n "$run_id" ] || continue
+            if [[ -z "${keep_runs[$run_id]+x}" ]]; then
+              gh api --silent --method DELETE "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+              echo "Deleted workflow run ${run_id}"
+            fi
+          done
