@@ -250,20 +250,22 @@ struct MessageBubbleView: View {
                             }
                         )
                     } else if !trimmed.isEmpty {
-                        Text(turn.content)
-                            .font(.system(size: 15, weight: .regular))
-                            .foregroundColor(theme.primaryText)
-                            .lineSpacing(3.5)
-                            .textSelection(.enabled)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 9)
-                            .background(theme.userMessageBackground)
-                            .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 15, style: .continuous)
-                                    .stroke(isSelected ? theme.accent.opacity(0.55) : theme.accent.opacity(0.18), lineWidth: 1)
-                            )
-                            .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                        SelectableMessageTextView(
+                            attributedText: NSAttributedString(string: turn.content),
+                            font: .systemFont(ofSize: 15, weight: .regular),
+                            textColor: UIColor(theme.primaryText),
+                            tintColor: UIColor(theme.accent),
+                            lineSpacing: 3.5
+                        )
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 9)
+                        .background(theme.userMessageBackground)
+                        .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 15, style: .continuous)
+                                .stroke(isSelected ? theme.accent.opacity(0.55) : theme.accent.opacity(0.18), lineWidth: 1)
+                        )
+                        .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
                     }
 
                     if isSelected {
