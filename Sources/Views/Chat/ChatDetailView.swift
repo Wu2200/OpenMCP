@@ -287,6 +287,20 @@ struct ChatDetailView: View {
                             }
                         }
 
+                        LinearGradient(
+                            stops: [
+                                .init(color: theme.background.opacity(0), location: 0),
+                                .init(color: theme.background.opacity(0.68), location: 0.55),
+                                .init(color: theme.background, location: 1)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                        .frame(width: viewportWidth, height: 40)
+                        .frame(maxHeight: .infinity, alignment: .bottom)
+                        .allowsHitTesting(false)
+                        .zIndex(1)
+
                         if !displayTurns.isEmpty && selectedTurnId == nil {
                             Button(action: {
                                 autoFollowOutput = true
@@ -309,23 +323,11 @@ struct ChatDetailView: View {
                             .padding(.trailing, 14)
                             .padding(.bottom, 8)
                         }
-                    }
-                    .frame(width: viewportWidth)
-                    .overlay(alignment: .bottom) {
-                        LinearGradient(
-                            stops: [
-                                .init(color: theme.background.opacity(0), location: 0),
-                                .init(color: theme.background.opacity(0.68), location: 0.55),
-                                .init(color: theme.background, location: 1)
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                        .frame(height: 40)
-                        .allowsHitTesting(false)
-                    }
+                        }
+                        .frame(width: viewportWidth)
 
                     composerDock(viewportWidth: viewportWidth)
+
                 }
                 .frame(width: viewportWidth)
                 .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidShowNotification)) { _ in
