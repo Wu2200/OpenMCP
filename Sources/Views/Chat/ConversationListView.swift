@@ -73,7 +73,7 @@ struct ConversationListView: View {
                                         Label("删除", systemImage: "trash.fill")
                                             .foregroundStyle(.white)
                                     }
-                                    .tint(theme.isDark ? Color(red: 0.68, green: 0.20, blue: 0.24) : Color(red: 0.80, green: 0.22, blue: 0.24))
+                                    .tint(theme.isDark ? Color(red: 0.72, green: 0.24, blue: 0.28) : Color(red: 0.84, green: 0.25, blue: 0.26))
                                     .accessibilityLabel("删除对话")
                                 }
                                 .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
