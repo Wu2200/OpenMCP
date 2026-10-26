@@ -73,13 +73,11 @@ final class MarkdownRenderCache {
     func attributedString(
         for text: String,
         fontSize: CGFloat,
-        weight: Font.Weight = .regular,
         theme: AppThemePalette,
         isStreaming: Bool = false
     ) -> AttributedString {
         let normalizedInput = isStreaming ? MarkdownParser.stabilizeStreamingInline(text) : text
-        let weightTag = weight == .bold ? "b" : "r"
-        let cacheKey = "\(theme.backgroundHex)-\(theme.accentHex)-\(Int(fontSize * 10))-\(weightTag)-\(normalizedInput)" as NSString
+        let cacheKey = "\(theme.backgroundHex)-\(theme.accentHex)-\(Int(fontSize * 10))-\(normalizedInput)" as NSString
         if !isStreaming, normalizedInput.utf8.count < 4000, let cached = attrCache.object(forKey: cacheKey) {
             return cached.attr
         }
@@ -89,9 +87,7 @@ final class MarkdownRenderCache {
             markdown: prepared,
             options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         ) else {
-            var fallback = AttributedString(normalizedInput)
-            fallback.font = .system(size: fontSize, weight: weight)
-            fallback.foregroundColor = UIColor(theme.primaryText)
+            let fallback = AttributedString(normalizedInput)
             if !isStreaming, normalizedInput.utf8.count < 4000 {
                 attrCache.setObject(AttrBox(fallback), forKey: cacheKey)
             }
@@ -101,28 +97,13 @@ final class MarkdownRenderCache {
         let codeBg = UIColor(theme.elevatedBackground)
         let codeFg = UIColor(theme.primaryText)
         let linkFg = UIColor(theme.accent)
-        let primaryFg = UIColor(theme.primaryText)
 
         for run in attr.runs {
             let range = run.range
-            if let intent = run.inlinePresentationIntent {
-                if intent.contains(.code) {
-                    attr[range].font = .system(size: max(12.5, fontSize - 1.5), weight: .medium, design: .monospaced)
-                    attr[range].backgroundColor = codeBg
-                    attr[range].foregroundColor = codeFg
-                } else if intent.contains(.stronglyEmphasized) {
-                    attr[range].font = .system(size: fontSize, weight: .bold)
-                    attr[range].foregroundColor = primaryFg
-                } else if intent.contains(.emphasized) {
-                    attr[range].font = .system(size: fontSize, weight: weight).italic()
-                    attr[range].foregroundColor = primaryFg
-                } else {
-                    attr[range].font = .system(size: fontSize, weight: weight)
-                    attr[range].foregroundColor = primaryFg
-                }
-            } else {
-                attr[range].font = .system(size: fontSize, weight: weight)
-                attr[range].foregroundColor = primaryFg
+            if let intent = run.inlinePresentationIntent, intent.contains(.code) {
+                attr[range].font = .system(size: max(12.5, fontSize - 1.5), weight: .medium, design: .monospaced)
+                attr[range].backgroundColor = codeBg
+                attr[range].foregroundColor = codeFg
             }
             if run.link != nil {
                 attr[range].foregroundColor = linkFg
@@ -146,85 +127,15 @@ struct MarkdownDocumentView: View {
     var body: some View {
         let blocks = MarkdownRenderCache.shared.blocks(for: content, isStreaming: isStreaming)
         VStack(alignment: .leading, spacing: 8) {
-            if isStreaming {
-                ForEach(blocks) { block in
-                    MarkdownBlockItemView(
-                        block: block,
-                        theme: theme,
-                        contentWidth: contentWidth,
-                        isStreaming: block.id == blocks.last?.id
-                    )
-                }
-            } else {
-                ForEach(MarkdownRenderSegment.make(from: blocks)) { segment in
-                    if segment.isMergedText {
-                        MarkdownMergedTextView(blocks: segment.blocks, theme: theme)
-                    } else if let block = segment.blocks.first {
-                        MarkdownBlockItemView(
-                            block: block,
-                            theme: theme,
-                            contentWidth: contentWidth,
-                            isStreaming: false
-                        )
-                    }
-                }
+            ForEach(blocks) { block in
+                MarkdownBlockItemView(
+                    block: block,
+                    theme: theme,
+                    contentWidth: contentWidth,
+                    isStreaming: isStreaming && (block.id == blocks.last?.id)
+                )
             }
         }
-        .tint(theme.accent)
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-extension MarkdownBlock {
-    var isMergeableText: Bool {
-        switch self {
-        case .paragraph, .list:
-            return true
-        case .heading(_, let level, _):
-            return level >= 2
-        default:
-            return false
-        }
-    }
-}
-
-struct MarkdownRenderSegment: Identifiable {
-    let id: Int
-    let blocks: [MarkdownBlock]
-    let isMergedText: Bool
-
-    static func make(from blocks: [MarkdownBlock]) -> [MarkdownRenderSegment] {
-        var result: [MarkdownRenderSegment] = []
-        var buffer: [MarkdownBlock] = []
-
-        func flush() {
-            guard let first = buffer.first else { return }
-            result.append(MarkdownRenderSegment(id: first.id, blocks: buffer, isMergedText: true))
-            buffer.removeAll()
-        }
-
-        for block in blocks {
-            if block.isMergeableText {
-                buffer.append(block)
-            } else {
-                flush()
-                result.append(MarkdownRenderSegment(id: block.id, blocks: [block], isMergedText: false))
-            }
-        }
-        flush()
-        return result
-    }
-}
-
-struct MarkdownMergedTextView: View {
-    let blocks: [MarkdownBlock]
-    let theme: AppThemePalette
-
-    var body: some View {
-        SelectableRichTextView(
-            attributedText: RichTextFormatter.makeDocumentNSAttributedString(blocks: blocks, theme: theme),
-            theme: theme
-        )
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
@@ -463,47 +374,39 @@ struct MarkdownInlineText: View {
         let attr = MarkdownRenderCache.shared.attributedString(
             for: text,
             fontSize: fontSize,
-            weight: weight,
             theme: theme,
             isStreaming: isStreaming
         )
         let baseColor: Color = isSecondary ? theme.secondaryText : theme.primaryText
         let activeSegments = revealTracker.register(length: attr.characters.count, now: Date(), isStreaming: isStreaming)
-        if isStreaming {
-            if let lastSegment = activeSegments.last {
-                let runs = StreamingRevealTracker.revealRuns(
-                    in: attr,
-                    segments: activeSegments,
-                    baseColor: baseColor,
-                    linkColor: theme.accent
-                )
-                TimelineView(StreamingRevealSchedule(end: lastSegment.date.addingTimeInterval(StreamingRevealTracker.fadeDuration))) { context in
-                    styledText(StreamingRevealTracker.render(attr, runs: runs, at: context.date), baseColor: baseColor)
-                }
-                .id(lastSegment.date)
-            } else {
-                styledText(attr, baseColor: baseColor)
-            }
-        } else {
-            let nsAttr = RichTextFormatter.makeNSAttributedString(
-                from: attr,
-                fontSize: fontSize,
-                weight: weight,
+        if let lastSegment = activeSegments.last {
+            let runs = StreamingRevealTracker.revealRuns(
+                in: attr,
+                segments: activeSegments,
                 baseColor: baseColor,
-                lineSpacing: 3.5
+                linkColor: theme.accent
             )
-            SelectableRichTextView(attributedText: nsAttr, theme: theme)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            TimelineView(StreamingRevealSchedule(end: lastSegment.date.addingTimeInterval(StreamingRevealTracker.fadeDuration))) { context in
+                styledText(StreamingRevealTracker.render(attr, runs: runs, at: context.date), baseColor: baseColor)
+            }
+            .id(lastSegment.date)
+        } else {
+            styledText(attr, baseColor: baseColor)
         }
     }
 
     @ViewBuilder
     private func styledText(_ value: AttributedString, baseColor: Color) -> some View {
-        Text(value)
+        let text = Text(value)
             .font(.system(size: fontSize, weight: weight))
             .foregroundColor(baseColor)
             .tint(theme.accent)
             .frame(maxWidth: .infinity, alignment: .leading)
+        if isStreaming {
+            text
+        } else {
+            text.textSelection(.enabled)
+        }
     }
 }
 
@@ -623,6 +526,7 @@ struct MarkdownTableView: View {
             .multilineTextAlignment(textAlignment(for: alignment))
             .lineSpacing(2.5)
             .fixedSize(horizontal: false, vertical: true)
+            .textSelection(.enabled)
     }
 
     private func frameAlignment(for align: HorizontalAlignment) -> Alignment {
@@ -1017,304 +921,5 @@ enum MarkdownParser {
             }
         }
         return total
-    }
-}
-
-enum RichTextFormatter {
-    static func makeDocumentNSAttributedString(
-        blocks: [MarkdownBlock],
-        theme: AppThemePalette
-    ) -> NSAttributedString {
-        let result = NSMutableAttributedString()
-        let primary = theme.primaryText
-
-        for (index, block) in blocks.enumerated() {
-            let isLastBlock = index == blocks.count - 1
-            var blockSpacing: CGFloat = 0
-            if !isLastBlock {
-                blockSpacing = 8
-                if case .heading(_, let nextLevel, _) = blocks[index + 1] {
-                    blockSpacing += nextLevel <= 2 ? 4 : 2
-                }
-            }
-
-            switch block {
-            case .paragraph(_, let text):
-                let body = inlineBody(text: text, fontSize: 15, weight: .regular, theme: theme)
-                appendPiece(
-                    to: result,
-                    prefix: nil,
-                    body: body,
-                    fontSize: 15,
-                    weight: .regular,
-                    color: primary,
-                    firstLineIndent: 0,
-                    headIndent: 0,
-                    tabLocation: nil,
-                    lineSpacing: 3.5,
-                    spacingAfter: blockSpacing,
-                    appendNewline: !isLastBlock
-                )
-
-            case .heading(_, let level, let text):
-                let size: CGFloat
-                switch level {
-                case 1: size = 19.0
-                case 2: size = 17.0
-                case 3: size = 15.8
-                default: size = 15.0
-                }
-                let body = inlineBody(text: text, fontSize: size, weight: .bold, theme: theme)
-                appendPiece(
-                    to: result,
-                    prefix: nil,
-                    body: body,
-                    fontSize: size,
-                    weight: .bold,
-                    color: primary,
-                    firstLineIndent: 0,
-                    headIndent: 0,
-                    tabLocation: nil,
-                    lineSpacing: 2.5,
-                    spacingAfter: blockSpacing,
-                    appendNewline: !isLastBlock
-                )
-
-            case .list(_, let items):
-                let minIndent = items.map(\.indent).min() ?? 0
-                for (itemIndex, item) in items.enumerated() {
-                    let isLastItem = itemIndex == items.count - 1
-                    let normalized = max(0, min(item.indent - minIndent, 4))
-                    var markerColor = UIColor(primary)
-                    let markerText: String
-                    switch item.marker {
-                    case .bullet:
-                        markerText = normalized == 0 ? "•" : (normalized == 1 ? "◦" : "▪")
-                    case .ordered(let number):
-                        markerText = number
-                    case .task(let checked):
-                        markerText = checked ? "☑" : "☐"
-                        if checked {
-                            markerColor = UIColor(theme.accent)
-                        }
-                    }
-                    let indentPoints = CGFloat(normalized) * 14
-                    let markerWidth: CGFloat = 22
-                    let marker = NSAttributedString(
-                        string: markerText + "\t",
-                        attributes: [
-                            .font: UIFont.systemFont(ofSize: 15, weight: .semibold),
-                            .foregroundColor: markerColor
-                        ]
-                    )
-                    let body = inlineBody(text: item.text, fontSize: 15, weight: .regular, theme: theme)
-                    appendPiece(
-                        to: result,
-                        prefix: marker,
-                        body: body,
-                        fontSize: 15,
-                        weight: .regular,
-                        color: primary,
-                        firstLineIndent: indentPoints,
-                        headIndent: indentPoints + markerWidth,
-                        tabLocation: indentPoints + markerWidth,
-                        lineSpacing: 3.5,
-                        spacingAfter: isLastItem ? blockSpacing : 5,
-                        appendNewline: !(isLastBlock && isLastItem)
-                    )
-                }
-
-            default:
-                continue
-            }
-        }
-
-        while result.length > 0, result.string.hasSuffix("\n") {
-            result.deleteCharacters(in: NSRange(location: result.length - 1, length: 1))
-        }
-        return result
-    }
-
-    private static func inlineBody(
-        text: String,
-        fontSize: CGFloat,
-        weight: Font.Weight,
-        theme: AppThemePalette
-    ) -> NSAttributedString {
-        let attr = MarkdownRenderCache.shared.attributedString(
-            for: text,
-            fontSize: fontSize,
-            weight: weight,
-            theme: theme
-        )
-        return makeNSAttributedString(
-            from: attr,
-            fontSize: fontSize,
-            weight: weight,
-            baseColor: theme.primaryText
-        )
-    }
-
-    private static func appendPiece(
-        to result: NSMutableAttributedString,
-        prefix: NSAttributedString?,
-        body: NSAttributedString,
-        fontSize: CGFloat,
-        weight: UIFont.Weight,
-        color: Color,
-        firstLineIndent: CGFloat,
-        headIndent: CGFloat,
-        tabLocation: CGFloat?,
-        lineSpacing: CGFloat,
-        spacingAfter: CGFloat,
-        appendNewline: Bool
-    ) {
-        guard body.length > 0 || prefix != nil else { return }
-
-        let piece = NSMutableAttributedString()
-        if let prefix = prefix {
-            piece.append(prefix)
-        }
-        piece.append(body)
-        if appendNewline {
-            piece.append(NSAttributedString(
-                string: "\n",
-                attributes: [
-                    .font: UIFont.systemFont(ofSize: fontSize, weight: weight),
-                    .foregroundColor: UIColor(color)
-                ]
-            ))
-        }
-
-        let nsString = piece.string as NSString
-        var location = 0
-        var isFirstParagraph = true
-        while location < piece.length {
-            let paragraphRange = nsString.paragraphRange(for: NSRange(location: location, length: 0))
-            let isLastParagraph = NSMaxRange(paragraphRange) >= piece.length
-            let style = NSMutableParagraphStyle()
-            style.lineSpacing = lineSpacing
-            style.firstLineHeadIndent = isFirstParagraph ? firstLineIndent : headIndent
-            style.headIndent = headIndent
-            style.paragraphSpacing = isLastParagraph ? spacingAfter : 0
-            if let tabLocation = tabLocation {
-                style.tabStops = [NSTextTab(textAlignment: .left, location: tabLocation, options: [:])]
-            }
-            piece.addAttribute(.paragraphStyle, value: style, range: paragraphRange)
-            location = NSMaxRange(paragraphRange)
-            isFirstParagraph = false
-        }
-
-        result.append(piece)
-    }
-
-    static func makeNSAttributedString(
-        from attr: AttributedString,
-        fontSize: CGFloat,
-        weight: Font.Weight,
-        baseColor: Color,
-        lineSpacing: CGFloat = 3.5
-    ) -> NSAttributedString {
-        let mutable: NSMutableAttributedString
-        if let converted = try? NSAttributedString(attr, including: \.uiKit) {
-            mutable = NSMutableAttributedString(attributedString: converted)
-        } else {
-            mutable = NSMutableAttributedString(string: String(attr.characters))
-        }
-
-        let fullRange = NSRange(location: 0, length: mutable.length)
-        guard fullRange.length > 0 else {
-            return NSAttributedString()
-        }
-
-        let uiWeight: UIFont.Weight = (weight == .bold) ? .bold : .regular
-        let defaultFont = UIFont.systemFont(ofSize: fontSize, weight: uiWeight)
-        let defaultColor = UIColor(baseColor)
-
-        mutable.enumerateAttribute(.font, in: fullRange, options: []) { value, range, _ in
-            if value == nil {
-                mutable.addAttribute(.font, value: defaultFont, range: range)
-            }
-        }
-
-        mutable.enumerateAttribute(.foregroundColor, in: fullRange, options: []) { value, range, _ in
-            if value == nil {
-                mutable.addAttribute(.foregroundColor, value: defaultColor, range: range)
-            }
-        }
-
-        let paragraphStyle = NSMutableParagraphStyle()
-        paragraphStyle.lineSpacing = lineSpacing
-        mutable.addAttribute(.paragraphStyle, value: paragraphStyle, range: fullRange)
-
-        return mutable
-    }
-
-    static func makePlainTextNSAttributedString(
-        text: String,
-        fontSize: CGFloat,
-        weight: UIFont.Weight = .regular,
-        color: UIColor,
-        lineSpacing: CGFloat = 3.5
-    ) -> NSAttributedString {
-        let paragraphStyle = NSMutableParagraphStyle()
-        paragraphStyle.lineSpacing = lineSpacing
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: UIFont.systemFont(ofSize: fontSize, weight: weight),
-            .foregroundColor: color,
-            .paragraphStyle: paragraphStyle
-        ]
-        return NSAttributedString(string: text, attributes: attrs)
-    }
-}
-
-struct SelectableRichTextView: UIViewRepresentable {
-    let attributedText: NSAttributedString
-    let theme: AppThemePalette
-
-    func makeUIView(context: Context) -> UITextView {
-        let textView = UITextView()
-        textView.isEditable = false
-        textView.isSelectable = true
-        textView.isScrollEnabled = false
-        textView.backgroundColor = .clear
-        textView.textContainerInset = .zero
-        textView.textContainer.lineFragmentPadding = 0
-        textView.tintColor = UIColor(theme.accent)
-        textView.adjustsFontForContentSizeCategory = true
-        textView.delegate = context.coordinator
-        textView.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        textView.setContentHuggingPriority(.required, for: .vertical)
-        textView.setContentCompressionResistancePriority(.required, for: .vertical)
-        textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        textView.attributedText = attributedText
-        return textView
-    }
-
-    func updateUIView(_ uiView: UITextView, context: Context) {
-        if uiView.attributedText.string != attributedText.string || !uiView.attributedText.isEqual(to: attributedText) {
-            uiView.attributedText = attributedText
-        }
-        let accentColor = UIColor(theme.accent)
-        if uiView.tintColor != accentColor {
-            uiView.tintColor = accentColor
-        }
-    }
-
-    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
-        let targetWidth = proposal.width ?? UIScreen.main.bounds.width
-        let fit = uiView.sizeThatFits(CGSize(width: targetWidth, height: .greatestFiniteMagnitude))
-        return CGSize(width: targetWidth, height: ceil(fit.height))
-    }
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
-    }
-
-    final class Coordinator: NSObject, UITextViewDelegate {
-        func textView(_ textView: UITextView, shouldInteractWith URL: URL, in characterRange: NSRange, interaction: UITextItemInteraction) -> Bool {
-            UIApplication.shared.open(URL)
-            return false
-        }
     }
 }
