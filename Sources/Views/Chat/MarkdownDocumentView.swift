@@ -462,7 +462,7 @@ struct MarkdownInlineText: View {
             return .regular
         }()
         SelectableMessageTextView(
-            attributedText: NSAttributedString(attributedString: value),
+            attributedText: NSAttributedString(value),
             font: .systemFont(ofSize: fontSize, weight: uiFontWeight),
             textColor: UIColor(baseColor),
             tintColor: UIColor(theme.accent),
@@ -583,7 +583,7 @@ struct MarkdownTableView: View {
         let fontSize: CGFloat = isHeader ? 13 : 13.5
         let weight: UIFont.Weight = isHeader ? .semibold : .regular
         SelectableMessageTextView(
-            attributedText: NSAttributedString(attributedString: MarkdownRenderCache.shared.attributedString(for: text, fontSize: fontSize, theme: theme)),
+            attributedText: NSAttributedString(MarkdownRenderCache.shared.attributedString(for: text, fontSize: fontSize, theme: theme)),
             font: .systemFont(ofSize: fontSize, weight: weight),
             textColor: UIColor(theme.primaryText),
             tintColor: UIColor(theme.accent),
