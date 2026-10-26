@@ -196,6 +196,15 @@ struct MessageBubbleView: View {
         let autoPackagedLongText: ChatAttachment? = (!trimmed.isEmpty && ChatAttachment.shouldPackageAsLongText(trimmed))
             ? ChatAttachment.makeLongTextAttachment(from: trimmed)
             : nil
+        let textFont = UIFont.systemFont(ofSize: 15)
+        let maxTextWidth = max(1, bubbleColumnWidth - 24)
+        let textBounds = (turn.content as NSString).boundingRect(
+            with: CGSize(width: maxTextWidth, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: textFont],
+            context: nil
+        )
+        let textWidth = min(maxTextWidth, max(1, ceil(textBounds.width)))
 
         return HStack(alignment: .top, spacing: 6) {
             Spacer(minLength: 24)
