@@ -120,16 +120,22 @@ struct ToolCallSummaryGroupView: View {
             }
 
             if isGroupExpanded {
-                VStack(alignment: .leading, spacing: 8) {
-                    Divider()
-                        .overlay(theme.border)
+                Rectangle()
+                    .fill(theme.border.opacity(0.75))
+                    .frame(height: 1)
 
-                    ForEach(Array(toolCalls.enumerated()), id: \.element.id) { index, tc in
-                        ToolCallCardView(toolCall: tc, theme: theme, stepNumber: index + 1)
+                let maxWindowHeight = min(250, max(150, UIScreen.main.bounds.height * 0.3))
+
+                ScrollView(.vertical, showsIndicators: true) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(Array(toolCalls.enumerated()), id: \.element.id) { index, tc in
+                            ToolCallCardView(toolCall: tc, theme: theme, stepNumber: index + 1)
+                        }
                     }
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 10)
                 }
-                .padding(.horizontal, 10)
-                .padding(.bottom, 10)
+                .frame(height: maxWindowHeight)
             }
         }
         .background(theme.elevatedBackground)
