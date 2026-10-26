@@ -16,7 +16,6 @@ struct ChatDetailView: View {
     @State private var selectedTurnId: String? = nil
     @State private var pendingEditScrollTurnId: String? = nil
     @State private var isKeyboardVisible: Bool = false
-    @State private var chatScrollView: UIScrollView? = nil
     @State private var pendingDeleteTurn: MessageDisplayTurn? = nil
     @State private var showingClearConversationAlert: Bool = false
     @State private var autoFollowOutput: Bool = true
@@ -270,9 +269,6 @@ struct ChatDetailView: View {
                                         },
                                         onScrollSettled: {
                                             coordinator.streamingState.setDisplayPaused(false)
-                                        },
-                                        onScrollViewFound: { scrollView in
-                                            chatScrollView = scrollView
                                         }
                                     )
                                 )
@@ -290,24 +286,6 @@ struct ChatDetailView: View {
                                 manualScrollTrigger &+= 1
                             }
                         }
-
-                        VStack(spacing: 0) {
-                            Spacer(minLength: 0)
-                            LinearGradient(
-                                stops: [
-                                    .init(color: theme.background.opacity(0), location: 0),
-                                    .init(color: theme.background.opacity(0.68), location: 0.55),
-                                    .init(color: theme.background, location: 1)
-                                ],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
-                            .frame(height: 40)
-                        }
-                        .frame(width: viewportWidth)
-                        .frame(maxHeight: .infinity)
-                        .allowsHitTesting(false)
-                        .zIndex(1)
 
                         if !displayTurns.isEmpty && selectedTurnId == nil {
                             Button(action: {
@@ -333,6 +311,19 @@ struct ChatDetailView: View {
                         }
                     }
                     .frame(width: viewportWidth)
+                    .overlay(alignment: .bottom) {
+                        LinearGradient(
+                            stops: [
+                                .init(color: theme.background.opacity(0), location: 0),
+                                .init(color: theme.background.opacity(0.68), location: 0.55),
+                                .init(color: theme.background, location: 1)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                        .frame(height: 40)
+                        .allowsHitTesting(false)
+                    }
 
                     composerDock(viewportWidth: viewportWidth)
                 }
@@ -1069,7 +1060,6 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
     var onUserDragUp: () -> Void
     var onReachBottom: () -> Void
     var onScrollSettled: () -> Void
-    var onScrollViewFound: (UIScrollView) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -1080,8 +1070,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
             onUserTouchBegan: onUserTouchBegan,
             onUserDragUp: onUserDragUp,
             onReachBottom: onReachBottom,
-            onScrollSettled: onScrollSettled,
-            onScrollViewFound: onScrollViewFound
+            onScrollSettled: onScrollSettled
         )
     }
 
@@ -1103,7 +1092,6 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
         coord.onUserDragUp = onUserDragUp
         coord.onReachBottom = onReachBottom
         coord.onScrollSettled = onScrollSettled
-        coord.onScrollViewFound = onScrollViewFound
         let triggerChanged = (coord.manualScrollTrigger != manualScrollTrigger)
         coord.manualScrollTrigger = manualScrollTrigger
 
@@ -1140,7 +1128,6 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
         var onUserDragUp: () -> Void
         var onReachBottom: () -> Void
         var onScrollSettled: () -> Void
-        var onScrollViewFound: (UIScrollView) -> Void
         private weak var attachedScrollView: UIScrollView?
         private var contentSizeObservation: NSKeyValueObservation?
         private var lastObservedHeight: CGFloat = 0
@@ -1159,8 +1146,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
             onUserTouchBegan: @escaping () -> Void,
             onUserDragUp: @escaping () -> Void,
             onReachBottom: @escaping () -> Void,
-            onScrollSettled: @escaping () -> Void,
-            onScrollViewFound: @escaping (UIScrollView) -> Void
+            onScrollSettled: @escaping () -> Void
         ) {
             self.isGenerating = isGenerating
             self.autoFollowOutput = autoFollowOutput
@@ -1170,7 +1156,6 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
             self.onUserDragUp = onUserDragUp
             self.onReachBottom = onReachBottom
             self.onScrollSettled = onScrollSettled
-            self.onScrollViewFound = onScrollViewFound
         }
 
         func attachIfNeeded(from view: UIView) {
@@ -1183,7 +1168,6 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
                         sv.canCancelContentTouches = true
                         sv.panGestureRecognizer.addTarget(self, action: #selector(handlePan(_:)))
                         observeContentSize(of: sv)
-                        onScrollViewFound(sv)
                     }
                     break
                 }
