@@ -267,7 +267,8 @@ struct MessageBubbleView: View {
                             font: textFont,
                             textColor: UIColor(theme.primaryText),
                             tintColor: UIColor(theme.accent),
-                            lineSpacing: 3.5
+                            lineSpacing: 3.5,
+                            onTap: { onSelectToggle?() }
                         )
                             .frame(width: textWidth, alignment: .leading)
                             .padding(.horizontal, 12)
@@ -279,7 +280,6 @@ struct MessageBubbleView: View {
                                     .stroke(isSelected ? theme.accent.opacity(0.55) : theme.accent.opacity(0.18), lineWidth: 1)
                             )
                             .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-                            .simultaneousGesture(TapGesture().onEnded { onSelectToggle?() })
                     }
 
                     if isSelected {
@@ -401,7 +401,8 @@ struct MessageBubbleView: View {
                                     content: currentText,
                                     theme: theme,
                                     contentWidth: innerContentWidth,
-                                    isStreaming: isActiveGeneratingTurn
+                                    isStreaming: isActiveGeneratingTurn,
+                                    onTap: { onSelectToggle?() }
                                 )
                                 .frame(width: innerContentWidth, alignment: .leading)
                             } else if isActiveGeneratingTurn && currentReasoning.isEmpty {
@@ -424,7 +425,6 @@ struct MessageBubbleView: View {
                                 .stroke(isSelected ? theme.accent.opacity(0.45) : theme.border, lineWidth: 1)
                         )
                         .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-                        .simultaneousGesture(TapGesture().onEnded { onSelectToggle?() })
                     }
 
                     if isSelected {
