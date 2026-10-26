@@ -545,6 +545,14 @@ struct MessageBubbleView: View {
                 .stroke(theme.border, lineWidth: 1)
         )
         .shadow(color: Color.black.opacity(theme.isDark ? 0.22 : 0.05), radius: 5, x: 0, y: 2)
+        .background(
+            GeometryReader { proxy in
+                Color.clear.preference(
+                    key: MessageActionFramePreferenceKey.self,
+                    value: [turn.id: proxy.frame(in: .global)]
+                )
+            }
+        )
     }
 
     private func editEditorBox(allowResend: Bool) -> some View {
