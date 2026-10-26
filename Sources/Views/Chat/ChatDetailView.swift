@@ -1025,7 +1025,8 @@ struct ChatDetailView: View {
         let hiddenHeight = actionFrame.maxY - visibleBottom
         guard hiddenHeight > 0 else { return }
         let shift = min(hiddenHeight + 8, 120)
-        let anchorY = max(0, 1 - shift / max(chatLayoutFrames.turns[turnId]?.height ?? 1, 1))
+        guard let turnFrame = chatLayoutFrames.turns[turnId], turnFrame.height > 0 else { return }
+        let anchorY = min(1, max(0, 1 - shift / turnFrame.height))
         withAnimation(.easeOut(duration: 0.18)) {
             proxy.scrollTo(turnId, anchor: UnitPoint(x: 0.5, y: anchorY))
         }
