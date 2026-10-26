@@ -1024,15 +1024,15 @@ struct ChatDetailView: View {
         guard let actionFrame = messageActionFrames[turnId],
               chatLayoutFrames.viewport != .zero,
               let scrollView = chatScrollView else { return }
-        let visibleBottom = chatLayoutFrames.viewport.maxY - 48
-        let hiddenHeight = actionFrame.maxY - visibleBottom
-        guard hiddenHeight > 0, hiddenHeight <= 48 else { return }
+        let visibleBottom = chatLayoutFrames.viewport.maxY - 44
+        guard actionFrame.minY < visibleBottom, actionFrame.maxY > visibleBottom else { return }
+        let shift = actionFrame.maxY - visibleBottom + 6
         let currentOffset = scrollView.contentOffset.y
         let maximumOffset = max(
             -scrollView.adjustedContentInset.top,
             scrollView.contentSize.height - scrollView.bounds.height + scrollView.adjustedContentInset.bottom
         )
-        let targetOffset = min(currentOffset + hiddenHeight + 8, maximumOffset)
+        let targetOffset = min(currentOffset + shift, maximumOffset)
         guard targetOffset > currentOffset else { return }
         UIView.animate(withDuration: 0.18, delay: 0, options: [.beginFromCurrentState, .curveEaseOut]) {
             scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: targetOffset), animated: false)
