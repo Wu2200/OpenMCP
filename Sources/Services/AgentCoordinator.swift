@@ -192,9 +192,34 @@ final class StreamingTurnState: ObservableObject {
 }
 
 @MainActor
+final class GenerationActivityTracker: ObservableObject {
+    static let shared = GenerationActivityTracker()
+
+    @Published private(set) var labels: [String: String] = [:]
+
+    func set(_ label: String?, for conversationId: String) {
+        if let label = label, !label.isEmpty {
+            guard labels[conversationId] != label else { return }
+            labels[conversationId] = label
+        } else {
+            guard labels[conversationId] != nil else { return }
+            labels.removeValue(forKey: conversationId)
+        }
+    }
+}
+
+@MainActor
 class AgentCoordinator: ObservableObject {
-    @Published var isGenerating: Bool = false
-    @Published var statusText: String = ""
+    @Published var isGenerating: Bool = false {
+        didSet {
+            publishActivity(isGenerating ? (statusText.isEmpty ? "思考中" : statusText) : nil)
+        }
+    }
+    @Published var statusText: String = "" {
+        didSet {
+            publishActivity(isGenerating && !statusText.isEmpty ? statusText : nil)
+        }
+    }
     @Published var errorMessage: String? = nil
     @Published var thinkingStartTime: Date? = nil
 
@@ -211,6 +236,11 @@ class AgentCoordinator: ObservableObject {
 
     static func coordinator(for conversationId: String) -> AgentCoordinator {
         activeCoordinators[conversationId] ?? AgentCoordinator()
+    }
+
+    private func publishActivity(_ label: String?) {
+        guard let conversationId = activeConversationId else { return }
+        GenerationActivityTracker.shared.set(label, for: conversationId)
     }
 
     private func retainForActiveGeneration(_ conversationId: String) {
@@ -492,6 +522,9 @@ class AgentCoordinator: ObservableObject {
                     stepIndex: stepIndex,
                     onPartialUpdate: { [weak self] partialText in
                         guard let self = self, !self.isCancelledByUser, !Task.isCancelled else { return }
+                        if !partialText.isEmpty {
+                            self.publishActivity("输出中")
+                        }
                         self.streamingState.pushPartialText(partialText)
                     },
                     onReasoningUpdate: { [weak self] partialReasoning in
