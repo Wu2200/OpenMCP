@@ -18,6 +18,7 @@ struct ChatDetailView: View {
     @State private var isKeyboardVisible: Bool = false
     @State private var chatLayoutFrames = ChatLayoutFrames()
     @State private var messageActionFrames: [String: CGRect] = [:]
+    @State private var chatScrollView: UIScrollView? = nil
     @State private var pendingDeleteTurn: MessageDisplayTurn? = nil
     @State private var showingClearConversationAlert: Bool = false
     @State private var autoFollowOutput: Bool = true
@@ -288,6 +289,9 @@ struct ChatDetailView: View {
                                         },
                                         onScrollSettled: {
                                             coordinator.streamingState.setDisplayPaused(false)
+                                        },
+                                        onScrollViewFound: { scrollView in
+                                            chatScrollView = scrollView
                                         }
                                     )
                                 )
@@ -1018,37 +1022,34 @@ struct ChatDetailView: View {
 
     private func scrollTurnIntoViewIfNeeded(_ turnId: String, using proxy: ScrollViewProxy) {
         guard let actionFrame = messageActionFrames[turnId],
-              chatLayoutFrames.viewport != .zero else { return }
-        let visibleBottom = chatLayoutFrames.viewport.maxY - 8
+              chatLayoutFrames.viewport != .zero,
+              let scrollView = chatScrollView else { return }
+        let visibleBottom = chatLayoutFrames.viewport.maxY - 48
         let hiddenHeight = actionFrame.maxY - visibleBottom
-        guard hiddenHeight > 0 else { return }
-        withAnimation(.easeOut(duration: 0.16)) {
-            proxy.scrollTo(turnId, anchor: .bottom)
+        guard hiddenHeight > 0, hiddenHeight <= 48 else { return }
+        let currentOffset = scrollView.contentOffset.y
+        let maximumOffset = max(
+            -scrollView.adjustedContentInset.top,
+            scrollView.contentSize.height - scrollView.bounds.height + scrollView.adjustedContentInset.bottom
+        )
+        let targetOffset = min(currentOffset + hiddenHeight + 8, maximumOffset)
+        guard targetOffset > currentOffset else { return }
+        UIView.animate(withDuration: 0.18, delay: 0, options: [.beginFromCurrentState, .curveEaseOut]) {
+            scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: targetOffset), animated: false)
         }
     }
 
     private func centerTurnForEditing(_ turnId: String, using proxy: ScrollViewProxy) {
         pendingEditScrollTurnId = turnId
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            withAnimation(.easeOut(duration: 0.2)) {
-                proxy.scrollTo("message-editor-\(turnId)", anchor: .center)
-            }
-            pendingEditScrollTurnId = nil
-        }
         if isKeyboardVisible {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                withAnimation(.easeOut(duration: 0.2)) {
-                    proxy.scrollTo("message-editor-\(turnId)", anchor: .center)
-                }
-                pendingEditScrollTurnId = nil
-            }
+            scrollEditorToCenter(turnId, using: proxy)
         }
     }
 
     private func scrollEditorToCenter(_ turnId: String, using proxy: ScrollViewProxy) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
             guard pendingEditScrollTurnId == turnId else { return }
-            withAnimation(.easeInOut(duration: 0.25)) {
+            withAnimation(.easeOut(duration: 0.2)) {
                 proxy.scrollTo("message-editor-\(turnId)", anchor: .center)
             }
             pendingEditScrollTurnId = nil
@@ -1132,6 +1133,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
     var onUserDragUp: () -> Void
     var onReachBottom: () -> Void
     var onScrollSettled: () -> Void
+    var onScrollViewFound: (UIScrollView) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -1142,7 +1144,8 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
             onUserTouchBegan: onUserTouchBegan,
             onUserDragUp: onUserDragUp,
             onReachBottom: onReachBottom,
-            onScrollSettled: onScrollSettled
+            onScrollSettled: onScrollSettled,
+            onScrollViewFound: onScrollViewFound
         )
     }
 
@@ -1164,6 +1167,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
         coord.onUserDragUp = onUserDragUp
         coord.onReachBottom = onReachBottom
         coord.onScrollSettled = onScrollSettled
+        coord.onScrollViewFound = onScrollViewFound
         let triggerChanged = (coord.manualScrollTrigger != manualScrollTrigger)
         coord.manualScrollTrigger = manualScrollTrigger
 
@@ -1200,6 +1204,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
         var onUserDragUp: () -> Void
         var onReachBottom: () -> Void
         var onScrollSettled: () -> Void
+        var onScrollViewFound: (UIScrollView) -> Void
         private weak var attachedScrollView: UIScrollView?
         private var contentSizeObservation: NSKeyValueObservation?
         private var lastObservedHeight: CGFloat = 0
@@ -1218,7 +1223,8 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
             onUserTouchBegan: @escaping () -> Void,
             onUserDragUp: @escaping () -> Void,
             onReachBottom: @escaping () -> Void,
-            onScrollSettled: @escaping () -> Void
+            onScrollSettled: @escaping () -> Void,
+            onScrollViewFound: @escaping (UIScrollView) -> Void
         ) {
             self.isGenerating = isGenerating
             self.autoFollowOutput = autoFollowOutput
@@ -1228,6 +1234,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
             self.onUserDragUp = onUserDragUp
             self.onReachBottom = onReachBottom
             self.onScrollSettled = onScrollSettled
+            self.onScrollViewFound = onScrollViewFound
         }
 
         func attachIfNeeded(from view: UIView) {
@@ -1240,6 +1247,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
                         sv.canCancelContentTouches = true
                         sv.panGestureRecognizer.addTarget(self, action: #selector(handlePan(_:)))
                         observeContentSize(of: sv)
+                        onScrollViewFound(sv)
                     }
                     break
                 }
