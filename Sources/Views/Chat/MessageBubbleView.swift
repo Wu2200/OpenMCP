@@ -144,6 +144,7 @@ struct MessageBubbleView: View {
     @ObservedObject var streamingState: StreamingTurnState
     var isSelected: Bool = false
     var onSelectToggle: (() -> Void)? = nil
+    var onEditBegin: (() -> Void)? = nil
     var onDismissSelection: (() -> Void)? = nil
     var onEditSave: ((String) -> Void)? = nil
     var onEditAndResend: ((String) -> Void)? = nil
@@ -479,6 +480,7 @@ struct MessageBubbleView: View {
                     isEditing = true
                 }
                 isEditFieldFocused = true
+                onEditBegin?()
             }
 
             if !copyTarget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
