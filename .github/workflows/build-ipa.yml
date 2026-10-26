@@ -32,46 +32,17 @@ jobs:
           fi
           xcodebuild -version
 
-      - name: Generate App Icon
+      - name: Prepare Uploaded App Icon
         run: |
-          mkdir -p Assets.xcassets/AppIcon.appiconset
           python3 -m venv /tmp/icon_env
           /tmp/icon_env/bin/pip install --quiet pillow
           /tmp/icon_env/bin/python - <<'PY'
-          from PIL import Image, ImageDraw
-          img = Image.new('RGB', (1024, 1024), color=(18, 24, 38))
-          draw = ImageDraw.Draw(img)
-          for i in range(1024):
-              ratio = i / 1024.0
-              r = int(24 + (10 - 24) * ratio)
-              g = int(32 + (40 - 32) * ratio)
-              b = int(72 + (120 - 72) * ratio)
-              draw.line([(0, i), (1024, i)], fill=(r, g, b))
-          draw.rounded_rectangle([160, 160, 864, 864], radius=180, fill=(35, 45, 90), outline=(80, 120, 240), width=16)
-          draw.ellipse([432, 280, 592, 440], fill=(96, 165, 250))
-          draw.ellipse([280, 600, 440, 760], fill=(52, 211, 153))
-          draw.ellipse([584, 600, 744, 760], fill=(167, 139, 250))
-          draw.line([(512, 440), (360, 600)], fill=(220, 230, 255), width=24)
-          draw.line([(512, 440), (664, 600)], fill=(220, 230, 255), width=24)
-          draw.line([(360, 680), (664, 680)], fill=(220, 230, 255), width=24)
-          img.save('Assets.xcassets/AppIcon.appiconset/icon-1024.png', 'PNG')
+          from PIL import Image
+          image = Image.open('Assets.xcassets/AppIcon.appiconset/IMG_1986.jpeg').convert('RGB')
+          if image.size != (1024, 1024):
+              raise ValueError(f'Expected a 1024x1024 app icon, got {image.size[0]}x{image.size[1]}')
+          image.save('Assets.xcassets/AppIcon.appiconset/icon-1024.png', 'PNG', optimize=True)
           PY
-          cat <<'JSON' > Assets.xcassets/AppIcon.appiconset/Contents.json
-          {
-            "images": [
-              {
-                "filename": "icon-1024.png",
-                "idiom": "universal",
-                "platform": "ios",
-                "size": "1024x1024"
-              }
-            ],
-            "info": {
-              "author": "xcode",
-              "version": 1
-            }
-          }
-          JSON
 
       - name: Install XcodeGen
         run: |
