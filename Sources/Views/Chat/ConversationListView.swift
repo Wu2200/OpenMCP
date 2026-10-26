@@ -492,3 +492,83 @@ struct ConversationListView: View {
         navigationPath.append(newConv.id)
     }
 }
+
+private struct SwipeableConversationRow<Content: View>: View {
+    let conversationId: String
+    @Binding var revealedConversationId: String?
+    let theme: AppThemePalette
+    let onDelete: () -> Void
+    let content: Content
+    @GestureState private var dragTranslation: CGFloat = 0
+
+    private let actionWidth: CGFloat = 68
+
+    init(
+        conversationId: String,
+        revealedConversationId: Binding<String?>,
+        theme: AppThemePalette,
+        onDelete: @escaping () -> Void,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.conversationId = conversationId
+        self._revealedConversationId = revealedConversationId
+        self.theme = theme
+        self.onDelete = onDelete
+        self.content = content()
+    }
+
+    private var isRevealed: Bool {
+        revealedConversationId == conversationId
+    }
+
+    private var horizontalOffset: CGFloat {
+        min(actionWidth, max(0, (isRevealed ? actionWidth : 0) + dragTranslation))
+    }
+
+    private var deleteColor: Color {
+        theme.isDark
+            ? Color(red: 0.78, green: 0.24, blue: 0.29)
+            : Color(red: 0.76, green: 0.12, blue: 0.16)
+    }
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            Button(action: onDelete) {
+                Label("删除", systemImage: "trash.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.white)
+                    .frame(width: actionWidth)
+                    .frame(maxHeight: .infinity)
+                    .background(deleteColor)
+                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .opacity(horizontalOffset > 1 ? 1 : 0)
+            .allowsHitTesting(horizontalOffset > 1)
+            .accessibilityLabel("删除对话")
+
+            content
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .offset(x: horizontalOffset)
+                .contentShape(Rectangle())
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 12)
+                        .updating($dragTranslation) { value, state, _ in
+                            guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                            state = value.translation.width
+                        }
+                        .onEnded { value in
+                            let horizontal = value.translation.width
+                            guard abs(horizontal) > abs(value.translation.height) else { return }
+                            let shouldReveal = isRevealed
+                                ? horizontal > -actionWidth * 0.45
+                                : horizontal > actionWidth * 0.45
+                            withAnimation(.easeOut(duration: 0.18)) {
+                                revealedConversationId = shouldReveal ? conversationId : nil
+                            }
+                        }
+                )
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
