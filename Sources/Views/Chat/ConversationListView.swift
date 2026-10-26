@@ -70,14 +70,13 @@ struct ConversationListView: View {
                                     Button(role: .destructive) {
                                         deletingConversation = conv
                                     } label: {
-                                        Image(systemName: "trash")
-                                            .font(.system(size: 15, weight: .semibold))
-                                            .foregroundColor(.red)
-                                            .frame(width: 42, height: 42)
-                                            .background(Circle().fill(Color.red.opacity(0.14)))
-                                            .contentShape(Circle())
+                                        Image(systemName: "trash.fill")
+                                            .font(.system(size: 14, weight: .semibold))
+                                            .foregroundStyle(.white)
+                                            .frame(width: 36, height: 36)
+                                            .background(Color.white.opacity(0.18), in: Circle())
                                     }
-                                    .tint(.clear)
+                                    .tint(Color(red: 0.78, green: 0.24, blue: 0.22))
                                     .accessibilityLabel("删除对话")
                                 }
                                 .alert("确认删除对话？", isPresented: Binding(
@@ -92,8 +91,10 @@ struct ConversationListView: View {
                                         deletingConversation = nil
                                     }
                                     Button("删除对话", role: .destructive) {
-                                        storage.deleteConversation(id: conv.id)
-                                        deletingConversation = nil
+                                        withTransaction(Transaction(animation: nil)) {
+                                            storage.deleteConversation(id: conv.id)
+                                            deletingConversation = nil
+                                        }
                                     }
                                 } message: {
                                     Text("将永久删除「\(conv.title)」及其所有消息记录，此操作不可恢复。")
