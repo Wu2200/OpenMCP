@@ -304,19 +304,17 @@ struct ChatDetailView: View {
                         )
                         .scrollDismissesKeyboard(.interactively)
                         .overlay(alignment: .bottom) {
-                            if selectedTurnId == nil {
-                                LinearGradient(
-                                    stops: [
-                                        .init(color: theme.background.opacity(0), location: 0),
-                                        .init(color: theme.background.opacity(0.68), location: 0.55),
-                                        .init(color: theme.background, location: 1)
-                                    ],
-                                    startPoint: .top,
-                                    endPoint: .bottom
-                                )
-                                .frame(height: 40)
-                                .allowsHitTesting(false)
-                            }
+                            LinearGradient(
+                                stops: [
+                                    .init(color: theme.background.opacity(0), location: 0),
+                                    .init(color: theme.background.opacity(0.68), location: 0.55),
+                                    .init(color: theme.background, location: 1)
+                                ],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                            .frame(height: 40)
+                            .allowsHitTesting(false)
                         }
                         .onChange(of: currentConversation.messages.count) { _ in
                             if autoFollowOutput {
@@ -1024,12 +1022,8 @@ struct ChatDetailView: View {
         let visibleBottom = chatLayoutFrames.viewport.maxY - 8
         let hiddenHeight = actionFrame.maxY - visibleBottom
         guard hiddenHeight > 0 else { return }
-        let shift = min(hiddenHeight + 8, 120)
-        guard let scrollView = chatLayoutFrames.scrollView,
-              let turnFrame = chatLayoutFrames.turns[turnId] else { return }
-        let targetY = scrollView.contentOffset.y + shift
-        withAnimation(.easeOut(duration: 0.18)) {
-            proxy.scrollTo(turnId, anchor: UnitPoint(x: 0.5, y: targetY / max(turnFrame.height, 1)))
+        withAnimation(.easeOut(duration: 0.16)) {
+            proxy.scrollTo(turnId, anchor: .bottom)
         }
     }
 
