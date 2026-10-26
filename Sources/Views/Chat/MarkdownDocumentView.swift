@@ -136,6 +136,7 @@ struct MarkdownDocumentView: View {
                 )
             }
         }
+        .textSelection(.enabled)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
@@ -461,14 +462,12 @@ struct MarkdownInlineText: View {
             if weight == .medium { return .medium }
             return .regular
         }()
-        SelectableMessageTextView(
-            attributedText: NSAttributedString(value),
-            font: .systemFont(ofSize: fontSize, weight: uiFontWeight),
-            textColor: UIColor(baseColor),
-            tintColor: UIColor(theme.accent),
-            lineSpacing: lineSpacing
-        )
-        .frame(maxWidth: .infinity, alignment: .leading)
+        Text(value)
+            .font(.system(size: fontSize, weight: weight))
+            .foregroundColor(baseColor)
+            .lineSpacing(lineSpacing)
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -582,14 +581,12 @@ struct MarkdownTableView: View {
     private func cellContent(text: String, isHeader: Bool, alignment: HorizontalAlignment) -> some View {
         let fontSize: CGFloat = isHeader ? 13 : 13.5
         let weight: UIFont.Weight = isHeader ? .semibold : .regular
-        SelectableMessageTextView(
-            attributedText: NSAttributedString(MarkdownRenderCache.shared.attributedString(for: text, fontSize: fontSize, theme: theme)),
-            font: .systemFont(ofSize: fontSize, weight: weight),
-            textColor: UIColor(theme.primaryText),
-            tintColor: UIColor(theme.accent),
-            lineSpacing: 2.5
-        )
-        .multilineTextAlignment(textAlignment(for: alignment))
+        Text(MarkdownRenderCache.shared.attributedString(for: text, fontSize: fontSize, theme: theme))
+            .font(.system(size: fontSize, weight: isHeader ? .semibold : .regular))
+            .foregroundColor(theme.primaryText)
+            .lineSpacing(2.5)
+            .multilineTextAlignment(textAlignment(for: alignment))
+            .textSelection(.enabled)
     }
 
     private func frameAlignment(for align: HorizontalAlignment) -> Alignment {
