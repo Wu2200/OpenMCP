@@ -67,7 +67,7 @@ struct ConversationListView: View {
                         ForEach(filteredConversations) { conv in
                             conversationCard(for: conv)
                                 .swipeActions(edge: .leading, allowsFullSwipe: false) {
-                                    Button(role: .destructive) {
+                                    Button {
                                         withTransaction(Transaction(animation: nil)) {
                                             deletingConversation = conv
                                         }
