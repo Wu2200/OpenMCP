@@ -16,11 +16,18 @@ extension EnvironmentValues {
     }
 }
 
+struct ChatLayoutFrameSample: Equatable {
+    let identifier: String
+    let frame: CGRect
+}
+
 struct ChatLayoutFramesPreferenceKey: PreferenceKey {
     static var defaultValue: [String: CGRect] = [:]
 
     static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
-        value.merge(nextValue(), uniquingKeysWith: { _, next in next })
+        for sample in nextValue() {
+            value[sample.identifier] = sample.frame
+        }
     }
 }
 
@@ -35,7 +42,10 @@ struct ChatLayoutProbe: ViewModifier {
                 GeometryReader { geometry in
                     Color.clear.preference(
                         key: ChatLayoutFramesPreferenceKey.self,
-                        value: [identifier: geometry.frame(in: .named(ChatLayoutCoordinateSpace.name))]
+                        value: [ChatLayoutFrameSample(
+                            identifier: identifier,
+                            frame: geometry.frame(in: .named(ChatLayoutCoordinateSpace.name))
+                        )]
                     )
                 }
             }
