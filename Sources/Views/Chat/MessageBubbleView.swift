@@ -329,114 +329,114 @@ struct MessageBubbleView: View {
         let innerContentWidth = max(180, bubbleColumnWidth - 24)
         let scrollInteracting = streamingState.isScrollInteracting
 
-        return VStack(alignment: .leading, spacing: 6) {
-            if isEditing {
-                editEditorBox(allowResend: false)
-                    .frame(width: bubbleColumnWidth)
-                    .id("message-editor-\(turn.id)")
-            } else {
-                if isPureThinking {
-                    HStack(spacing: 0) {
-                        ThinkingStatusView(
-                            statusText: statusText,
-                            startDate: thinkingStartTime ?? turn.createdAt,
-                            theme: theme,
-                            isPaused: scrollInteracting
-                        )
-                        .padding(.horizontal, 13)
-                        .padding(.vertical, 9)
-                        .background(theme.cardBackground)
-                        .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 15, style: .continuous)
-                                .stroke(isSelected ? theme.accent.opacity(0.45) : theme.border, lineWidth: 1)
-                        )
-                        .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-                        .onTapGesture {
-                            onSelectToggle?()
-                        }
+        return HStack(alignment: .top, spacing: 6) {
+            compactAvatar(isUser: false)
+                .frame(width: 24, height: 26, alignment: .topLeading)
+                .onTapGesture {
+                    onSelectToggle?()
+                }
 
-                        Spacer(minLength: 16)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                onDismissSelection?()
-                            }
-                    }
+            VStack(alignment: .leading, spacing: 6) {
+                if isEditing {
+                    editEditorBox(allowResend: false)
+                        .frame(width: bubbleColumnWidth)
+                        .id("message-editor-\(turn.id)")
                 } else {
-                    VStack(alignment: .leading, spacing: 8) {
-                        if !turn.toolCalls.isEmpty {
-                            ToolCallSummaryGroupView(toolCalls: turn.toolCalls, theme: theme)
-                                .frame(width: innerContentWidth)
-                                .modifier(ChatLayoutProbe(identifier: "toolSummary|\(turn.id)"))
-                        }
-
-                        if !currentReasoning.isEmpty {
-                            ReasoningFoldCardView(
-                                reasoningText: currentReasoning,
-                                isStreamingReasoning: isActiveGeneratingTurn && currentText.isEmpty,
-                                isScrollInteracting: scrollInteracting,
-                                startDate: thinkingStartTime ?? turn.createdAt,
-                                theme: theme,
-                                width: innerContentWidth
-                            )
-                            .modifier(ChatLayoutProbe(identifier: "reasoning|\(turn.id)"))
-                        }
-
-                        if !currentText.isEmpty {
-                            MarkdownDocumentView(
-                                content: currentText,
-                                theme: theme,
-                                contentWidth: innerContentWidth,
-                                isStreaming: isActiveGeneratingTurn,
-                                diagnosticIDPrefix: turn.id
-                            )
-                            .frame(width: innerContentWidth, alignment: .leading)
-                            .modifier(ChatLayoutProbe(identifier: "markdown|\(turn.id)"))
-                        } else if isActiveGeneratingTurn && currentReasoning.isEmpty {
+                    if isPureThinking {
+                        HStack(spacing: 0) {
                             ThinkingStatusView(
                                 statusText: statusText,
                                 startDate: thinkingStartTime ?? turn.createdAt,
                                 theme: theme,
                                 isPaused: scrollInteracting
                             )
-                            .padding(.top, 2)
+                            .padding(.horizontal, 13)
+                            .padding(.vertical, 9)
+                            .background(theme.cardBackground)
+                            .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                                    .stroke(isSelected ? theme.accent.opacity(0.45) : theme.border, lineWidth: 1)
+                            )
+                            .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                            .onTapGesture {
+                                onSelectToggle?()
+                            }
+
+                            Spacer(minLength: 16)
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    onDismissSelection?()
+                                }
+                        }
+                    } else {
+                        VStack(alignment: .leading, spacing: 8) {
+                            if !turn.toolCalls.isEmpty {
+                                ToolCallSummaryGroupView(toolCalls: turn.toolCalls, theme: theme)
+                                    .frame(width: innerContentWidth)
+                                    .modifier(ChatLayoutProbe(identifier: "toolSummary|\(turn.id)"))
+                            }
+
+                            if !currentReasoning.isEmpty {
+                                ReasoningFoldCardView(
+                                    reasoningText: currentReasoning,
+                                    isStreamingReasoning: isActiveGeneratingTurn && currentText.isEmpty,
+                                    isScrollInteracting: scrollInteracting,
+                                    startDate: thinkingStartTime ?? turn.createdAt,
+                                    theme: theme,
+                                    width: innerContentWidth
+                                )
+                                .modifier(ChatLayoutProbe(identifier: "reasoning|\(turn.id)"))
+                            }
+
+                            if !currentText.isEmpty {
+                                MarkdownDocumentView(
+                                    content: currentText,
+                                    theme: theme,
+                                    contentWidth: innerContentWidth,
+                                    isStreaming: isActiveGeneratingTurn,
+                                    diagnosticIDPrefix: turn.id
+                                )
+                                .frame(width: innerContentWidth, alignment: .leading)
+                                .modifier(ChatLayoutProbe(identifier: "markdown|\(turn.id)"))
+                            } else if isActiveGeneratingTurn && currentReasoning.isEmpty {
+                                ThinkingStatusView(
+                                    statusText: statusText,
+                                    startDate: thinkingStartTime ?? turn.createdAt,
+                                    theme: theme,
+                                    isPaused: scrollInteracting
+                                )
+                                .padding(.top, 2)
+                            }
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .frame(width: bubbleColumnWidth, alignment: .leading)
+                        .background(theme.cardBackground)
+                        .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 15, style: .continuous)
+                                .stroke(isSelected ? theme.accent.opacity(0.45) : theme.border, lineWidth: 1)
+                        )
+                        .modifier(ChatLayoutProbe(identifier: "assistantCard|\(turn.id)"))
+                        .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                        .onTapGesture {
+                            onSelectToggle?()
                         }
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .frame(width: bubbleColumnWidth, alignment: .leading)
-                    .background(theme.cardBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 15, style: .continuous)
-                            .stroke(isSelected ? theme.accent.opacity(0.45) : theme.border, lineWidth: 1)
-                    )
-                    .modifier(ChatLayoutProbe(identifier: "assistantCard|\(turn.id)"))
-                    .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-                    .onTapGesture {
-                        onSelectToggle?()
+
+                    if isSelected {
+                        floatingActionPill
                     }
                 }
-
-                if isSelected {
-                    floatingActionPill
-                }
             }
+            .frame(width: bubbleColumnWidth, alignment: .leading)
+            .modifier(ChatLayoutProbe(identifier: "assistantColumn|\(turn.id)"))
         }
-        .frame(width: bubbleColumnWidth, alignment: .leading)
-        .modifier(ChatLayoutProbe(identifier: "assistantColumn|\(turn.id)"))
-        .padding(.leading, 30)
-        .overlay(alignment: .topLeading) {
-            compactAvatar(isUser: false)
-                .onTapGesture {
-                    onSelectToggle?()
-                }
-                .offset(x: -30)
-        }
-        .modifier(ChatLayoutProbe(identifier: "assistantRowContent|\(turn.id)"))
+        .modifier(ChatLayoutProbe(identifier: "assistantHStackContent|\(turn.id)"))
         .frame(width: availableWidth, alignment: .leading)
         .fixedSize(horizontal: false, vertical: true)
-        .modifier(ChatLayoutProbe(identifier: "assistantRow|\(turn.id)"))
+        .modifier(ChatLayoutProbe(identifier: "assistantHStack|\(turn.id)"))
     }
 
     private func compactAvatar(isUser: Bool) -> some View {
