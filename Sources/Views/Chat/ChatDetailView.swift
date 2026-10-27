@@ -515,9 +515,21 @@ struct ChatDetailView: View {
 
             let card = layoutFrames["assistantCard|\(turn.id)"]
             let column = layoutFrames["assistantColumn|\(turn.id)"]
+            let hStackContent = layoutFrames["assistantHStackContent|\(turn.id)"]
+            let hStack = layoutFrames["assistantHStack|\(turn.id)"]
+            let avatar = layoutFrames["avatar|assistant|\(turn.id)"]
             let actionBar = layoutFrames["actionBar|\(turn.id)"]
             let editor = layoutFrames["editor|\(turn.id)"]
             lines.append("当前选中状态：\(selectedTurnId == turn.id ? "是" : "否")")
+            lines.append("助手 HStack 内容：\(layoutFrameDescription(hStackContent))")
+            lines.append("助手 HStack 外框：\(layoutFrameDescription(hStack))")
+            lines.append("助手头像：\(layoutFrameDescription(avatar))")
+            if let row = row, let hStack = hStack {
+                lines.append("消息行高度 - 助手 HStack 高度：\(String(format: "%.1f", row.height - hStack.height)) pt")
+            }
+            if let hStack = hStack, let hStackContent = hStackContent {
+                lines.append("HStack 外框高度 - 内容高度：\(String(format: "%.1f", hStack.height - hStackContent.height)) pt")
+            }
             lines.append("助手列：\(layoutFrameDescription(column))")
             if let column = column, let card = card {
                 lines.append("卡片底部 → 助手列底部：\(String(format: "%.1f", column.maxY - card.maxY)) pt")
@@ -556,7 +568,14 @@ struct ChatDetailView: View {
             }
             if let frame = layoutFrames["markdown|\(turn.id)"] {
                 sections.append(("Markdown 正文", frame))
-                lines.append("Markdown 正文：\(layoutFrameDescription(frame))")
+                lines.append("Markdown 正文外框：\(layoutFrameDescription(frame))")
+            }
+            let markdownStack = layoutFrames["markdownStack|\(turn.id)"]
+            let markdownBlocksGroup = layoutFrames["markdownBlocksGroup|\(turn.id)"]
+            lines.append("Markdown VStack：\(layoutFrameDescription(markdownStack))")
+            lines.append("Markdown 块组：\(layoutFrameDescription(markdownBlocksGroup))")
+            if let markdownStack = markdownStack, let markdownBlocksGroup = markdownBlocksGroup {
+                lines.append("Markdown VStack 高度 - 块组高度：\(String(format: "%.1f", markdownStack.height - markdownBlocksGroup.height)) pt")
             }
 
             if sections.count > 1 {
@@ -574,8 +593,11 @@ struct ChatDetailView: View {
                 lines.append("Markdown 块（按屏幕顺序）：")
                 for blockIndex in blocks.indices {
                     let block = blocks[blockIndex]
-                    let blockID = String(block.key.dropFirst(blockPrefix.count))
-                    lines.append("  块 \(blockID)：\(layoutFrameDescription(block.value))")
+                    let suffix = String(block.key.dropFirst(blockPrefix.count))
+                    let parts = suffix.split(separator: "|", maxSplits: 1).map(String.init)
+                    let blockID = parts.first ?? suffix
+                    let blockType = parts.count > 1 ? parts[1] : "未知类型"
+                    lines.append("  块 \(blockID) [\(blockType)]：\(layoutFrameDescription(block.value))")
                     if blockIndex > 0 {
                         let previous = blocks[blockIndex - 1].value
                         let gap = block.value.minY - previous.maxY
