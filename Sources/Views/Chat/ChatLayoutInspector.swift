@@ -60,6 +60,7 @@ struct ChatLayoutInspectorSheet: View {
     let report: String
     let theme: AppThemePalette
     @State private var isCopied = false
+    @State private var isSharing = false
 
     var body: some View {
         NavigationStack {
