@@ -539,7 +539,6 @@ struct ChatDetailView: View {
                     Menu {
                         Button {
                             layoutFrames.removeAll()
-                            isLayoutDiagnosticsEnabled = true
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                                 layoutInspectorReport = makeLayoutInspectorReport()
                                 showingLayoutInspector = true
