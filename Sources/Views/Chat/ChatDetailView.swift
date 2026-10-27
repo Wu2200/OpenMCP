@@ -46,7 +46,7 @@ struct ChatLayoutProbe: ViewModifier {
 }
 
 struct ChatLayoutInspectorSheet: View {
-    @Environment(\\.dismiss) private var dismiss
+    @Environment(\.dismiss) private var dismiss
     let report: String
     let theme: AppThemePalette
     @State private var isCopied = false
@@ -425,10 +425,11 @@ struct ChatDetailView: View {
                         .environment(\.chatLayoutDiagnosticsEnabled, isLayoutDiagnosticsEnabled)
                         .coordinateSpace(name: ChatLayoutCoordinateSpace.name)
                         .onPreferenceChange(ChatLayoutFramesPreferenceKey.self) { samples in
-                            layoutFrames = Dictionary(
-                                samples.map { ($0.identifier, $0.frame) },
-                                uniquingKeysWith: { _, next in next }
-                            )
+                            var updatedFrames: [String: CGRect] = [:]
+                            for sample in samples {
+                                updatedFrames[sample.identifier] = sample.frame
+                            }
+                            layoutFrames = updatedFrames
                         }
                         .scrollDismissesKeyboard(.interactively)
                         .onChange(of: currentConversation.messages.count) { _ in
