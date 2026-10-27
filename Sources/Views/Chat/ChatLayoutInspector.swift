@@ -120,5 +120,9 @@ struct ChatLayoutInspectorSheet: View {
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
+        .sheet(isPresented: $isSharing) {
+            ChatLayoutReportActivityView(report: report)
+                .ignoresSafeArea()
+        }
     }
 }
