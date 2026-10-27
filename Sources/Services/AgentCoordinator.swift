@@ -517,9 +517,6 @@ class AgentCoordinator: ObservableObject {
 
         var stepIndex = 0
 
-        DataStorage.shared.beginConversationUpdateBatch()
-        defer { DataStorage.shared.endConversationUpdateBatch() }
-
         while true {
             if isCancelledByUser || Task.isCancelled {
                 return
@@ -537,7 +534,9 @@ class AgentCoordinator: ObservableObject {
 
             conversation.messages.append(placeholderMsg)
             let msgIndex = conversation.messages.count - 1
+            DataStorage.shared.beginConversationUpdateBatch()
             DataStorage.shared.updateConversation(conversation, persistImmediately: false)
+            DataStorage.shared.endConversationUpdateBatch()
 
             do {
                 let (content, reasoning, toolCalls) = try await OpenAIService.shared.streamChatCompletion(
@@ -577,7 +576,9 @@ class AgentCoordinator: ObservableObject {
 
                 conversation.messages[msgIndex].content = finalText
                 conversation.messages[msgIndex].reasoningContent = reasoning
+                DataStorage.shared.beginConversationUpdateBatch()
                 DataStorage.shared.updateConversation(conversation, persistImmediately: false)
+                DataStorage.shared.endConversationUpdateBatch()
 
                 if let calls = toolCalls, !calls.isEmpty {
                     var executingCalls = calls.map { c -> ToolCallItem in
@@ -586,7 +587,9 @@ class AgentCoordinator: ObservableObject {
                         return item
                     }
                     conversation.messages[msgIndex].toolCalls = executingCalls
+                    DataStorage.shared.beginConversationUpdateBatch()
                     DataStorage.shared.updateConversation(conversation, persistImmediately: false)
+                    DataStorage.shared.endConversationUpdateBatch()
 
                     for i in executingCalls.indices {
                         if isCancelledByUser || Task.isCancelled {
@@ -678,7 +681,9 @@ class AgentCoordinator: ObservableObject {
                         )
                         currentRunGeneratedMessageIds.insert(toolMsg.id)
                         conversation.messages.append(toolMsg)
+                        DataStorage.shared.beginConversationUpdateBatch()
                         DataStorage.shared.updateConversation(conversation, persistImmediately: false)
+                        DataStorage.shared.endConversationUpdateBatch()
                     }
 
                     DataStorage.shared.saveConversations()
