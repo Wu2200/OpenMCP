@@ -362,8 +362,7 @@ struct ConversationListView: View {
 
                                 if let label = activity.labels[conv.id] {
                                     HStack(spacing: 4) {
-                                        ConversationActivityIndicator(color: UIColor(theme.accent))
-                                            .frame(width: 10, height: 10)
+                                        ConversationActivityIndicator(color: theme.accent)
                                         Text(label)
                                             .font(.system(size: 11, weight: .semibold))
                                     }
@@ -488,27 +487,25 @@ struct ConversationListView: View {
     }
 }
 
-private struct ConversationActivityIndicator: UIViewRepresentable {
-    let color: UIColor
+private struct ConversationActivityIndicator: View {
+    let color: Color
+    @State private var isVisible = false
+    @State private var animationRevision = 0
 
-    func makeUIView(context: Context) -> UIActivityIndicatorView {
-        let indicator = UIActivityIndicatorView(style: .medium)
-        indicator.color = color
-        indicator.hidesWhenStopped = false
-        indicator.transform = CGAffineTransform(scaleX: 0.55, y: 0.55)
-        indicator.startAnimating()
-        return indicator
-    }
-
-    func updateUIView(_ indicator: UIActivityIndicatorView, context: Context) {
-        indicator.color = color
-        if !indicator.isAnimating {
-            indicator.startAnimating()
-        }
-    }
-
-    static func dismantleUIView(_ indicator: UIActivityIndicatorView, coordinator: ()) {
-        indicator.stopAnimating()
+    var body: some View {
+        ProgressView()
+            .controlSize(.mini)
+            .tint(color)
+            .frame(width: 10, height: 10)
+            .id(animationRevision)
+            .onAppear {
+                guard !isVisible else { return }
+                isVisible = true
+                animationRevision &+= 1
+            }
+            .onDisappear {
+                isVisible = false
+            }
     }
 }
 
