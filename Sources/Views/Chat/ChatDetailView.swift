@@ -1242,7 +1242,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
             }
 
             let delta = targetY - sv.contentOffset.y
-            guard delta > 1.5 else { return }
+            guard abs(delta) > 1.5 else { return }
 
             if !animated {
                 cancelActiveAnimation()
@@ -1258,7 +1258,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
             animatedTargetY = targetY
             cancelActiveAnimation()
 
-            let duration = min(0.24, max(0.14, Double(delta) / 900.0))
+            let duration = min(0.24, max(0.14, Double(abs(delta)) / 900.0))
             let animator = UIViewPropertyAnimator(duration: duration, curve: .easeOut) { [weak sv] in
                 guard let sv = sv else { return }
                 sv.contentOffset = CGPoint(x: sv.contentOffset.x, y: targetY)
@@ -1311,13 +1311,13 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
                     return
                 }
 
-                guard self.isViewActive, self.autoFollowOutput, self.isGenerating else {
+                guard self.isViewActive, self.autoFollowOutput else {
                     self.lastObservedHeight = newHeight
                     return
                 }
 
                 self.lastObservedHeight = newHeight
-                guard heightDelta > 0.5 else { return }
+                guard abs(heightDelta) > 0.5 else { return }
                 guard !self.userScrollActive, !sv.isTracking, !sv.isDragging, !sv.isDecelerating else { return }
                 self.scheduleBottomFollow()
             }
