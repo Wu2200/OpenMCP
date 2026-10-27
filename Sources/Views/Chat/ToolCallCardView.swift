@@ -128,7 +128,7 @@ struct ToolCallSummaryGroupView: View {
                         .buttonStyle(.plain)
                     }
 
-                    LazyVStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: 2) {
                         ForEach(firstDisplayedIndex..<toolCalls.count, id: \.self) { index in
                             ToolCallCardView(toolCall: toolCalls[index], theme: theme, stepNumber: index + 1)
                         }
