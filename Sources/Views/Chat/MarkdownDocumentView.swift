@@ -10,6 +10,18 @@ enum MarkdownBlock: Identifiable, Equatable {
     case table(id: Int, headers: [String], alignments: [HorizontalAlignment], rows: [[String]])
     case divider(id: Int)
 
+    var diagnosticType: String {
+        switch self {
+        case .heading: return "heading"
+        case .paragraph: return "paragraph"
+        case .list: return "list"
+        case .blockquote: return "blockquote"
+        case .codeBlock: return "code"
+        case .table: return "table"
+        case .divider: return "divider"
+        }
+    }
+
     var id: Int {
         switch self {
         case .heading(let id, _, _): return id
@@ -169,9 +181,11 @@ struct MarkdownDocumentView: View {
                     contentWidth: contentWidth,
                     isStreaming: isStreaming && (block.id == blocks.last?.id)
                 )
-                .modifier(ChatLayoutProbe(identifier: diagnosticIDPrefix.map { "markdownBlock|\($0)|\(block.id)" }))
+                .modifier(ChatLayoutProbe(identifier: diagnosticIDPrefix.map { "markdownBlock|\($0)|\(block.id)|\(block.diagnosticType)" }))
             }
+            .modifier(ChatLayoutProbe(identifier: diagnosticIDPrefix.map { "markdownBlocksGroup|\($0)" }))
         }
+        .modifier(ChatLayoutProbe(identifier: diagnosticIDPrefix.map { "markdownStack|\($0)" }))
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
