@@ -630,6 +630,96 @@ class OpenAIService {
         return (finalContent, finalReasoning, finalToolCalls)
     }
 
+    func prepareTools(servers: [MCPServer]) -> (definitions: [[String: Any]], serverMap: [String: (server: MCPServer, originalToolName: String)]) {
+        var definitions: [[String: Any]] = []
+        var serverMap: [String: (server: MCPServer, originalToolName: String)] = [:]
+
+        for server in servers where server.isEnabled {
+            for tool in server.tools where tool.isEnabled {
+                let safeName = "\(server.id.prefix(6))_\(tool.name)".replacingOccurrences(of: "-", with: "_")
+                serverMap[safeName] = (server, tool.rawName)
+                let schemaObj = (try? JSONSerialization.jsonObject(with: Data(tool.inputSchemaJSON.utf8))) as? [String: Any] ?? ["type": "object", "properties": [:]]
+                definitions.append([
+                    "type": "function",
+                    "function": [
+                        "name": safeName,
+                        "description": "[\(server.name)] \(tool.description)",
+                        "parameters": schemaObj
+                    ]
+                ])
+            }
+        }
+
+        return (definitions, serverMap)
+    }
+
+    func estimatePromptTokens(settings: OpenAISettings, messages: [ChatMessage], tools: [[String: Any]]? = nil) -> Int {
+        let openAIMessages = buildOpenAIMessages(settings: settings, messages: messages)
+        var request: [String: Any] = [
+            "model": settings.modelName,
+            "temperature": settings.temperature,
+            "messages": openAIMessages,
+            "stream": true
+        ]
+        if let tools = tools, !tools.isEmpty {
+            request["tools"] = tools
+        }
+        return max(1, estimatedTokenCount(in: request))
+    }
+
+    private func estimatedTokenCount(in value: Any) -> Int {
+        if let text = value as? String {
+            if text.hasPrefix("data:") && text.contains(";base64,") {
+                return 85
+            }
+            return estimatedTokenCount(in: text)
+        }
+        if let dictionary = value as? [String: Any] {
+            return dictionary.reduce(1) { total, entry in
+                total + estimatedTokenCount(in: entry.key) + estimatedTokenCount(in: entry.value) + 1
+            }
+        }
+        if let array = value as? [Any] {
+            return array.reduce(1) { $0 + estimatedTokenCount(in: $1) }
+        }
+        return 1
+    }
+
+    private func estimatedTokenCount(in text: String) -> Int {
+        var tokens = 0
+        var asciiWordLength = 0
+        var asciiPunctuationCount = 0
+
+        for scalar in text.unicodeScalars {
+            let value = scalar.value
+            let isAsciiAlphaNumeric = (48...57).contains(value) || (65...90).contains(value) || (97...122).contains(value)
+            if isAsciiAlphaNumeric {
+                asciiWordLength += 1
+                continue
+            }
+
+            if asciiWordLength > 0 {
+                tokens += (asciiWordLength + 3) / 4
+                asciiWordLength = 0
+            }
+
+            if value == 32 || (9...13).contains(value) {
+                continue
+            }
+            if value < 128 {
+                asciiPunctuationCount += 1
+            } else {
+                tokens += 1
+            }
+        }
+
+        if asciiWordLength > 0 {
+            tokens += (asciiWordLength + 3) / 4
+        }
+        tokens += (asciiPunctuationCount + 3) / 4
+        return tokens
+    }
+
     private func buildOpenAIMessages(settings: OpenAISettings, messages: [ChatMessage]) -> [[String: Any]] {
         var openAIMessages: [[String: Any]] = []
         if !settings.systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
