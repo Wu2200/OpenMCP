@@ -97,6 +97,7 @@ class OpenAIService {
         if let tools = tools, !tools.isEmpty {
             payload["tools"] = tools
         }
+        payload["stream_options"] = ["include_usage": true]
         await onPromptTokenCount?(estimatePromptTokens(settings: settings, messages: messages, tools: tools), true)
 
         let payloadData = try JSONSerialization.data(withJSONObject: payload)
@@ -193,8 +194,7 @@ class OpenAIService {
             }
             if let json = try? JSONSerialization.jsonObject(with: rawData) as? [String: Any] {
                 if let usage = json["usage"] as? [String: Any],
-                   let value = usage["prompt_tokens"] ?? usage["input_tokens"],
-                   let count = tokenCount(from: value) {
+                   let count = contextTokenTotal(from: usage) {
                     await onPromptTokenCount?(count, false)
                 }
                 let parsed = try parseNonStreamingJSON(json)
@@ -285,9 +285,9 @@ class OpenAIService {
                 throw NSError(domain: "OpenAIService", code: -1, userInfo: [NSLocalizedDescriptionKey: msg])
             }
 
-            if let usage = json["usage"] as? [String: Any] {
-                if let value = usage["prompt_tokens"] ?? usage["input_tokens"],
-                   let count = tokenCount(from: value) {
+            let usageObject = (json["usage"] as? [String: Any]) ?? ((json["response"] as? [String: Any])?["usage"] as? [String: Any])
+            if let usage = usageObject {
+                if let count = contextTokenTotal(from: usage) {
                     await onPromptTokenCount?(count, false)
                 }
                 let p = usage["prompt_tokens"] ?? usage["input_tokens"] ?? 0
@@ -545,8 +545,7 @@ class OpenAIService {
             if let data = joined.data(using: .utf8),
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                 if let usage = json["usage"] as? [String: Any],
-                   let value = usage["prompt_tokens"] ?? usage["input_tokens"],
-                   let count = tokenCount(from: value) {
+                   let count = contextTokenTotal(from: usage) {
                     await onPromptTokenCount?(count, false)
                 }
                 let parsed = try parseNonStreamingJSON(json)
@@ -674,6 +673,18 @@ class OpenAIService {
         let messageTokens = estimatedTokenCount(in: openAIMessages) + openAIMessages.count * 3 + 3
         let toolTokens = tools.map { estimatedTokenCount(in: $0) } ?? 0
         return max(1, messageTokens + toolTokens)
+    }
+
+    private func contextTokenTotal(from usage: [String: Any]) -> Int? {
+        guard let promptValue = usage["prompt_tokens"] ?? usage["input_tokens"],
+              let prompt = tokenCount(from: promptValue),
+              prompt > 0 else { return nil }
+        var completion = (usage["completion_tokens"] ?? usage["output_tokens"]).flatMap { tokenCount(from: $0) } ?? 0
+        let details = (usage["completion_tokens_details"] as? [String: Any]) ?? (usage["output_tokens_details"] as? [String: Any])
+        if let reasoningValue = details?["reasoning_tokens"], let reasoning = tokenCount(from: reasoningValue) {
+            completion = max(0, completion - reasoning)
+        }
+        return prompt + completion
     }
 
     private func tokenCount(from value: Any) -> Int? {
