@@ -174,11 +174,13 @@ struct AttachmentImageGridView: View {
                             Text("查看")
                                 .font(.system(size: 10.5, weight: .semibold))
                         }
-                        .foregroundColor(.white)
+                        .foregroundColor(theme.accent)
                         .padding(.horizontal, 7)
                         .padding(.vertical, 4)
-                        .background(Color.black.opacity(0.58))
+                        .background(theme.cardBackground.opacity(0.96))
                         .clipShape(Capsule())
+                        .overlay(Capsule().stroke(theme.border, lineWidth: 1))
+                        .shadow(color: Color.black.opacity(theme.isDark ? 0.24 : 0.12), radius: 3, x: 0, y: 1)
                         .padding(6)
                         .contentShape(Capsule())
                         .onTapGesture {
