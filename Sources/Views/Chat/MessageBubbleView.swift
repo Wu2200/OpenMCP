@@ -434,6 +434,7 @@ struct MessageBubbleView: View {
         }
         .modifier(ChatLayoutProbe(identifier: "assistantHStackContent|\(turn.id)"))
         .frame(width: availableWidth, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
         .modifier(ChatLayoutProbe(identifier: "assistantHStack|\(turn.id)"))
     }
 
