@@ -55,7 +55,14 @@ class DataStorage: ObservableObject {
     @Published var servers: [MCPServer] {
         didSet { saveServers() }
     }
-    @Published var conversations: [Conversation] = []
+    @Published var conversations: [Conversation] = [] {
+        didSet {
+            scheduleConversationPublication()
+        }
+    }
+
+    private var isBatchingConversationUpdates = false
+    private var pendingConversationPublication: DispatchWorkItem?
 
     private let settingsKey = "OpenMCP_OpenAISettings"
     private let serversKey = "OpenMCP_MCPServers"
@@ -197,6 +204,31 @@ class DataStorage: ObservableObject {
         if let data = try? JSONEncoder().encode(conversations) {
             UserDefaults.standard.set(data, forKey: conversationsKey)
         }
+    }
+
+    private func scheduleConversationPublication() {
+        guard !isBatchingConversationUpdates else { return }
+        pendingConversationPublication?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.objectWillChange.send()
+        }
+        pendingConversationPublication = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08, execute: item)
+    }
+
+    func beginConversationUpdateBatch() {
+        isBatchingConversationUpdates = true
+        pendingConversationPublication?.cancel()
+        pendingConversationPublication = nil
+    }
+
+    func endConversationUpdateBatch() {
+        guard isBatchingConversationUpdates else { return }
+        isBatchingConversationUpdates = false
+        pendingConversationPublication?.cancel()
+        pendingConversationPublication = nil
+        objectWillChange.send()
     }
 
     func updateConversation(_ conv: Conversation, persistImmediately: Bool = true) {

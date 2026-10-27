@@ -181,6 +181,7 @@ struct MessageBubbleView: View {
             }
         }
         .frame(width: availableWidth)
+        .modifier(ChatLayoutProbe(identifier: "row|\(turn.role.rawValue)|\(turn.id)"))
         .sheet(item: $previewingFileAttachment) { fileAtt in
             AttachmentFilePreviewSheet(attachment: fileAtt, theme: theme)
         }
@@ -263,6 +264,7 @@ struct MessageBubbleView: View {
                                 RoundedRectangle(cornerRadius: 15, style: .continuous)
                                     .stroke(isSelected ? theme.accent.opacity(0.55) : theme.accent.opacity(0.18), lineWidth: 1)
                             )
+                            .modifier(ChatLayoutProbe(identifier: "userText|\(turn.id)"))
                             .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
                             .onTapGesture {
                                 onSelectToggle?()
@@ -327,18 +329,18 @@ struct MessageBubbleView: View {
         let innerContentWidth = max(180, bubbleColumnWidth - 24)
         let scrollInteracting = streamingState.isScrollInteracting
 
-        return HStack(alignment: .top, spacing: 6) {
+        return ZStack(alignment: .topLeading) {
             compactAvatar(isUser: false)
                 .onTapGesture {
                     onSelectToggle?()
                 }
 
-            if isEditing {
-                editEditorBox(allowResend: false)
-                    .frame(width: bubbleColumnWidth)
-                    .id("message-editor-\(turn.id)")
-            } else {
-                VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 6) {
+                if isEditing {
+                    editEditorBox(allowResend: false)
+                        .frame(width: bubbleColumnWidth)
+                        .id("message-editor-\(turn.id)")
+                } else {
                     if isPureThinking {
                         HStack(spacing: 0) {
                             ThinkingStatusView(
@@ -371,6 +373,7 @@ struct MessageBubbleView: View {
                             if !turn.toolCalls.isEmpty {
                                 ToolCallSummaryGroupView(toolCalls: turn.toolCalls, theme: theme)
                                     .frame(width: innerContentWidth)
+                                    .modifier(ChatLayoutProbe(identifier: "toolSummary|\(turn.id)"))
                             }
 
                             if !currentReasoning.isEmpty {
@@ -382,6 +385,7 @@ struct MessageBubbleView: View {
                                     theme: theme,
                                     width: innerContentWidth
                                 )
+                                .modifier(ChatLayoutProbe(identifier: "reasoning|\(turn.id)"))
                             }
 
                             if !currentText.isEmpty {
@@ -389,9 +393,11 @@ struct MessageBubbleView: View {
                                     content: currentText,
                                     theme: theme,
                                     contentWidth: innerContentWidth,
-                                    isStreaming: isActiveGeneratingTurn
+                                    isStreaming: isActiveGeneratingTurn,
+                                    diagnosticIDPrefix: turn.id
                                 )
                                 .frame(width: innerContentWidth, alignment: .leading)
+                                .modifier(ChatLayoutProbe(identifier: "markdown|\(turn.id)"))
                             } else if isActiveGeneratingTurn && currentReasoning.isEmpty {
                                 ThinkingStatusView(
                                     statusText: statusText,
@@ -411,6 +417,7 @@ struct MessageBubbleView: View {
                             RoundedRectangle(cornerRadius: 15, style: .continuous)
                                 .stroke(isSelected ? theme.accent.opacity(0.45) : theme.border, lineWidth: 1)
                         )
+                        .modifier(ChatLayoutProbe(identifier: "assistantCard|\(turn.id)"))
                         .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
                         .onTapGesture {
                             onSelectToggle?()
@@ -421,10 +428,15 @@ struct MessageBubbleView: View {
                         floatingActionPill
                     }
                 }
-                .frame(width: bubbleColumnWidth, alignment: .leading)
             }
+            .frame(width: bubbleColumnWidth, alignment: .leading)
+            .padding(.leading, 30)
+            .modifier(ChatLayoutProbe(identifier: "assistantColumn|\(turn.id)"))
         }
+        .modifier(ChatLayoutProbe(identifier: "assistantRowContent|\(turn.id)"))
         .frame(width: availableWidth, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
+        .modifier(ChatLayoutProbe(identifier: "assistantRow|\(turn.id)"))
     }
 
     private func compactAvatar(isUser: Bool) -> some View {
@@ -439,6 +451,7 @@ struct MessageBubbleView: View {
         }
         .padding(.top, 2)
         .contentShape(Circle())
+        .modifier(ChatLayoutProbe(identifier: "avatar|\(isUser ? "user" : "assistant")|\(turn.id)"))
     }
 
     private var floatingActionPill: some View {
@@ -536,6 +549,7 @@ struct MessageBubbleView: View {
                 .stroke(theme.border, lineWidth: 1)
         )
         .shadow(color: Color.black.opacity(theme.isDark ? 0.22 : 0.05), radius: 5, x: 0, y: 2)
+        .modifier(ChatLayoutProbe(identifier: "actionBar|\(turn.id)"))
     }
 
     private func editEditorBox(allowResend: Bool) -> some View {
@@ -615,6 +629,7 @@ struct MessageBubbleView: View {
                 }
             }
         }
+        .modifier(ChatLayoutProbe(identifier: "editor|\(turn.id)"))
     }
 }
 

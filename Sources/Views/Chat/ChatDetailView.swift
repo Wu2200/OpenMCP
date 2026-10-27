@@ -5,6 +5,7 @@ struct ChatDetailView: View {
     @EnvironmentObject var storage: DataStorage
     let conversationId: String
     @ObservedObject private var coordinator: AgentCoordinator
+    @StateObject private var turnProjection: ChatTurnProjectionStore
     @State private var inputText: String = ""
     @State private var pendingAttachments: [ChatAttachment] = []
     @State private var showingToolsSheet: Bool = false
@@ -18,6 +19,11 @@ struct ChatDetailView: View {
     @State private var isKeyboardVisible: Bool = false
     @State private var pendingDeleteTurn: MessageDisplayTurn? = nil
     @State private var showingClearConversationAlert: Bool = false
+    @State private var showingLayoutInspector: Bool = false
+    @State private var isLayoutDiagnosticsEnabled: Bool = false
+    @State private var layoutInspectorReport: String = ""
+    @State private var layoutFrames: [String: CGRect] = [:]
+    @State private var visibleHistoryLimit: Int = 40
     @State private var autoFollowOutput: Bool = true
     @State private var manualScrollTrigger: Int = 0
     @State private var isChatVisible: Bool = true
@@ -26,6 +32,7 @@ struct ChatDetailView: View {
     init(conversationId: String) {
         self.conversationId = conversationId
         self._coordinator = ObservedObject(wrappedValue: AgentCoordinator.coordinator(for: conversationId))
+        self._turnProjection = StateObject(wrappedValue: ChatTurnProjectionStore(conversationId: conversationId))
     }
 
     private var theme: AppThemePalette {
@@ -41,6 +48,10 @@ struct ChatDetailView: View {
     }
 
     private var displayTurns: [MessageDisplayTurn] {
+        turnProjection.turns
+    }
+
+    private var projectedTurnsPlaceholder: [MessageDisplayTurn] {
         var turns: [MessageDisplayTurn] = []
         let messages = currentConversation.messages
 
@@ -108,6 +119,18 @@ struct ChatDetailView: View {
         return turns
     }
 
+    private var visibleTurns: [MessageDisplayTurn] {
+        Array(displayTurns.suffix(visibleHistoryLimit))
+    }
+
+    private var hiddenTurnCount: Int {
+        max(0, displayTurns.count - visibleHistoryLimit)
+    }
+
+    private var isShowingEntireHistory: Bool {
+        visibleHistoryLimit >= displayTurns.count
+    }
+
     private var activeToolCount: Int {
         storage.servers.filter { $0.isEnabled }.reduce(0) { $0 + $1.tools.filter { $0.isEnabled }.count }
     }
@@ -147,10 +170,28 @@ struct ChatDetailView: View {
                                         handleBackgroundTap()
                                     }
                             } else {
-                                VStack(spacing: 12) {
-                                    let turns = displayTurns
+                                LazyVStack(spacing: 12) {
+                                    if hiddenTurnCount > 0 {
+                                        Button {
+                                            visibleHistoryLimit = min(displayTurns.count, visibleHistoryLimit + 40)
+                                        } label: {
+                                            Label("加载更早的 \(hiddenTurnCount) 条消息", systemImage: "arrow.up")
+                                                .font(.system(size: 12, weight: .semibold))
+                                                .foregroundColor(theme.accent)
+                                                .padding(.horizontal, 12)
+                                                .padding(.vertical, 8)
+                                                .frame(maxWidth: .infinity)
+                                                .background(theme.cardBackground)
+                                                .clipShape(Capsule())
+                                                .overlay(Capsule().stroke(theme.border, lineWidth: 1))
+                                        }
+                                        .buttonStyle(.plain)
+                                        .padding(.bottom, 2)
+                                    }
+
+                                    let turns = visibleTurns
                                     ForEach(Array(turns.enumerated()), id: \.element.id) { index, turn in
-                                        let isLastAssistant = (index == turns.count - 1 && turn.role == .assistant)
+                                        let isLastAssistant = isShowingEntireHistory && index == turns.count - 1 && turn.role == .assistant
                                         let activeGenerating = coordinator.isGenerating && isLastAssistant
 
                                         MessageBubbleView(
@@ -224,7 +265,7 @@ struct ChatDetailView: View {
                                         .id(turn.id)
                                     }
 
-                                    if coordinator.isGenerating && (displayTurns.last?.role != .assistant) {
+                                    if coordinator.isGenerating && (!isShowingEntireHistory || visibleTurns.last?.role != .assistant) {
                                         generatingStatusRow
                                             .frame(width: rowAvailableWidth, alignment: .leading)
                                             .id("generating_status")
@@ -275,6 +316,14 @@ struct ChatDetailView: View {
                             }
                         }
                         .frame(width: viewportWidth)
+                        .environment(\.chatLayoutDiagnosticsEnabled, isLayoutDiagnosticsEnabled)
+                        .coordinateSpace(name: ChatLayoutCoordinateSpace.name)
+                        .onPreferenceChange(ChatLayoutFramesPreferenceKey.self) { samples in
+                            layoutFrames = Dictionary(
+                                samples.map { ($0.identifier, $0.frame) },
+                                uniquingKeysWith: { _, next in next }
+                            )
+                        }
                         .scrollDismissesKeyboard(.interactively)
                         .onChange(of: currentConversation.messages.count) { _ in
                             if autoFollowOutput {
@@ -341,6 +390,7 @@ struct ChatDetailView: View {
         }
         .onAppear {
             isChatVisible = true
+            visibleHistoryLimit = 40
             coordinator.streamingState.setDisplayPaused(false)
             if coordinator.isGenerating && autoFollowOutput {
                 manualScrollTrigger &+= 1
@@ -370,6 +420,17 @@ struct ChatDetailView: View {
                     }
 
                     Menu {
+                        Button {
+                            layoutFrames.removeAll()
+                            isLayoutDiagnosticsEnabled = true
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                                layoutInspectorReport = makeLayoutInspectorReport()
+                                showingLayoutInspector = true
+                            }
+                        } label: {
+                            Label("对话布局检查器", systemImage: "rectangle.dashed")
+                        }
+
                         Button(action: {
                             dismissKeyboard()
                             showingLogViewerSheet = true
@@ -397,6 +458,12 @@ struct ChatDetailView: View {
         }
         .sheet(isPresented: $showingLogViewerSheet) {
             LogViewerSheet(theme: theme, filterConversationId: conversationId)
+        }
+        .sheet(isPresented: $showingLayoutInspector, onDismiss: {
+            isLayoutDiagnosticsEnabled = false
+            layoutFrames.removeAll()
+        }) {
+            ChatLayoutInspectorSheet(report: layoutInspectorReport, theme: theme)
         }
         .sheet(isPresented: $showingPhotoPicker) {
             PhotoLibraryPicker { images in
@@ -464,6 +531,142 @@ struct ChatDetailView: View {
         } message: {
             Text("将清空当前对话中的所有历史消息，此操作不可恢复。")
         }
+    }
+
+    private func makeLayoutInspectorReport() -> String {
+        let turns = Array(visibleTurns.suffix(8))
+        var lines = [
+            "OpenMCP 对话布局诊断报告",
+            "采集时间：\(ISO8601DateFormatter().string(from: Date()))",
+            "坐标单位：pt；坐标系：聊天滚动区域。滚动时 y 值可能为负。",
+            "隐私：不包含对话正文、工具参数、工具结果或密钥。",
+            "",
+            "最近 \(turns.count) 条消息布局"
+        ]
+
+        var previousRow: (id: String, frame: CGRect)?
+
+        for (index, turn) in turns.enumerated() {
+            let shortID = String(turn.id.prefix(8))
+            let row = layoutFrames["row|\(turn.role.rawValue)|\(turn.id)"]
+            lines.append("")
+            lines.append("[\(index + 1)] \(turn.role.rawValue) \(shortID)")
+            lines.append("消息行：\(layoutFrameDescription(row))")
+
+            if let row = row, let previous = previousRow {
+                let gap = row.minY - previous.frame.maxY
+                lines.append("与上一消息行间距：\(String(format: "%.1f", gap)) pt\(gap > 24 ? " [偏大]" : "")")
+            }
+            if let row = row {
+                previousRow = (turn.id, row)
+            }
+
+            guard turn.role == .assistant else { continue }
+
+            let card = layoutFrames["assistantCard|\(turn.id)"]
+            let column = layoutFrames["assistantColumn|\(turn.id)"]
+            let hStackContent = layoutFrames["assistantHStackContent|\(turn.id)"]
+            let hStack = layoutFrames["assistantHStack|\(turn.id)"]
+            let avatar = layoutFrames["avatar|assistant|\(turn.id)"]
+            let actionBar = layoutFrames["actionBar|\(turn.id)"]
+            let editor = layoutFrames["editor|\(turn.id)"]
+            lines.append("当前选中状态：\(selectedTurnId == turn.id ? "是" : "否")")
+            lines.append("助手 HStack 内容：\(layoutFrameDescription(hStackContent))")
+            lines.append("助手 HStack 外框：\(layoutFrameDescription(hStack))")
+            lines.append("助手头像：\(layoutFrameDescription(avatar))")
+            if let row = row, let hStack = hStack {
+                lines.append("消息行高度 - 助手 HStack 高度：\(String(format: "%.1f", row.height - hStack.height)) pt")
+            }
+            if let hStack = hStack, let hStackContent = hStackContent {
+                lines.append("HStack 外框高度 - 内容高度：\(String(format: "%.1f", hStack.height - hStackContent.height)) pt")
+            }
+            lines.append("助手列：\(layoutFrameDescription(column))")
+            if let column = column, let card = card {
+                lines.append("卡片底部 → 助手列底部：\(String(format: "%.1f", column.maxY - card.maxY)) pt")
+            }
+            if let editor = editor {
+                lines.append("编辑器：\(layoutFrameDescription(editor))")
+            }
+            lines.append("助手卡片：\(layoutFrameDescription(card))")
+            if let row = row, let card = card {
+                let topGap = card.minY - row.minY
+                let bottomGap = row.maxY - card.maxY
+                lines.append("卡片相对消息行：顶部 \(String(format: "%.1f", topGap)) pt，底部 \(String(format: "%.1f", bottomGap)) pt")
+            }
+            if let card = card, let actionBar = actionBar {
+                let cardToActions = actionBar.minY - card.maxY
+                lines.append("操作栏：\(layoutFrameDescription(actionBar))")
+                lines.append("卡片底部 → 操作栏顶部：\(String(format: "%.1f", cardToActions)) pt")
+                if let row = row {
+                    let actionsToRowBottom = row.maxY - actionBar.maxY
+                    lines.append("操作栏底部 → 消息行底部：\(String(format: "%.1f", actionsToRowBottom)) pt")
+                    lines.append("操作栏高度占消息行额外高度：\(String(format: "%.1f", actionBar.height)) / \(String(format: "%.1f", max(0, row.height - card.height))) pt")
+                }
+            } else if let row = row, let card = card {
+                lines.append("操作栏：未测得（该消息可能未选中）")
+                lines.append("卡片下方总余量：\(String(format: "%.1f", row.maxY - card.maxY)) pt")
+            }
+
+            var sections: [(String, CGRect)] = []
+            if let frame = layoutFrames["toolSummary|\(turn.id)"] {
+                sections.append(("工具摘要", frame))
+                lines.append("工具摘要：\(layoutFrameDescription(frame))")
+            }
+            if let frame = layoutFrames["reasoning|\(turn.id)"] {
+                sections.append(("思考摘要", frame))
+                lines.append("思考摘要：\(layoutFrameDescription(frame))")
+            }
+            if let frame = layoutFrames["markdown|\(turn.id)"] {
+                sections.append(("Markdown 正文", frame))
+                lines.append("Markdown 正文外框：\(layoutFrameDescription(frame))")
+            }
+            let markdownStack = layoutFrames["markdownStack|\(turn.id)"]
+            let markdownBlocksGroup = layoutFrames["markdownBlocksGroup|\(turn.id)"]
+            lines.append("Markdown VStack：\(layoutFrameDescription(markdownStack))")
+            lines.append("Markdown 块组：\(layoutFrameDescription(markdownBlocksGroup))")
+            if let markdownStack = markdownStack, let markdownBlocksGroup = markdownBlocksGroup {
+                lines.append("Markdown VStack 高度 - 块组高度：\(String(format: "%.1f", markdownStack.height - markdownBlocksGroup.height)) pt")
+            }
+
+            if sections.count > 1 {
+                for sectionIndex in 1..<sections.count {
+                    let gap = sections[sectionIndex].1.minY - sections[sectionIndex - 1].1.maxY
+                    lines.append("\(sections[sectionIndex - 1].0) → \(sections[sectionIndex].0) 间距：\(String(format: "%.1f", gap)) pt\(gap > 24 ? " [偏大]" : "")")
+                }
+            }
+
+            let blockPrefix = "markdownBlock|\(turn.id)|"
+            let blocks = layoutFrames
+                .filter { $0.key.hasPrefix(blockPrefix) }
+                .sorted { $0.value.minY < $1.value.minY }
+            if !blocks.isEmpty {
+                lines.append("Markdown 块（按屏幕顺序）：")
+                for blockIndex in blocks.indices {
+                    let block = blocks[blockIndex]
+                    let suffix = String(block.key.dropFirst(blockPrefix.count))
+                    let parts = suffix.split(separator: "|", maxSplits: 1).map(String.init)
+                    let blockID = parts.first ?? suffix
+                    let blockType = parts.count > 1 ? parts[1] : "未知类型"
+                    lines.append("  块 \(blockID) [\(blockType)]：\(layoutFrameDescription(block.value))")
+                    if blockIndex > 0 {
+                        let previous = blocks[blockIndex - 1].value
+                        let gap = block.value.minY - previous.maxY
+                        lines.append("  块间距：\(String(format: "%.1f", gap)) pt\(gap > 24 ? " [偏大]" : "")")
+                    }
+                }
+            }
+        }
+
+        if layoutFrames.isEmpty {
+            lines.append("\n尚未收到布局测量数据；请关闭检查器，等待聊天内容显示后重新打开。")
+        }
+
+        return lines.joined(separator: "\n")
+    }
+
+    private func layoutFrameDescription(_ frame: CGRect?) -> String {
+        guard let frame = frame else { return "未测得" }
+        return String(format: "x=%.1f y=%.1f w=%.1f h=%.1f", frame.minX, frame.minY, frame.width, frame.height)
     }
 
     private var emptyConversationHero: some View {
@@ -1242,7 +1445,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
             }
 
             let delta = targetY - sv.contentOffset.y
-            guard delta > 1.5 else { return }
+            guard abs(delta) > 1.5 else { return }
 
             if !animated {
                 cancelActiveAnimation()
@@ -1258,7 +1461,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
             animatedTargetY = targetY
             cancelActiveAnimation()
 
-            let duration = min(0.24, max(0.14, Double(delta) / 900.0))
+            let duration = min(0.24, max(0.14, Double(abs(delta)) / 900.0))
             let animator = UIViewPropertyAnimator(duration: duration, curve: .easeOut) { [weak sv] in
                 guard let sv = sv else { return }
                 sv.contentOffset = CGPoint(x: sv.contentOffset.x, y: targetY)
@@ -1272,13 +1475,20 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
 
         func scheduleBottomFollow() {
             bottomFollowWorkItem?.cancel()
+            scheduleBottomFollowAttempt(after: 0.04, remainingRetries: 3)
+        }
+
+        private func scheduleBottomFollowAttempt(after delay: TimeInterval, remainingRetries: Int) {
             let item = DispatchWorkItem { [weak self] in
-                guard let self = self, self.isViewActive, self.autoFollowOutput else { return }
-                self.attachedScrollView?.layoutIfNeeded()
+                guard let self = self, self.isViewActive, self.autoFollowOutput,
+                      let scrollView = self.attachedScrollView else { return }
+                scrollView.layoutIfNeeded()
                 self.scrollToBottom(animated: false)
+                guard remainingRetries > 0 else { return }
+                self.scheduleBottomFollowAttempt(after: 0.12, remainingRetries: remainingRetries - 1)
             }
             bottomFollowWorkItem = item
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.04, execute: item)
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
         }
 
         private func bottomOffset(for scrollView: UIScrollView) -> CGFloat {
@@ -1304,13 +1514,13 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
                     return
                 }
 
-                guard self.isViewActive, self.autoFollowOutput, self.isGenerating else {
+                guard self.isViewActive, self.autoFollowOutput else {
                     self.lastObservedHeight = newHeight
                     return
                 }
 
                 self.lastObservedHeight = newHeight
-                guard heightDelta > 0.5 else { return }
+                guard abs(heightDelta) > 0.5 else { return }
                 guard !self.userScrollActive, !sv.isTracking, !sv.isDragging, !sv.isDecelerating else { return }
                 self.scheduleBottomFollow()
             }
