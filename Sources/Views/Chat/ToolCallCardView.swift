@@ -150,7 +150,7 @@ struct ToolCallCardView: View {
     @State private var isCopied: Bool = false
     @State private var areArgumentsCopied: Bool = false
 
-    private static let previewCharacterLimit = 4000
+    private static let previewCharacterLimit = 200
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
