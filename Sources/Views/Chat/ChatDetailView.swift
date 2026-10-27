@@ -768,8 +768,6 @@ struct ChatDetailView: View {
                 if !currentConversation.messages.isEmpty {
                     ContextTokenBadge(
                         conversationId: conversationId,
-                        messageCount: currentConversation.messages.count,
-                        signature: OpenAIService.shared.contextSignature(settings: effectiveSettings, servers: storage.servers),
                         theme: theme
                     )
                 }
@@ -1063,8 +1061,6 @@ struct ChatDetailView: View {
 private struct ContextTokenBadge: View {
     @ObservedObject var store = ContextTokenStore.shared
     let conversationId: String
-    let messageCount: Int
-    let signature: String
     let theme: AppThemePalette
 
     private func compactText(_ value: Int) -> String {
@@ -1081,9 +1077,7 @@ private struct ContextTokenBadge: View {
     }
 
     var body: some View {
-        if let entry = store.entries[conversationId],
-           entry.messageCount == messageCount,
-           entry.signature == signature {
+        if let entry = store.entries[conversationId] {
             HStack(spacing: 4) {
                 Image(systemName: "square.stack.3d.up")
                     .font(.system(size: 10.5, weight: .semibold))
