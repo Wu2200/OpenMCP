@@ -5,6 +5,7 @@ struct ToolCallSummaryGroupView: View {
     let toolCalls: [ToolCallItem]
     let theme: AppThemePalette
     @State private var isGroupExpanded: Bool = false
+    @State private var visibleCallCount: Int = 3
 
     private var latestCall: ToolCallItem? {
         if let executing = toolCalls.last(where: { $0.isExecuting }) {
@@ -15,6 +16,14 @@ struct ToolCallSummaryGroupView: View {
 
     private var completedCount: Int {
         toolCalls.filter { !$0.isExecuting }.count
+    }
+
+    private var visibleToolCalls: [(offset: Int, element: ToolCallItem)] {
+        Array(toolCalls.enumerated().suffix(visibleCallCount))
+    }
+
+    private var earlierCallCount: Int {
+        max(0, toolCalls.count - visibleCallCount)
     }
 
     private var summaryStatusColor: Color {
@@ -69,7 +78,12 @@ struct ToolCallSummaryGroupView: View {
         VStack(alignment: .leading, spacing: 5) {
             Button {
                 withAnimation(.easeInOut(duration: 0.2)) {
-                    isGroupExpanded.toggle()
+                    if isGroupExpanded {
+                        isGroupExpanded = false
+                        visibleCallCount = 3
+                    } else {
+                        isGroupExpanded = true
+                    }
                 }
             } label: {
                 HStack(spacing: 7) {
@@ -117,9 +131,27 @@ struct ToolCallSummaryGroupView: View {
                         .fill(theme.border)
                         .frame(width: 1)
 
-                    VStack(alignment: .leading, spacing: 6) {
-                        ForEach(Array(toolCalls.enumerated()), id: \.element.id) { index, tc in
-                            ToolCallCardView(toolCall: tc, theme: theme, stepNumber: index + 1)
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(visibleToolCalls, id: \.element.id) { entry in
+                            ToolCallCardView(toolCall: entry.element, theme: theme, stepNumber: entry.offset + 1)
+                        }
+
+                        if earlierCallCount > 0 {
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    visibleCallCount = min(toolCalls.count, visibleCallCount + 3)
+                                }
+                            } label: {
+                                HStack(spacing: 5) {
+                                    Image(systemName: "arrow.up")
+                                        .font(.system(size: 9, weight: .semibold))
+                                    Text("显示更早的 \(earlierCallCount) 次工具调用")
+                                        .font(.system(size: 10.5, weight: .medium))
+                                }
+                                .foregroundColor(theme.accent)
+                                .padding(.vertical, 3)
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
                 }
@@ -182,11 +214,14 @@ struct ToolCallCardView: View {
                             ? String(toolCall.arguments.prefix(2000)) + "\n...(参数过长已省略)..."
                             : toolCall.arguments
 
-                        Text(displayArgs)
-                            .font(.system(size: 10.5, design: .monospaced))
-                            .foregroundColor(theme.primaryText)
-                            .textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
+                        ScrollView(.vertical, showsIndicators: true) {
+                            Text(displayArgs)
+                                .font(.system(size: 10.5, design: .monospaced))
+                                .foregroundColor(theme.primaryText)
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .frame(maxHeight: 96)
                     }
 
                     if let res = toolCall.result {
@@ -216,12 +251,14 @@ struct ToolCallCardView: View {
                                 ? String(res.prefix(2000)) + "\n...(结果过长已省略)..."
                                 : res
 
-                            Text(displayRes)
-                                .font(.system(size: 10.5, design: .monospaced))
-                                .foregroundColor(theme.primaryText)
-                                .lineLimit(12)
-                                .textSelection(.enabled)
-                                .fixedSize(horizontal: false, vertical: true)
+                            ScrollView(.vertical, showsIndicators: true) {
+                                Text(displayRes)
+                                    .font(.system(size: 10.5, design: .monospaced))
+                                    .foregroundColor(theme.primaryText)
+                                    .textSelection(.enabled)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            .frame(maxHeight: 96)
                         }
                     }
                 }
