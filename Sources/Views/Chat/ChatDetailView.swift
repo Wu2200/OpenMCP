@@ -358,13 +358,7 @@ struct ChatDetailView: View {
         .onChange(of: coordinator.isGenerating) { _ in
             refreshContextTokenCount()
         }
-        .onChange(of: effectiveSettings.modelName) { _ in
-            refreshContextTokenCount()
-        }
-        .onChange(of: effectiveSettings.activeProfileId) { _ in
-            refreshContextTokenCount()
-        }
-        .onChange(of: effectiveSettings.systemPrompt) { _ in
+        .onChange(of: effectiveSettings) { _ in
             refreshContextTokenCount()
         }
         .onChange(of: storage.servers) { _ in
@@ -788,7 +782,7 @@ struct ChatDetailView: View {
                 HStack(spacing: 4) {
                     Image(systemName: "number")
                         .font(.system(size: 10, weight: .semibold))
-                    Text("\(coordinator.isContextTokenCountEstimated ? "≈" : "")\(coordinator.contextTokenCount.formatted())")
+                    Text("\(coordinator.isContextTokenCountEstimated ? "≈" : "")\(coordinator.contextTokenCount.formatted()) Token")
                         .font(.system(size: 10.5, weight: .medium, design: .rounded).monospacedDigit())
                 }
                 .foregroundColor(theme.secondaryText)
