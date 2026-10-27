@@ -423,7 +423,6 @@ struct MessageBubbleView: View {
                     }
                 }
             }
-        }
         .frame(width: bubbleColumnWidth, alignment: .leading)
         .modifier(ChatLayoutProbe(identifier: "assistantColumn|\(turn.id)"))
         .padding(.leading, 30)
