@@ -514,7 +514,17 @@ struct ChatDetailView: View {
             guard turn.role == .assistant else { continue }
 
             let card = layoutFrames["assistantCard|\(turn.id)"]
+            let column = layoutFrames["assistantColumn|\(turn.id)"]
             let actionBar = layoutFrames["actionBar|\(turn.id)"]
+            let editor = layoutFrames["editor|\(turn.id)"]
+            lines.append("当前选中状态：\(selectedTurnId == turn.id ? "是" : "否")")
+            lines.append("助手列：\(layoutFrameDescription(column))")
+            if let column = column, let card = card {
+                lines.append("卡片底部 → 助手列底部：\(String(format: "%.1f", column.maxY - card.maxY)) pt")
+            }
+            if let editor = editor {
+                lines.append("编辑器：\(layoutFrameDescription(editor))")
+            }
             lines.append("助手卡片：\(layoutFrameDescription(card))")
             if let row = row, let card = card {
                 let topGap = card.minY - row.minY
