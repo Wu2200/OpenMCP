@@ -127,7 +127,7 @@ struct ToolCallSummaryGroupView: View {
                             Button {
                                 isShowingAllCalls = true
                             } label: {
-                                Label("显示更早的 \(firstDisplayedIndex) 次工具调用", systemImage: "arrow.up")
+                                Label("显示全部 \(toolCalls.count) 次工具调用", systemImage: "arrow.up")
                                     .font(.system(size: 10.5, weight: .semibold))
                                     .foregroundColor(theme.accent)
                             }
