@@ -402,11 +402,7 @@ struct MarkdownInlineText: View {
             .foregroundColor(baseColor)
             .tint(theme.accent)
             .frame(maxWidth: .infinity, alignment: .leading)
-        if isStreaming {
-            text
-        } else {
-            text.textSelection(.enabled)
-        }
+        text
     }
 }
 
@@ -526,7 +522,6 @@ struct MarkdownTableView: View {
             .multilineTextAlignment(textAlignment(for: alignment))
             .lineSpacing(2.5)
             .fixedSize(horizontal: false, vertical: true)
-            .textSelection(.enabled)
     }
 
     private func frameAlignment(for align: HorizontalAlignment) -> Alignment {
