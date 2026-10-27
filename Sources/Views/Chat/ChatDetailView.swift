@@ -21,7 +21,6 @@ struct ChatDetailView: View {
     @State private var autoFollowOutput: Bool = true
     @State private var manualScrollTrigger: Int = 0
     @State private var isChatVisible: Bool = true
-    @State private var contextTokenCount: Int = 0
     @FocusState private var isInputFocused: Bool
 
     init(conversationId: String) {
@@ -360,6 +359,9 @@ struct ChatDetailView: View {
             refreshContextTokenCount()
         }
         .onChange(of: effectiveSettings.modelName) { _ in
+            refreshContextTokenCount()
+        }
+        .onChange(of: effectiveSettings.activeProfileId) { _ in
             refreshContextTokenCount()
         }
         .onChange(of: effectiveSettings.systemPrompt) { _ in
@@ -786,7 +788,7 @@ struct ChatDetailView: View {
                 HStack(spacing: 4) {
                     Image(systemName: "number")
                         .font(.system(size: 10, weight: .semibold))
-                    Text(contextTokenCount.formatted())
+                    Text("\(coordinator.isContextTokenCountEstimated ? "≈" : "")\(coordinator.contextTokenCount.formatted())")
                         .font(.system(size: 10.5, weight: .medium, design: .rounded).monospacedDigit())
                 }
                 .foregroundColor(theme.secondaryText)
@@ -795,7 +797,7 @@ struct ChatDetailView: View {
                 .background(theme.elevatedBackground.opacity(0.65))
                 .clipShape(Capsule())
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel("当前上下文约 \(contextTokenCount.formatted()) 个 Token")
+                .accessibilityLabel("当前上下文\(coordinator.isContextTokenCountEstimated ? "估算约" : "") \(coordinator.contextTokenCount.formatted()) 个 Token")
 
                 Spacer(minLength: 6)
                     .contentShape(Rectangle())
@@ -1017,10 +1019,13 @@ struct ChatDetailView: View {
 
     private func refreshContextTokenCount() {
         let tools = OpenAIService.shared.prepareTools(servers: storage.servers).definitions
-        contextTokenCount = OpenAIService.shared.estimatePromptTokens(
-            settings: effectiveSettings,
-            messages: currentConversation.messages,
-            tools: tools.isEmpty ? nil : tools
+        coordinator.setContextTokenCount(
+            OpenAIService.shared.estimatePromptTokens(
+                settings: effectiveSettings,
+                messages: currentConversation.messages,
+                tools: tools.isEmpty ? nil : tools
+            ),
+            estimated: true
         )
     }
 
