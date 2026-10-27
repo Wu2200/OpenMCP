@@ -5,6 +5,7 @@ struct ChatDetailView: View {
     @EnvironmentObject var storage: DataStorage
     let conversationId: String
     @ObservedObject private var coordinator: AgentCoordinator
+    @StateObject private var turnProjection: ChatTurnProjectionStore
     @State private var inputText: String = ""
     @State private var pendingAttachments: [ChatAttachment] = []
     @State private var showingToolsSheet: Bool = false
@@ -31,6 +32,7 @@ struct ChatDetailView: View {
     init(conversationId: String) {
         self.conversationId = conversationId
         self._coordinator = ObservedObject(wrappedValue: AgentCoordinator.coordinator(for: conversationId))
+        self._turnProjection = StateObject(wrappedValue: ChatTurnProjectionStore(conversationId: conversationId))
     }
 
     private var theme: AppThemePalette {
@@ -46,6 +48,10 @@ struct ChatDetailView: View {
     }
 
     private var displayTurns: [MessageDisplayTurn] {
+        turnProjection.turns
+    }
+
+    private var projectedTurnsPlaceholder: [MessageDisplayTurn] {
         var turns: [MessageDisplayTurn] = []
         let messages = currentConversation.messages
 
