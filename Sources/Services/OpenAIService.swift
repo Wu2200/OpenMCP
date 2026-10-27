@@ -73,7 +73,7 @@ class OpenAIService {
         stepIndex: Int? = nil,
         onPartialUpdate: (@MainActor (String) -> Void)? = nil,
         onReasoningUpdate: (@MainActor (String) -> Void)? = nil,
-        onPromptTokenCount: (@MainActor (Int, Bool) -> Void)? = nil
+        onContextTokenCount: (@MainActor (Int) -> Void)? = nil
     ) async throws -> (content: String?, reasoning: String?, toolCalls: [ToolCallItem]?) {
         let startTime = CFAbsoluteTimeGetCurrent()
         var base = settings.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -98,9 +98,6 @@ class OpenAIService {
             payload["tools"] = tools
         }
         payload["stream_options"] = ["include_usage": true]
-        let messageTokens = estimateMessageTokens(openAIMessages)
-        let toolsKey = toolsCalibrationKey(settings: settings, tools: tools)
-        await onPromptTokenCount?(max(1, messageTokens + estimatedToolTokens(tools: tools, key: toolsKey)), true)
 
         let payloadData = try JSONSerialization.data(withJSONObject: payload)
         let profileName = settings.activeProfile?.name ?? "默认配置"
@@ -197,10 +194,7 @@ class OpenAIService {
             if let json = try? JSONSerialization.jsonObject(with: rawData) as? [String: Any] {
                 if let usage = json["usage"] as? [String: Any],
                    let count = contextTokenTotal(from: usage) {
-                    await onPromptTokenCount?(count, false)
-                }
-                if let usage = json["usage"] as? [String: Any] {
-                    recordToolOverhead(usage: usage, messageTokens: messageTokens, toolsKey: toolsKey)
+                    await onContextTokenCount?(count)
                 }
                 let parsed = try parseNonStreamingJSON(json)
                 let finishReason = ((json["choices"] as? [[String: Any]])?.first?["finish_reason"] as? String) ?? "non_stream_json"
@@ -292,9 +286,8 @@ class OpenAIService {
 
             let usageObject = (json["usage"] as? [String: Any]) ?? ((json["response"] as? [String: Any])?["usage"] as? [String: Any])
             if let usage = usageObject {
-                recordToolOverhead(usage: usage, messageTokens: messageTokens, toolsKey: toolsKey)
                 if let count = contextTokenTotal(from: usage) {
-                    await onPromptTokenCount?(count, false)
+                    await onContextTokenCount?(count)
                 }
                 let p = usage["prompt_tokens"] ?? usage["input_tokens"] ?? 0
                 let c = usage["completion_tokens"] ?? usage["output_tokens"] ?? 0
@@ -552,10 +545,7 @@ class OpenAIService {
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                 if let usage = json["usage"] as? [String: Any],
                    let count = contextTokenTotal(from: usage) {
-                    await onPromptTokenCount?(count, false)
-                }
-                if let usage = json["usage"] as? [String: Any] {
-                    recordToolOverhead(usage: usage, messageTokens: messageTokens, toolsKey: toolsKey)
+                    await onContextTokenCount?(count)
                 }
                 let parsed = try parseNonStreamingJSON(json)
                 if let r = parsed.reasoning, !r.isEmpty {
@@ -677,61 +667,19 @@ class OpenAIService {
         return (definitions, serverMap)
     }
 
-    private static let measuredToolTokensStorageKey = "OpenMCP_MeasuredToolTokens"
-    private let measuredToolTokensLock = NSLock()
-    private var measuredToolTokensTable: [String: Int] = (UserDefaults.standard.dictionary(forKey: "OpenMCP_MeasuredToolTokens") as? [String: Int]) ?? [:]
-
-    func estimatePromptTokens(settings: OpenAISettings, messages: [ChatMessage], tools: [[String: Any]]? = nil) -> Int {
-        let openAIMessages = buildOpenAIMessages(settings: settings, messages: messages)
-        let toolsKey = toolsCalibrationKey(settings: settings, tools: tools)
-        return max(1, estimateMessageTokens(openAIMessages) + estimatedToolTokens(tools: tools, key: toolsKey))
-    }
-
-    private func estimateMessageTokens(_ openAIMessages: [[String: Any]]) -> Int {
-        estimatedTokenCount(in: openAIMessages) + openAIMessages.count * 3 + 3
-    }
-
-    private func toolsCalibrationKey(settings: OpenAISettings, tools: [[String: Any]]?) -> String? {
-        guard let tools = tools, !tools.isEmpty,
-              let data = try? JSONSerialization.data(withJSONObject: tools, options: [.sortedKeys]) else { return nil }
+    func contextSignature(settings: OpenAISettings, servers: [MCPServer]) -> String {
+        var parts: [String] = [settings.baseURL, settings.modelName, settings.systemPrompt]
+        for server in servers where server.isEnabled {
+            for tool in server.tools where tool.isEnabled {
+                parts.append("\(server.id)/\(tool.name)")
+            }
+        }
         var hash: UInt64 = 14695981039346656037
-        for byte in data {
+        for byte in parts.joined(separator: "\u{1F}").utf8 {
             hash ^= UInt64(byte)
             hash = hash &* 1099511628211
         }
-        return "\(settings.baseURL)|\(settings.modelName)|\(tools.count)|\(hash)"
-    }
-
-    private func estimatedToolTokens(tools: [[String: Any]]?, key: String?) -> Int {
-        guard let tools = tools, !tools.isEmpty else { return 0 }
-        if let key = key, let measured = measuredToolTokens(for: key) {
-            return measured
-        }
-        return estimatedTokenCount(in: tools)
-    }
-
-    private func measuredToolTokens(for key: String) -> Int? {
-        measuredToolTokensLock.lock()
-        defer { measuredToolTokensLock.unlock() }
-        return measuredToolTokensTable[key]
-    }
-
-    private func recordToolOverhead(usage: [String: Any], messageTokens: Int, toolsKey: String?) {
-        guard let key = toolsKey,
-              let promptValue = usage["prompt_tokens"] ?? usage["input_tokens"],
-              let prompt = tokenCount(from: promptValue),
-              prompt > messageTokens,
-              messageTokens * 5 <= prompt else { return }
-        let measured = prompt - messageTokens
-        measuredToolTokensLock.lock()
-        defer { measuredToolTokensLock.unlock() }
-        guard measuredToolTokensTable[key] != measured else { return }
-        if measuredToolTokensTable[key] == nil, measuredToolTokensTable.count >= 32,
-           let evicted = measuredToolTokensTable.keys.first {
-            measuredToolTokensTable.removeValue(forKey: evicted)
-        }
-        measuredToolTokensTable[key] = measured
-        UserDefaults.standard.set(measuredToolTokensTable, forKey: Self.measuredToolTokensStorageKey)
+        return String(hash, radix: 16)
     }
 
     private func contextTokenTotal(from usage: [String: Any]) -> Int? {
@@ -750,59 +698,6 @@ class OpenAIService {
         guard let number = value as? NSNumber else { return nil }
         let count = number.intValue
         return count >= 0 ? count : nil
-    }
-
-    private func estimatedTokenCount(in value: Any) -> Int {
-        if let text = value as? String {
-            if text.hasPrefix("data:") && text.contains(";base64,") {
-                return 85
-            }
-            return estimatedTokenCount(in: text)
-        }
-        if let dictionary = value as? [String: Any] {
-            return dictionary.reduce(1) { total, entry in
-                total + estimatedTokenCount(in: entry.key) + estimatedTokenCount(in: entry.value) + 1
-            }
-        }
-        if let array = value as? [Any] {
-            return array.reduce(1) { $0 + estimatedTokenCount(in: $1) }
-        }
-        return 1
-    }
-
-    private func estimatedTokenCount(in text: String) -> Int {
-        var tokens = 0
-        var asciiWordLength = 0
-        var asciiPunctuationCount = 0
-
-        for scalar in text.unicodeScalars {
-            let value = scalar.value
-            let isAsciiAlphaNumeric = (48...57).contains(value) || (65...90).contains(value) || (97...122).contains(value)
-            if isAsciiAlphaNumeric {
-                asciiWordLength += 1
-                continue
-            }
-
-            if asciiWordLength > 0 {
-                tokens += (asciiWordLength + 3) / 4
-                asciiWordLength = 0
-            }
-
-            if value == 32 || (9...13).contains(value) {
-                continue
-            }
-            if value < 128 {
-                asciiPunctuationCount += 1
-            } else {
-                tokens += 1
-            }
-        }
-
-        if asciiWordLength > 0 {
-            tokens += (asciiWordLength + 3) / 4
-        }
-        tokens += (asciiPunctuationCount + 3) / 4
-        return tokens
     }
 
     private func buildOpenAIMessages(settings: OpenAISettings, messages: [ChatMessage]) -> [[String: Any]] {
