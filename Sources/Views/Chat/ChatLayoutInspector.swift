@@ -45,6 +45,16 @@ struct ChatLayoutProbe: ViewModifier {
     }
 }
 
+private struct ChatLayoutReportActivityView: UIViewControllerRepresentable {
+    let report: String
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: [report], applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
+}
+
 struct ChatLayoutInspectorSheet: View {
     @Environment(\.dismiss) private var dismiss
     let report: String
