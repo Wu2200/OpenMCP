@@ -429,6 +429,7 @@ struct MessageBubbleView: View {
                     }
                 }
                 .frame(width: bubbleColumnWidth, alignment: .leading)
+                .modifier(ChatLayoutProbe(identifier: "assistantColumn|\(turn.id)"))
             }
         }
         .frame(width: availableWidth, alignment: .leading)
@@ -623,6 +624,7 @@ struct MessageBubbleView: View {
                 }
             }
         }
+        .modifier(ChatLayoutProbe(identifier: "editor|\(turn.id)"))
     }
 }
 
