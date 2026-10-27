@@ -5,6 +5,17 @@ enum ChatLayoutCoordinateSpace {
     static let name = "OpenMCP.ChatLayout"
 }
 
+private struct ChatLayoutDiagnosticsEnabledKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var chatLayoutDiagnosticsEnabled: Bool {
+        get { self[ChatLayoutDiagnosticsEnabledKey.self] }
+        set { self[ChatLayoutDiagnosticsEnabledKey.self] = newValue }
+    }
+}
+
 struct ChatLayoutFramesPreferenceKey: PreferenceKey {
     static var defaultValue: [String: CGRect] = [:]
 
@@ -15,10 +26,11 @@ struct ChatLayoutFramesPreferenceKey: PreferenceKey {
 
 struct ChatLayoutProbe: ViewModifier {
     let identifier: String?
+    @Environment(\.chatLayoutDiagnosticsEnabled) private var diagnosticsEnabled
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if let identifier = identifier {
+        if diagnosticsEnabled, let identifier = identifier {
             content.background {
                 GeometryReader { geometry in
                     Color.clear.preference(
