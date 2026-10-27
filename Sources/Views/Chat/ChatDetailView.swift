@@ -779,19 +779,9 @@ struct ChatDetailView: View {
                     .fixedSize()
                 }
 
-                HStack(spacing: 4) {
-                    Image(systemName: "number")
-                        .font(.system(size: 10, weight: .semibold))
-                    Text("\(coordinator.isContextTokenCountEstimated ? "≈" : "")\(coordinator.contextTokenCount.formatted()) Token")
-                        .font(.system(size: 10.5, weight: .medium, design: .rounded).monospacedDigit())
+                if !currentConversation.messages.isEmpty {
+                    ContextTokenBadge(conversationId: conversationId, theme: theme)
                 }
-                .foregroundColor(theme.secondaryText)
-                .padding(.horizontal, 7)
-                .padding(.vertical, 4)
-                .background(theme.elevatedBackground.opacity(0.65))
-                .clipShape(Capsule())
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel("当前上下文\(coordinator.isContextTokenCountEstimated ? "估算约" : "") \(coordinator.contextTokenCount.formatted()) 个 Token")
 
                 Spacer(minLength: 6)
                     .contentShape(Rectangle())
@@ -1012,14 +1002,16 @@ struct ChatDetailView: View {
     }
 
     private func refreshContextTokenCount() {
+        guard !coordinator.isGenerating else { return }
         let tools = OpenAIService.shared.prepareTools(servers: storage.servers).definitions
-        coordinator.setContextTokenCount(
+        ContextTokenStore.shared.set(
             OpenAIService.shared.estimatePromptTokens(
                 settings: effectiveSettings,
                 messages: currentConversation.messages,
                 tools: tools.isEmpty ? nil : tools
             ),
-            estimated: true
+            estimated: true,
+            for: conversationId
         )
     }
 
@@ -1088,6 +1080,45 @@ struct ChatDetailView: View {
             settings: storage.settings,
             servers: storage.servers
         )
+    }
+}
+
+private struct ContextTokenBadge: View {
+    @ObservedObject var store = ContextTokenStore.shared
+    let conversationId: String
+    let theme: AppThemePalette
+
+    private func compactText(_ value: Int) -> String {
+        if value < 1_000 {
+            return "\(value)"
+        }
+        if value < 100_000 {
+            return String(format: "%.1fK", Double(value) / 1_000)
+        }
+        if value < 1_000_000 {
+            return String(format: "%.0fK", Double(value) / 1_000)
+        }
+        return String(format: "%.1fM", Double(value) / 1_000_000)
+    }
+
+    var body: some View {
+        if let entry = store.entries[conversationId] {
+            HStack(spacing: 4) {
+                Image(systemName: "square.stack.3d.up")
+                    .font(.system(size: 10.5, weight: .semibold))
+                Text("\(entry.estimated ? "≈" : "")\(compactText(entry.count))")
+                    .font(.system(size: 11.5, weight: .semibold, design: .rounded).monospacedDigit())
+                    .lineLimit(1)
+            }
+            .foregroundColor(theme.secondaryText)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(theme.elevatedBackground.opacity(0.65))
+            .clipShape(Capsule())
+            .fixedSize()
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("当前上下文\(entry.estimated ? "估算约" : "") \(entry.count.formatted()) 个 Token")
+        }
     }
 }
 
