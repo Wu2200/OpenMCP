@@ -69,6 +69,9 @@ struct ToolCallSummaryGroupView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             Button {
+                if isGroupExpanded {
+                    isShowingAllCalls = false
+                }
                 isGroupExpanded.toggle()
             } label: {
                 HStack(spacing: 7) {
@@ -113,31 +116,35 @@ struct ToolCallSummaryGroupView: View {
             if isGroupExpanded {
                 let firstDisplayedIndex = isShowingAllCalls ? 0 : max(0, toolCalls.count - 4)
 
-                VStack(alignment: .leading, spacing: 5) {
-                    ForEach(firstDisplayedIndex..<toolCalls.count, id: \.self) { index in
-                        ToolCallCardView(toolCall: toolCalls[index], theme: theme, stepNumber: index + 1)
+                VStack(alignment: .leading, spacing: 4) {
+                    if isShowingAllCalls && toolCalls.count > 4 {
+                        Button {
+                            isShowingAllCalls = false
+                        } label: {
+                            Label("收起至最近 4 次工具调用", systemImage: "arrow.down")
+                                .font(.system(size: 10.5, weight: .semibold))
+                                .foregroundColor(theme.accent)
+                        }
+                        .buttonStyle(.plain)
                     }
 
-                    if toolCalls.count > 4 {
+                    LazyVStack(alignment: .leading, spacing: 2) {
+                        ForEach(firstDisplayedIndex..<toolCalls.count, id: \.self) { index in
+                            ToolCallCardView(toolCall: toolCalls[index], theme: theme, stepNumber: index + 1)
+                        }
+                    }
+
+                    if !isShowingAllCalls && firstDisplayedIndex > 0 {
                         Button {
-                            isShowingAllCalls.toggle()
+                            isShowingAllCalls = true
                         } label: {
-                            Label(
-                                isShowingAllCalls ? "收起至最近 4 次工具调用" : "显示全部 \(toolCalls.count) 次工具调用",
-                                systemImage: isShowingAllCalls ? "arrow.down" : "arrow.up"
-                            )
-                            .font(.system(size: 10.5, weight: .semibold))
-                            .foregroundColor(theme.accent)
+                            Label("显示全部 \(toolCalls.count) 次工具调用", systemImage: "arrow.up")
+                                .font(.system(size: 10.5, weight: .semibold))
+                                .foregroundColor(theme.accent)
                         }
                         .buttonStyle(.plain)
                         .padding(.top, 2)
                     }
-                }
-                .padding(.leading, 8)
-                .overlay(alignment: .leading) {
-                    Rectangle()
-                        .fill(theme.border)
-                        .frame(width: 1)
                 }
                 .padding(.leading, 7)
             }
@@ -184,6 +191,8 @@ struct ToolCallCardView: View {
                         .foregroundColor(theme.mutedText)
                 }
                 .contentShape(Rectangle())
+                .frame(minHeight: 28)
+                .padding(.vertical, 2)
             }
             .buttonStyle(.plain)
 
