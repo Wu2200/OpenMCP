@@ -88,7 +88,7 @@ struct ChatLayoutInspectorSheet: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("完成") {
-                        isCopied = false
+                        dismiss()
                     }
                 }
             }
