@@ -1272,13 +1272,20 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
 
         func scheduleBottomFollow() {
             bottomFollowWorkItem?.cancel()
+            scheduleBottomFollowAttempt(after: 0.04, remainingRetries: 3)
+        }
+
+        private func scheduleBottomFollowAttempt(after delay: TimeInterval, remainingRetries: Int) {
             let item = DispatchWorkItem { [weak self] in
-                guard let self = self, self.isViewActive, self.autoFollowOutput else { return }
-                self.attachedScrollView?.layoutIfNeeded()
+                guard let self = self, self.isViewActive, self.autoFollowOutput,
+                      let scrollView = self.attachedScrollView else { return }
+                scrollView.layoutIfNeeded()
                 self.scrollToBottom(animated: false)
+                guard remainingRetries > 0 else { return }
+                self.scheduleBottomFollowAttempt(after: 0.12, remainingRetries: remainingRetries - 1)
             }
             bottomFollowWorkItem = item
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.04, execute: item)
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
         }
 
         private func bottomOffset(for scrollView: UIScrollView) -> CGFloat {
