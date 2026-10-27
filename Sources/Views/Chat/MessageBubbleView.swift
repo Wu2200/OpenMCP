@@ -329,7 +329,7 @@ struct MessageBubbleView: View {
         let innerContentWidth = max(180, bubbleColumnWidth - 24)
         let scrollInteracting = streamingState.isScrollInteracting
 
-        return ZStack(alignment: .topLeading) {
+        return HStack(alignment: .top, spacing: 6) {
             compactAvatar(isUser: false)
                 .onTapGesture {
                     onSelectToggle?()
@@ -430,7 +430,6 @@ struct MessageBubbleView: View {
                 }
             }
             .frame(width: bubbleColumnWidth, alignment: .leading)
-            .padding(.leading, 30)
             .modifier(ChatLayoutProbe(identifier: "assistantColumn|\(turn.id)"))
         }
         .modifier(ChatLayoutProbe(identifier: "assistantRowContent|\(turn.id)"))
