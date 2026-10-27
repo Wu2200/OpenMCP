@@ -299,7 +299,7 @@ struct ChatDetailView: View {
                         .frame(width: viewportWidth, height: 40)
                         .allowsHitTesting(false)
 
-                        if !displayTurns.isEmpty && selectedTurnId == nil {
+                        if !displayTurns.isEmpty {
                             Button(action: {
                                 autoFollowOutput = true
                                 coordinator.streamingState.setDisplayPaused(false)
