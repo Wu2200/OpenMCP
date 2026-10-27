@@ -206,6 +206,31 @@ class DataStorage: ObservableObject {
         }
     }
 
+    private func scheduleConversationPublication() {
+        guard !isBatchingConversationUpdates else { return }
+        pendingConversationPublication?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.objectWillChange.send()
+        }
+        pendingConversationPublication = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08, execute: item)
+    }
+
+    func beginConversationUpdateBatch() {
+        isBatchingConversationUpdates = true
+        pendingConversationPublication?.cancel()
+        pendingConversationPublication = nil
+    }
+
+    func endConversationUpdateBatch() {
+        guard isBatchingConversationUpdates else { return }
+        isBatchingConversationUpdates = false
+        pendingConversationPublication?.cancel()
+        pendingConversationPublication = nil
+        objectWillChange.send()
+    }
+
     func updateConversation(_ conv: Conversation, persistImmediately: Bool = true) {
         if let idx = conversations.firstIndex(where: { $0.id == conv.id }) {
             conversations[idx] = conv
