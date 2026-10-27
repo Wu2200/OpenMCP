@@ -276,7 +276,7 @@ struct ChatDetailView: View {
                                         handleBackgroundTap()
                                     }
                             } else {
-                                LazyVStack(spacing: 12) {
+                                VStack(spacing: 12) {
                                     if hiddenTurnCount > 0 {
                                         Button {
                                             visibleHistoryLimit = min(displayTurns.count, visibleHistoryLimit + 40)
