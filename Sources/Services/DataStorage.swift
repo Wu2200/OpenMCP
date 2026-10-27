@@ -227,6 +227,7 @@ class DataStorage: ObservableObject {
 
     func deleteConversation(id: String) {
         conversations.removeAll { $0.id == id }
+        ContextTokenStore.shared.remove(id)
         if conversations.isEmpty {
             conversations.append(
                 Conversation(
