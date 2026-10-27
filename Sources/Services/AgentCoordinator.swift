@@ -517,6 +517,9 @@ class AgentCoordinator: ObservableObject {
 
         var stepIndex = 0
 
+        DataStorage.shared.beginConversationUpdateBatch()
+        defer { DataStorage.shared.endConversationUpdateBatch() }
+
         while true {
             if isCancelledByUser || Task.isCancelled {
                 return
