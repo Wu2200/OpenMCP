@@ -1479,7 +1479,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
         }
     }
 
-    final class Coordinator: NSObject {
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var isGenerating: Bool
         var autoFollowOutput: Bool
         var isViewActive: Bool
