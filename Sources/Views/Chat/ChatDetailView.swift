@@ -21,6 +21,7 @@ struct ChatDetailView: View {
     @State private var autoFollowOutput: Bool = true
     @State private var manualScrollTrigger: Int = 0
     @State private var isChatVisible: Bool = true
+    @State private var contextTokenCount: Int = 0
     @FocusState private var isInputFocused: Bool
 
     init(conversationId: String) {
@@ -187,6 +188,7 @@ struct ChatDetailView: View {
                                                     messageId: turn.primaryMessageId,
                                                     newContent: newContent
                                                 )
+                                                refreshContextTokenCount()
                                             },
                                             onEditAndResend: { newContent in
                                                 dismissKeyboard()
@@ -341,6 +343,7 @@ struct ChatDetailView: View {
         }
         .onAppear {
             isChatVisible = true
+            refreshContextTokenCount()
             coordinator.streamingState.setDisplayPaused(false)
             if coordinator.isGenerating && autoFollowOutput {
                 manualScrollTrigger &+= 1
@@ -349,6 +352,21 @@ struct ChatDetailView: View {
         .onDisappear {
             isChatVisible = false
             coordinator.streamingState.setDisplayPaused(false)
+        }
+        .onChange(of: currentConversation.messages.count) { _ in
+            refreshContextTokenCount()
+        }
+        .onChange(of: coordinator.isGenerating) { _ in
+            refreshContextTokenCount()
+        }
+        .onChange(of: effectiveSettings.modelName) { _ in
+            refreshContextTokenCount()
+        }
+        .onChange(of: effectiveSettings.systemPrompt) { _ in
+            refreshContextTokenCount()
+        }
+        .onChange(of: storage.servers) { _ in
+            refreshContextTokenCount()
         }
         .navigationTitle(currentConversation.title)
         .navigationBarTitleDisplayMode(.inline)
@@ -765,7 +783,21 @@ struct ChatDetailView: View {
                     .fixedSize()
                 }
 
-                Spacer(minLength: 16)
+                HStack(spacing: 4) {
+                    Image(systemName: "number")
+                        .font(.system(size: 10, weight: .semibold))
+                    Text(contextTokenCount.formatted())
+                        .font(.system(size: 10.5, weight: .medium, design: .rounded).monospacedDigit())
+                }
+                .foregroundColor(theme.secondaryText)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 4)
+                .background(theme.elevatedBackground.opacity(0.65))
+                .clipShape(Capsule())
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("当前上下文约 \(contextTokenCount.formatted()) 个 Token")
+
+                Spacer(minLength: 6)
                     .contentShape(Rectangle())
                     .onTapGesture {
                         handleBackgroundTap()
@@ -981,6 +1013,15 @@ struct ChatDetailView: View {
             }
         }
         .presentationDetents([.medium, .large])
+    }
+
+    private func refreshContextTokenCount() {
+        let tools = OpenAIService.shared.prepareTools(servers: storage.servers).definitions
+        contextTokenCount = OpenAIService.shared.estimatePromptTokens(
+            settings: effectiveSettings,
+            messages: currentConversation.messages,
+            tools: tools.isEmpty ? nil : tools
+        )
     }
 
     private func centerTurnForEditing(_ turnId: String, using proxy: ScrollViewProxy) {
