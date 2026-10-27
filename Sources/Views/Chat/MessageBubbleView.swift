@@ -432,10 +432,10 @@ struct MessageBubbleView: View {
             .frame(width: bubbleColumnWidth, alignment: .leading)
             .modifier(ChatLayoutProbe(identifier: "assistantColumn|\(turn.id)"))
         }
-        .modifier(ChatLayoutProbe(identifier: "assistantRowContent|\(turn.id)"))
+        .modifier(ChatLayoutProbe(identifier: "assistantHStackContent|\(turn.id)"))
         .frame(width: availableWidth, alignment: .leading)
         .fixedSize(horizontal: false, vertical: true)
-        .modifier(ChatLayoutProbe(identifier: "assistantRow|\(turn.id)"))
+        .modifier(ChatLayoutProbe(identifier: "assistantHStack|\(turn.id)"))
     }
 
     private func compactAvatar(isUser: Bool) -> some View {
