@@ -213,15 +213,17 @@ final class ContextTokenStore: ObservableObject {
 
     struct Entry: Codable, Equatable {
         var count: Int
-        var estimated: Bool
-        var messageCount: Int?
+        var messageCount: Int
+        var signature: String
     }
 
     @Published private(set) var entries: [String: Entry]
 
-    private let storageKey = "OpenMCP_ContextTokenEntries"
+    private let storageKey = "OpenMCP_ContextTokenEntries_v2"
 
     private init() {
+        UserDefaults.standard.removeObject(forKey: "OpenMCP_ContextTokenEntries")
+        UserDefaults.standard.removeObject(forKey: "OpenMCP_MeasuredToolTokens")
         if let data = UserDefaults.standard.data(forKey: storageKey),
            let decoded = try? JSONDecoder().decode([String: Entry].self, from: data) {
             entries = decoded
@@ -230,8 +232,8 @@ final class ContextTokenStore: ObservableObject {
         }
     }
 
-    func set(_ count: Int, estimated: Bool, messageCount: Int, for conversationId: String) {
-        let entry = Entry(count: max(0, count), estimated: estimated, messageCount: messageCount)
+    func set(_ count: Int, messageCount: Int, signature: String, for conversationId: String) {
+        let entry = Entry(count: max(0, count), messageCount: messageCount, signature: signature)
         guard entries[conversationId] != entry else { return }
         entries[conversationId] = entry
         persist()
@@ -514,6 +516,7 @@ class AgentCoordinator: ObservableObject {
         let preparedTools = OpenAIService.shared.prepareTools(servers: servers)
         let openAITools = preparedTools.definitions
         let toolServerMap = preparedTools.serverMap
+        let contextSignature = OpenAIService.shared.contextSignature(settings: effectiveSettings, servers: servers)
 
         var stepIndex = 0
 
@@ -560,11 +563,11 @@ class AgentCoordinator: ObservableObject {
                         }
                         self.streamingState.pushPartialReasoning(partialReasoning)
                     },
-                    onPromptTokenCount: { count, estimated in
+                    onContextTokenCount: { count in
                         ContextTokenStore.shared.set(
                             count,
-                            estimated: estimated,
-                            messageCount: contextMessages.count + (estimated ? 0 : 1),
+                            messageCount: contextMessages.count + 1,
+                            signature: contextSignature,
                             for: conversationId
                         )
                     }
@@ -714,14 +717,6 @@ class AgentCoordinator: ObservableObject {
                                     self.publishActivity("深度思考中")
                                 }
                                 self.streamingState.pushPartialReasoning(partialReasoning)
-                            },
-                            onPromptTokenCount: { count, estimated in
-                                ContextTokenStore.shared.set(
-                                    count,
-                                    estimated: estimated,
-                                    messageCount: contextMessages.count + (estimated ? 0 : 1),
-                                    for: conversationId
-                                )
                             }
                         ), let recText = recovered.content, !recText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                             let combinedReasoning = recovered.reasoning ?? reasoning
