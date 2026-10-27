@@ -5,6 +5,7 @@ struct ToolCallSummaryGroupView: View {
     let toolCalls: [ToolCallItem]
     let theme: AppThemePalette
     @State private var isGroupExpanded: Bool = false
+    @State private var isShowingAllCalls: Bool = false
 
     private var latestCall: ToolCallItem? {
         if let executing = toolCalls.last(where: { $0.isExecuting }) {
@@ -110,14 +111,28 @@ struct ToolCallSummaryGroupView: View {
             .buttonStyle(.plain)
 
             if isGroupExpanded {
+                let firstDisplayedIndex = isShowingAllCalls ? 0 : max(0, toolCalls.count - 4)
+
                 HStack(alignment: .top, spacing: 8) {
                     Rectangle()
                         .fill(theme.border)
                         .frame(width: 1)
 
                     LazyVStack(alignment: .leading, spacing: 8) {
-                        ForEach(Array(toolCalls.enumerated()), id: \.element.id) { entry in
-                            ToolCallCardView(toolCall: entry.element, theme: theme, stepNumber: entry.offset + 1)
+                        ForEach(firstDisplayedIndex..<toolCalls.count, id: \.self) { index in
+                            ToolCallCardView(toolCall: toolCalls[index], theme: theme, stepNumber: index + 1)
+                        }
+
+                        if !isShowingAllCalls && firstDisplayedIndex > 0 {
+                            Button {
+                                isShowingAllCalls = true
+                            } label: {
+                                Label("显示更早的 \(firstDisplayedIndex) 次工具调用", systemImage: "arrow.up")
+                                    .font(.system(size: 10.5, weight: .semibold))
+                                    .foregroundColor(theme.accent)
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.top, 2)
                         }
                     }
                 }
