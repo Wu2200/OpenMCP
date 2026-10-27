@@ -131,10 +131,6 @@ struct ChatDetailView: View {
         visibleHistoryLimit >= displayTurns.count
     }
 
-    private var isShowingEntireHistory: Bool {
-        visibleHistoryLimit >= displayTurns.count
-    }
-
     private var activeToolCount: Int {
         storage.servers.filter { $0.isEnabled }.reduce(0) { $0 + $1.tools.filter { $0.isEnabled }.count }
     }
