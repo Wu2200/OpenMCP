@@ -784,7 +784,7 @@ class OpenAIService {
             }
 
             if asciiWordLength > 0 {
-                tokens += (asciiWordLength + 5) / 6
+                tokens += (asciiWordLength + 3) / 4
                 asciiWordLength = 0
             }
 
@@ -799,7 +799,7 @@ class OpenAIService {
         }
 
         if asciiWordLength > 0 {
-            tokens += (asciiWordLength + 5) / 6
+            tokens += (asciiWordLength + 3) / 4
         }
         tokens += (asciiPunctuationCount + 3) / 4
         return tokens
