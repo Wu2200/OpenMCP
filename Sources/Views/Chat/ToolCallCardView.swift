@@ -66,84 +66,67 @@ struct ToolCallSummaryGroupView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 10) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(summaryStatusColor.opacity(0.15))
-                        .frame(width: 28, height: 28)
-
+        VStack(alignment: .leading, spacing: 5) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    isGroupExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 7) {
                     if latestCall?.isExecuting == true {
                         ProgressView()
                             .scaleEffect(0.68)
                             .tint(theme.accent)
+                            .frame(width: 16, height: 16)
                     } else {
                         Image(systemName: summaryStatusIcon)
-                            .font(.system(size: 13, weight: .bold))
+                            .font(.system(size: 12, weight: .semibold))
                             .foregroundColor(summaryStatusColor)
+                            .frame(width: 16, height: 16)
                     }
+
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(summaryHeadline)
+                            .font(.system(size: 12.5, weight: .semibold))
+                            .foregroundColor(theme.primaryText)
+                            .lineLimit(1)
+
+                        Text(summarySubtext)
+                            .font(.system(size: 10.5))
+                            .foregroundColor(theme.secondaryText)
+                            .lineLimit(1)
+                    }
+
+                    Spacer(minLength: 4)
+
+                    Text("\(completedCount)/\(toolCalls.count)")
+                        .font(.system(size: 10.5, weight: .semibold, design: .rounded).monospacedDigit())
+                        .foregroundColor(summaryStatusColor)
+
+                    Image(systemName: isGroupExpanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(theme.mutedText)
                 }
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(summaryHeadline)
-                        .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                        .foregroundColor(theme.primaryText)
-                        .lineLimit(1)
-
-                    Text(summarySubtext)
-                        .font(.system(size: 11))
-                        .foregroundColor(theme.secondaryText)
-                        .lineLimit(1)
-                }
-
-                Spacer()
-
-                Text("\(completedCount)/\(toolCalls.count)")
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
-                    .foregroundColor(summaryStatusColor)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 3)
-                    .background(summaryStatusColor.opacity(0.12))
-                    .clipShape(Capsule())
-
-                Image(systemName: isGroupExpanded ? "chevron.up" : "chevron.down")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(theme.mutedText)
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    isGroupExpanded.toggle()
-                }
-            }
+            .buttonStyle(.plain)
 
             if isGroupExpanded {
-                Rectangle()
-                    .fill(theme.border.opacity(0.75))
-                    .frame(height: 1)
+                HStack(alignment: .top, spacing: 8) {
+                    Rectangle()
+                        .fill(theme.border)
+                        .frame(width: 1)
 
-                let maxWindowHeight = min(250, max(150, UIScreen.main.bounds.height * 0.3))
-
-                ScrollView(.vertical, showsIndicators: true) {
-                    VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 6) {
                         ForEach(Array(toolCalls.enumerated()), id: \.element.id) { index, tc in
                             ToolCallCardView(toolCall: tc, theme: theme, stepNumber: index + 1)
                         }
                     }
-                    .padding(.horizontal, 10)
-                    .padding(.bottom, 10)
                 }
-                .frame(height: maxWindowHeight)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.leading, 7)
             }
         }
-        .background(theme.elevatedBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(theme.border, lineWidth: 1)
-        )
     }
 }
 
@@ -155,55 +138,43 @@ struct ToolCallCardView: View {
     @State private var isCopied: Bool = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
-                if let step = stepNumber {
-                    Text("#\(step)")
-                        .font(.system(size: 10, weight: .bold, design: .monospaced))
-                        .foregroundColor(statusColor)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(statusColor.opacity(0.14))
-                        .clipShape(Capsule())
+        VStack(alignment: .leading, spacing: 5) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    isExpanded.toggle()
                 }
+            } label: {
+                HStack(spacing: 7) {
+                    if let step = stepNumber {
+                        Text("#\(step)")
+                            .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                            .foregroundColor(statusColor)
+                    }
 
-                VStack(alignment: .leading, spacing: 2) {
                     Text(ToolCallSummaryGroupView.cleanToolDisplayName(toolCall.name))
-                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                        .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
                         .foregroundColor(theme.primaryText)
                         .lineLimit(1)
 
                     Text(statusLabel)
                         .font(.system(size: 10))
                         .foregroundColor(theme.secondaryText)
+                        .lineLimit(1)
+
+                    Spacer(minLength: 4)
+
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundColor(theme.mutedText)
                 }
-
-                Spacer()
-
-                Text(isExpanded ? "收起参数" : "展开参数")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(theme.mutedText)
-
-                Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(theme.mutedText)
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    isExpanded.toggle()
-                }
-            }
+            .buttonStyle(.plain)
 
             if isExpanded {
-                VStack(alignment: .leading, spacing: 8) {
-                    Divider()
-                        .overlay(theme.border)
-
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("调用参数 (Arguments)")
+                VStack(alignment: .leading, spacing: 6) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("调用参数")
                             .font(.system(size: 10, weight: .semibold))
                             .foregroundColor(theme.secondaryText)
 
@@ -212,35 +183,33 @@ struct ToolCallCardView: View {
                             : toolCall.arguments
 
                         Text(displayArgs)
-                            .font(.system(size: 11, design: .monospaced))
+                            .font(.system(size: 10.5, design: .monospaced))
                             .foregroundColor(theme.primaryText)
                             .textSelection(.enabled)
-                            .padding(8)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(theme.cardBackground)
-                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            .fixedSize(horizontal: false, vertical: true)
                     }
 
                     if let res = toolCall.result {
-                        VStack(alignment: .leading, spacing: 4) {
+                        VStack(alignment: .leading, spacing: 3) {
                             HStack {
-                                Text("执行结果 (Output)")
+                                Text("执行结果")
                                     .font(.system(size: 10, weight: .semibold))
                                     .foregroundColor(theme.secondaryText)
+
                                 Spacer()
-                                Text(isCopied ? "已复制" : "复制结果")
-                                    .font(.system(size: 10, weight: .medium))
-                                    .foregroundColor(theme.accent)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .contentShape(Rectangle())
-                                    .onTapGesture {
-                                        UIPasteboard.general.string = res
-                                        withAnimation { isCopied = true }
-                                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                                            withAnimation { isCopied = false }
-                                        }
+
+                                Button {
+                                    UIPasteboard.general.string = res
+                                    withAnimation { isCopied = true }
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                        withAnimation { isCopied = false }
                                     }
+                                } label: {
+                                    Text(isCopied ? "已复制" : "复制结果")
+                                        .font(.system(size: 10, weight: .medium))
+                                        .foregroundColor(theme.accent)
+                                }
+                                .buttonStyle(.plain)
                             }
 
                             let displayRes = res.count > 2000
@@ -248,27 +217,17 @@ struct ToolCallCardView: View {
                                 : res
 
                             Text(displayRes)
-                                .font(.system(size: 11, design: .monospaced))
+                                .font(.system(size: 10.5, design: .monospaced))
                                 .foregroundColor(theme.primaryText)
                                 .lineLimit(12)
                                 .textSelection(.enabled)
-                                .padding(8)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(theme.cardBackground)
-                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                     }
                 }
-                .padding(.horizontal, 10)
-                .padding(.bottom, 10)
+                .padding(.leading, stepNumber == nil ? 0 : 15)
             }
         }
-        .background(theme.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(theme.border, lineWidth: 1)
-        )
     }
 
     private var statusColor: Color {
