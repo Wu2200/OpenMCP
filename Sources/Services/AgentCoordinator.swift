@@ -213,8 +213,6 @@ final class ContextTokenStore: ObservableObject {
 
     struct Entry: Codable, Equatable {
         var count: Int
-        var messageCount: Int
-        var signature: String
     }
 
     @Published private(set) var entries: [String: Entry]
@@ -232,8 +230,8 @@ final class ContextTokenStore: ObservableObject {
         }
     }
 
-    func set(_ count: Int, messageCount: Int, signature: String, for conversationId: String) {
-        let entry = Entry(count: max(0, count), messageCount: messageCount, signature: signature)
+    func set(_ count: Int, for conversationId: String) {
+        let entry = Entry(count: max(0, count))
         guard entries[conversationId] != entry else { return }
         entries[conversationId] = entry
         persist()
@@ -516,7 +514,6 @@ class AgentCoordinator: ObservableObject {
         let preparedTools = OpenAIService.shared.prepareTools(servers: servers)
         let openAITools = preparedTools.definitions
         let toolServerMap = preparedTools.serverMap
-        let contextSignature = OpenAIService.shared.contextSignature(settings: effectiveSettings, servers: servers)
 
         var stepIndex = 0
 
@@ -564,12 +561,7 @@ class AgentCoordinator: ObservableObject {
                         self.streamingState.pushPartialReasoning(partialReasoning)
                     },
                     onContextTokenCount: { count in
-                        ContextTokenStore.shared.set(
-                            count,
-                            messageCount: contextMessages.count + 1,
-                            signature: contextSignature,
-                            for: conversationId
-                        )
+                        ContextTokenStore.shared.set(count, for: conversationId)
                     }
                 )
 
