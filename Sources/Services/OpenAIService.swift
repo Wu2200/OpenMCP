@@ -72,7 +72,8 @@ class OpenAIService {
         turnPrompt: String? = nil,
         stepIndex: Int? = nil,
         onPartialUpdate: (@MainActor (String) -> Void)? = nil,
-        onReasoningUpdate: (@MainActor (String) -> Void)? = nil
+        onReasoningUpdate: (@MainActor (String) -> Void)? = nil,
+        onPromptTokenCount: (@MainActor (Int, Bool) -> Void)? = nil
     ) async throws -> (content: String?, reasoning: String?, toolCalls: [ToolCallItem]?) {
         let startTime = CFAbsoluteTimeGetCurrent()
         var base = settings.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -96,6 +97,7 @@ class OpenAIService {
         if let tools = tools, !tools.isEmpty {
             payload["tools"] = tools
         }
+        await onPromptTokenCount?(estimatePromptTokens(settings: settings, messages: messages, tools: tools), true)
 
         let payloadData = try JSONSerialization.data(withJSONObject: payload)
         let profileName = settings.activeProfile?.name ?? "默认配置"
@@ -190,6 +192,11 @@ class OpenAIService {
                 rawData.append(byte)
             }
             if let json = try? JSONSerialization.jsonObject(with: rawData) as? [String: Any] {
+                if let usage = json["usage"] as? [String: Any],
+                   let value = usage["prompt_tokens"] ?? usage["input_tokens"],
+                   let count = tokenCount(from: value) {
+                    await onPromptTokenCount?(count, false)
+                }
                 let parsed = try parseNonStreamingJSON(json)
                 let finishReason = ((json["choices"] as? [[String: Any]])?.first?["finish_reason"] as? String) ?? "non_stream_json"
                 if let r = parsed.reasoning, !r.isEmpty {
@@ -279,6 +286,10 @@ class OpenAIService {
             }
 
             if let usage = json["usage"] as? [String: Any] {
+                if let value = usage["prompt_tokens"] ?? usage["input_tokens"],
+                   let count = tokenCount(from: value) {
+                    await onPromptTokenCount?(count, false)
+                }
                 let p = usage["prompt_tokens"] ?? usage["input_tokens"] ?? 0
                 let c = usage["completion_tokens"] ?? usage["output_tokens"] ?? 0
                 let t = usage["total_tokens"] ?? 0
@@ -533,6 +544,11 @@ class OpenAIService {
             let joined = nonSSELines.joined(separator: "\n")
             if let data = joined.data(using: .utf8),
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                if let usage = json["usage"] as? [String: Any],
+                   let value = usage["prompt_tokens"] ?? usage["input_tokens"],
+                   let count = tokenCount(from: value) {
+                    await onPromptTokenCount?(count, false)
+                }
                 let parsed = try parseNonStreamingJSON(json)
                 if let r = parsed.reasoning, !r.isEmpty {
                     await onReasoningUpdate?(r)
@@ -655,16 +671,15 @@ class OpenAIService {
 
     func estimatePromptTokens(settings: OpenAISettings, messages: [ChatMessage], tools: [[String: Any]]? = nil) -> Int {
         let openAIMessages = buildOpenAIMessages(settings: settings, messages: messages)
-        var request: [String: Any] = [
-            "model": settings.modelName,
-            "temperature": settings.temperature,
-            "messages": openAIMessages,
-            "stream": true
-        ]
-        if let tools = tools, !tools.isEmpty {
-            request["tools"] = tools
-        }
-        return max(1, estimatedTokenCount(in: request))
+        let messageTokens = estimatedTokenCount(in: openAIMessages) + openAIMessages.count * 3 + 3
+        let toolTokens = tools.map { estimatedTokenCount(in: $0) } ?? 0
+        return max(1, messageTokens + toolTokens)
+    }
+
+    private func tokenCount(from value: Any) -> Int? {
+        guard let number = value as? NSNumber else { return nil }
+        let count = number.intValue
+        return count >= 0 ? count : nil
     }
 
     private func estimatedTokenCount(in value: Any) -> Int {
