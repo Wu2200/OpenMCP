@@ -514,11 +514,25 @@ struct ChatDetailView: View {
             guard turn.role == .assistant else { continue }
 
             let card = layoutFrames["assistantCard|\(turn.id)"]
+            let actionBar = layoutFrames["actionBar|\(turn.id)"]
             lines.append("助手卡片：\(layoutFrameDescription(card))")
             if let row = row, let card = card {
                 let topGap = card.minY - row.minY
                 let bottomGap = row.maxY - card.maxY
                 lines.append("卡片相对消息行：顶部 \(String(format: "%.1f", topGap)) pt，底部 \(String(format: "%.1f", bottomGap)) pt")
+            }
+            if let card = card, let actionBar = actionBar {
+                let cardToActions = actionBar.minY - card.maxY
+                lines.append("操作栏：\(layoutFrameDescription(actionBar))")
+                lines.append("卡片底部 → 操作栏顶部：\(String(format: "%.1f", cardToActions)) pt")
+                if let row = row {
+                    let actionsToRowBottom = row.maxY - actionBar.maxY
+                    lines.append("操作栏底部 → 消息行底部：\(String(format: "%.1f", actionsToRowBottom)) pt")
+                    lines.append("操作栏高度占消息行额外高度：\(String(format: "%.1f", actionBar.height)) / \(String(format: "%.1f", max(0, row.height - card.height))) pt")
+                }
+            } else if let row = row, let card = card {
+                lines.append("操作栏：未测得（该消息可能未选中）")
+                lines.append("卡片下方总余量：\(String(format: "%.1f", row.maxY - card.maxY)) pt")
             }
 
             var sections: [(String, CGRect)] = []
