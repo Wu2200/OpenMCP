@@ -22,6 +22,7 @@ struct ChatDetailView: View {
     @State private var isLayoutDiagnosticsEnabled: Bool = false
     @State private var layoutInspectorReport: String = ""
     @State private var layoutFrames: [String: CGRect] = [:]
+    @State private var visibleHistoryLimit: Int = 40
     @State private var autoFollowOutput: Bool = true
     @State private var manualScrollTrigger: Int = 0
     @State private var isChatVisible: Bool = true
@@ -112,6 +113,15 @@ struct ChatDetailView: View {
         return turns
     }
 
+    private var visibleTurns: [MessageDisplayTurn] {
+        let turns = displayTurns
+        return Array(turns.suffix(visibleHistoryLimit))
+    }
+
+    private var hiddenTurnCount: Int {
+        max(0, displayTurns.count - visibleHistoryLimit)
+    }
+
     private var activeToolCount: Int {
         storage.servers.filter { $0.isEnabled }.reduce(0) { $0 + $1.tools.filter { $0.isEnabled }.count }
     }
@@ -152,7 +162,25 @@ struct ChatDetailView: View {
                                     }
                             } else {
                                 VStack(spacing: 12) {
-                                    let turns = displayTurns
+                                    if hiddenTurnCount > 0 {
+                                        Button {
+                                            visibleHistoryLimit = min(displayTurns.count, visibleHistoryLimit + 40)
+                                        } label: {
+                                            Label("加载更早的 \(hiddenTurnCount) 条消息", systemImage: "arrow.up")
+                                                .font(.system(size: 12, weight: .semibold))
+                                                .foregroundColor(theme.accent)
+                                                .padding(.horizontal, 12)
+                                                .padding(.vertical, 8)
+                                                .frame(maxWidth: .infinity)
+                                                .background(theme.cardBackground)
+                                                .clipShape(Capsule())
+                                                .overlay(Capsule().stroke(theme.border, lineWidth: 1))
+                                        }
+                                        .buttonStyle(.plain)
+                                        .padding(.bottom, 2)
+                                    }
+
+                                    let turns = visibleTurns
                                     ForEach(Array(turns.enumerated()), id: \.element.id) { index, turn in
                                         let isLastAssistant = (index == turns.count - 1 && turn.role == .assistant)
                                         let activeGenerating = coordinator.isGenerating && isLastAssistant
@@ -228,7 +256,7 @@ struct ChatDetailView: View {
                                         .id(turn.id)
                                     }
 
-                                    if coordinator.isGenerating && (displayTurns.last?.role != .assistant) {
+                                    if coordinator.isGenerating && (visibleTurns.last?.role != .assistant) {
                                         generatingStatusRow
                                             .frame(width: rowAvailableWidth, alignment: .leading)
                                             .id("generating_status")
@@ -350,6 +378,7 @@ struct ChatDetailView: View {
         }
         .onAppear {
             isChatVisible = true
+            visibleHistoryLimit = 40
             coordinator.streamingState.setDisplayPaused(false)
             if coordinator.isGenerating && autoFollowOutput {
                 manualScrollTrigger &+= 1
@@ -493,7 +522,7 @@ struct ChatDetailView: View {
     }
 
     private func makeLayoutInspectorReport() -> String {
-        let turns = Array(displayTurns.suffix(8))
+        let turns = Array(visibleTurns.suffix(8))
         var lines = [
             "OpenMCP 对话布局诊断报告",
             "采集时间：\(ISO8601DateFormatter().string(from: Date()))",
