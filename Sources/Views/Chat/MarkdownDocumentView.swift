@@ -157,6 +157,7 @@ struct MarkdownDocumentView: View {
     let theme: AppThemePalette
     var contentWidth: CGFloat? = nil
     var isStreaming: Bool = false
+    var diagnosticIDPrefix: String? = nil
 
     var body: some View {
         let blocks = MarkdownRenderCache.shared.blocks(for: content, isStreaming: isStreaming)
@@ -168,6 +169,7 @@ struct MarkdownDocumentView: View {
                     contentWidth: contentWidth,
                     isStreaming: isStreaming && (block.id == blocks.last?.id)
                 )
+                .modifier(ChatLayoutProbe(identifier: diagnosticIDPrefix.map { "markdownBlock|\($0)|\(block.id)" }))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
