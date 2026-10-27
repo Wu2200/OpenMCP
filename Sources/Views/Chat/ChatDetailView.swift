@@ -705,9 +705,9 @@ struct ChatDetailView: View {
                 Menu {
                     Button(action: {
                         dismissKeyboard()
-                        showingPhotoPicker = true
+                        showingDocumentPicker = true
                     }) {
-                        Label("图片上传", systemImage: "photo.on.rectangle.angled")
+                        Label("文件上传", systemImage: "doc.badge.plus")
                     }
 
                     Button(action: {
@@ -719,9 +719,9 @@ struct ChatDetailView: View {
 
                     Button(action: {
                         dismissKeyboard()
-                        showingDocumentPicker = true
+                        showingPhotoPicker = true
                     }) {
-                        Label("文件上传", systemImage: "doc.badge.plus")
+                        Label("图片上传", systemImage: "photo.on.rectangle.angled")
                     }
                 } label: {
                     Image(systemName: "plus.circle")
