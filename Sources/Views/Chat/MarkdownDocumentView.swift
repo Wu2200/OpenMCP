@@ -118,6 +118,40 @@ final class MarkdownRenderCache {
     }
 }
 
+private struct MarkdownLinkCopyContextMenu: ViewModifier {
+    let urls: [URL]
+
+    static func urls(in value: AttributedString) -> [URL] {
+        var seen = Set<String>()
+        return value.runs.compactMap { run in
+            guard let url = run.link, seen.insert(url.absoluteString).inserted else { return nil }
+            return url
+        }
+    }
+
+    func body(content: Content) -> some View {
+        if urls.isEmpty {
+            content
+        } else {
+            content.contextMenu {
+                ForEach(urls, id: \.absoluteString) { url in
+                    Button {
+                        UIPasteboard.general.url = url
+                    } label: {
+                        Label(copyTitle(for: url), systemImage: "doc.on.doc")
+                    }
+                }
+            }
+        }
+    }
+
+    private func copyTitle(for url: URL) -> String {
+        let host = url.host ?? url.absoluteString
+        let path = url.path == "/" ? "" : url.path
+        return "复制 \(String((host + path).prefix(42)))"
+    }
+}
+
 struct MarkdownDocumentView: View {
     let content: String
     let theme: AppThemePalette
@@ -397,12 +431,12 @@ struct MarkdownInlineText: View {
 
     @ViewBuilder
     private func styledText(_ value: AttributedString, baseColor: Color) -> some View {
-        let text = Text(value)
+        Text(value)
             .font(.system(size: fontSize, weight: weight))
             .foregroundColor(baseColor)
             .tint(theme.accent)
             .frame(maxWidth: .infinity, alignment: .leading)
-        text
+            .modifier(MarkdownLinkCopyContextMenu(urls: MarkdownLinkCopyContextMenu.urls(in: value)))
     }
 }
 
@@ -515,13 +549,15 @@ struct MarkdownTableView: View {
     @ViewBuilder
     private func cellContent(text: String, isHeader: Bool, alignment: HorizontalAlignment) -> some View {
         let fontSize: CGFloat = isHeader ? 13 : 13.5
-        Text(MarkdownRenderCache.shared.attributedString(for: text, fontSize: fontSize, theme: theme))
+        let attributedText = MarkdownRenderCache.shared.attributedString(for: text, fontSize: fontSize, theme: theme)
+        Text(attributedText)
             .font(.system(size: fontSize, weight: isHeader ? .semibold : .regular))
             .foregroundColor(theme.primaryText)
             .tint(theme.accent)
             .multilineTextAlignment(textAlignment(for: alignment))
             .lineSpacing(2.5)
             .fixedSize(horizontal: false, vertical: true)
+            .modifier(MarkdownLinkCopyContextMenu(urls: MarkdownLinkCopyContextMenu.urls(in: attributedText)))
     }
 
     private func frameAlignment(for align: HorizontalAlignment) -> Alignment {
