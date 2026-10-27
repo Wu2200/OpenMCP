@@ -49,6 +49,8 @@ struct ChatLayoutInspectorSheet: View {
     @Environment(\.dismiss) private var dismiss
     let report: String
     let theme: AppThemePalette
+    @Binding var isDiagnosticsEnabled: Bool
+    var onDiagnosticsChanged: (Bool) -> Void
     @State private var isCopied = false
 
     var body: some View {
@@ -58,6 +60,16 @@ struct ChatLayoutInspectorSheet: View {
                     .font(.system(size: 12))
                     .foregroundColor(theme.secondaryText)
                     .frame(maxWidth: .infinity, alignment: .leading)
+
+                Toggle(isOn: $isDiagnosticsEnabled) {
+                    Label("启用布局测量", systemImage: "ruler")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(theme.primaryText)
+                }
+                .tint(theme.accent)
+                .onChange(of: isDiagnosticsEnabled) { enabled in
+                    onDiagnosticsChanged(enabled)
+                }
 
                 ScrollView {
                     Text(report)
@@ -568,7 +580,19 @@ struct ChatDetailView: View {
             isLayoutDiagnosticsEnabled = false
             layoutFrames.removeAll()
         }) {
-            ChatLayoutInspectorSheet(report: layoutInspectorReport, theme: theme)
+            ChatLayoutInspectorSheet(
+                report: layoutInspectorReport,
+                theme: theme,
+                isDiagnosticsEnabled: $isLayoutDiagnosticsEnabled,
+                onDiagnosticsChanged: { enabled in
+                    layoutFrames.removeAll()
+                    guard enabled else { return }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                        guard isLayoutDiagnosticsEnabled else { return }
+                        layoutInspectorReport = makeLayoutInspectorReport()
+                    }
+                }
+            )
         }
         .sheet(isPresented: $showingPhotoPicker) {
             PhotoLibraryPicker { images in
