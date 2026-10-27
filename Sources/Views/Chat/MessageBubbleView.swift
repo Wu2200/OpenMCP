@@ -329,13 +329,7 @@ struct MessageBubbleView: View {
         let innerContentWidth = max(180, bubbleColumnWidth - 24)
         let scrollInteracting = streamingState.isScrollInteracting
 
-        return HStack(alignment: .top, spacing: 6) {
-            compactAvatar(isUser: false)
-                .onTapGesture {
-                    onSelectToggle?()
-                }
-
-            VStack(alignment: .leading, spacing: 6) {
+        return VStack(alignment: .leading, spacing: 6) {
                 if isEditing {
                     editEditorBox(allowResend: false)
                         .frame(width: bubbleColumnWidth)
@@ -429,13 +423,21 @@ struct MessageBubbleView: View {
                     }
                 }
             }
-            .frame(width: bubbleColumnWidth, alignment: .leading)
-            .modifier(ChatLayoutProbe(identifier: "assistantColumn|\(turn.id)"))
         }
-        .modifier(ChatLayoutProbe(identifier: "assistantHStackContent|\(turn.id)"))
+        .frame(width: bubbleColumnWidth, alignment: .leading)
+        .modifier(ChatLayoutProbe(identifier: "assistantColumn|\(turn.id)"))
+        .padding(.leading, 30)
+        .modifier(ChatLayoutProbe(identifier: "assistantRowContent|\(turn.id)"))
         .frame(width: availableWidth, alignment: .leading)
         .fixedSize(horizontal: false, vertical: true)
-        .modifier(ChatLayoutProbe(identifier: "assistantHStack|\(turn.id)"))
+        .overlay(alignment: .topLeading) {
+            compactAvatar(isUser: false)
+                .frame(width: 24, height: 26, alignment: .topLeading)
+                .onTapGesture {
+                    onSelectToggle?()
+                }
+        }
+        .modifier(ChatLayoutProbe(identifier: "assistantRow|\(turn.id)"))
     }
 
     private func compactAvatar(isUser: Bool) -> some View {
