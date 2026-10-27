@@ -113,28 +113,31 @@ struct ToolCallSummaryGroupView: View {
             if isGroupExpanded {
                 let firstDisplayedIndex = isShowingAllCalls ? 0 : max(0, toolCalls.count - 4)
 
-                HStack(alignment: .top, spacing: 8) {
+                VStack(alignment: .leading, spacing: 5) {
+                    ForEach(firstDisplayedIndex..<toolCalls.count, id: \.self) { index in
+                        ToolCallCardView(toolCall: toolCalls[index], theme: theme, stepNumber: index + 1)
+                    }
+
+                    if toolCalls.count > 4 {
+                        Button {
+                            isShowingAllCalls.toggle()
+                        } label: {
+                            Label(
+                                isShowingAllCalls ? "收起至最近 4 次工具调用" : "显示全部 \(toolCalls.count) 次工具调用",
+                                systemImage: isShowingAllCalls ? "arrow.down" : "arrow.up"
+                            )
+                            .font(.system(size: 10.5, weight: .semibold))
+                            .foregroundColor(theme.accent)
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.top, 2)
+                    }
+                }
+                .padding(.leading, 8)
+                .overlay(alignment: .leading) {
                     Rectangle()
                         .fill(theme.border)
                         .frame(width: 1)
-
-                    LazyVStack(alignment: .leading, spacing: 8) {
-                        ForEach(firstDisplayedIndex..<toolCalls.count, id: \.self) { index in
-                            ToolCallCardView(toolCall: toolCalls[index], theme: theme, stepNumber: index + 1)
-                        }
-
-                        if !isShowingAllCalls && firstDisplayedIndex > 0 {
-                            Button {
-                                isShowingAllCalls = true
-                            } label: {
-                                Label("显示全部 \(toolCalls.count) 次工具调用", systemImage: "arrow.up")
-                                    .font(.system(size: 10.5, weight: .semibold))
-                                    .foregroundColor(theme.accent)
-                            }
-                            .buttonStyle(.plain)
-                            .padding(.top, 2)
-                        }
-                    }
                 }
                 .padding(.leading, 7)
             }
