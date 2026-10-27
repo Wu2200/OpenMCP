@@ -114,12 +114,15 @@ struct ChatDetailView: View {
     }
 
     private var visibleTurns: [MessageDisplayTurn] {
-        let turns = displayTurns
-        return Array(turns.suffix(visibleHistoryLimit))
+        Array(displayTurns.suffix(visibleHistoryLimit))
     }
 
     private var hiddenTurnCount: Int {
         max(0, displayTurns.count - visibleHistoryLimit)
+    }
+
+    private var isShowingEntireHistory: Bool {
+        visibleHistoryLimit >= displayTurns.count
     }
 
     private var isShowingEntireHistory: Bool {
@@ -526,7 +529,7 @@ struct ChatDetailView: View {
     }
 
     private func makeLayoutInspectorReport() -> String {
-        let turns = Array(displayTurns.suffix(8))
+        let turns = Array(visibleTurns.suffix(8))
         var lines = [
             "OpenMCP 对话布局诊断报告",
             "采集时间：\(ISO8601DateFormatter().string(from: Date()))",
