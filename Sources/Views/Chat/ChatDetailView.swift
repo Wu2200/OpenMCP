@@ -425,11 +425,7 @@ struct ChatDetailView: View {
                         .environment(\.chatLayoutDiagnosticsEnabled, isLayoutDiagnosticsEnabled)
                         .coordinateSpace(name: ChatLayoutCoordinateSpace.name)
                         .onPreferenceChange(ChatLayoutFramesPreferenceKey.self) { samples in
-                            var updatedFrames: [String: CGRect] = [:]
-                            for sample in samples {
-                                updatedFrames[sample.identifier] = sample.frame
-                            }
-                            layoutFrames = updatedFrames
+                            layoutFrames = samples
                         }
                         .scrollDismissesKeyboard(.interactively)
                         .onChange(of: currentConversation.messages.count) { _ in
