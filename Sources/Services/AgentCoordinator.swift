@@ -222,6 +222,8 @@ class AgentCoordinator: ObservableObject {
     }
     @Published var errorMessage: String? = nil
     @Published var thinkingStartTime: Date? = nil
+    @Published private(set) var contextTokenCount: Int = 0
+    @Published private(set) var isContextTokenCountEstimated: Bool = true
 
     let streamingState = StreamingTurnState()
 
@@ -241,6 +243,11 @@ class AgentCoordinator: ObservableObject {
     private func publishActivity(_ label: String?) {
         guard let conversationId = activeConversationId else { return }
         GenerationActivityTracker.shared.set(label, for: conversationId)
+    }
+
+    func setContextTokenCount(_ count: Int, estimated: Bool) {
+        contextTokenCount = max(0, count)
+        isContextTokenCountEstimated = estimated
     }
 
     private func retainForActiveGeneration(_ conversationId: String) {
@@ -518,6 +525,9 @@ class AgentCoordinator: ObservableObject {
                             self.publishActivity("深度思考中")
                         }
                         self.streamingState.pushPartialReasoning(partialReasoning)
+                    },
+                    onPromptTokenCount: { [weak self] count, estimated in
+                        self?.setContextTokenCount(count, estimated: estimated)
                     }
                 )
 
@@ -665,6 +675,9 @@ class AgentCoordinator: ObservableObject {
                                     self.publishActivity("深度思考中")
                                 }
                                 self.streamingState.pushPartialReasoning(partialReasoning)
+                            },
+                            onPromptTokenCount: { [weak self] count, estimated in
+                                self?.setContextTokenCount(count, estimated: estimated)
                             }
                         ), let recText = recovered.content, !recText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                             let combinedReasoning = recovered.reasoning ?? reasoning
