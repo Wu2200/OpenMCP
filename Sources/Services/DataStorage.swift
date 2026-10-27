@@ -262,6 +262,7 @@ class DataStorage: ObservableObject {
     func clearConversationMessages(id: String) {
         guard let idx = conversations.firstIndex(where: { $0.id == id }) else { return }
         conversations[idx].messages.removeAll()
+        ContextTokenStore.shared.remove(id)
         conversations[idx].updatedAt = Date()
         saveConversations()
     }
