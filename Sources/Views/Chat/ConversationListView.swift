@@ -362,9 +362,7 @@ struct ConversationListView: View {
 
                                 if let label = activity.labels[conv.id] {
                                     HStack(spacing: 4) {
-                                        ProgressView()
-                                            .controlSize(.mini)
-                                            .tint(theme.accent)
+                                        ConversationActivityIndicator(color: UIColor(theme.accent))
                                             .frame(width: 10, height: 10)
                                         Text(label)
                                             .font(.system(size: 11, weight: .semibold))
@@ -487,6 +485,30 @@ struct ConversationListView: View {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         let newConv = storage.addConversation()
         navigationPath.append(newConv.id)
+    }
+}
+
+private struct ConversationActivityIndicator: UIViewRepresentable {
+    let color: UIColor
+
+    func makeUIView(context: Context) -> UIActivityIndicatorView {
+        let indicator = UIActivityIndicatorView(style: .medium)
+        indicator.color = color
+        indicator.hidesWhenStopped = false
+        indicator.transform = CGAffineTransform(scaleX: 0.55, y: 0.55)
+        indicator.startAnimating()
+        return indicator
+    }
+
+    func updateUIView(_ indicator: UIActivityIndicatorView, context: Context) {
+        indicator.color = color
+        if !indicator.isAnimating {
+            indicator.startAnimating()
+        }
+    }
+
+    static func dismantleUIView(_ indicator: UIActivityIndicatorView, coordinator: ()) {
+        indicator.stopAnimating()
     }
 }
 
