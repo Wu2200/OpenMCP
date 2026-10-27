@@ -403,6 +403,11 @@ struct ChatDetailView: View {
                                         onUserTouchBegan: {
                                             coordinator.streamingState.setDisplayPaused(true)
                                         },
+                                        onUserInteraction: {
+                                            if autoFollowOutput {
+                                                autoFollowOutput = false
+                                            }
+                                        },
                                         onUserDragUp: {
                                             if autoFollowOutput {
                                                 autoFollowOutput = false
@@ -495,9 +500,6 @@ struct ChatDetailView: View {
             isChatVisible = true
             visibleHistoryLimit = 40
             coordinator.streamingState.setDisplayPaused(false)
-            if coordinator.isGenerating && autoFollowOutput {
-                manualScrollTrigger &+= 1
-            }
         }
         .onDisappear {
             isChatVisible = false
@@ -1409,6 +1411,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
     var isViewActive: Bool
     var manualScrollTrigger: Int
     var onUserTouchBegan: () -> Void
+    var onUserInteraction: () -> Void
     var onUserDragUp: () -> Void
     var onReachBottom: () -> Void
     var onScrollSettled: () -> Void
@@ -1420,6 +1423,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
             isViewActive: isViewActive,
             manualScrollTrigger: manualScrollTrigger,
             onUserTouchBegan: onUserTouchBegan,
+            onUserInteraction: onUserInteraction,
             onUserDragUp: onUserDragUp,
             onReachBottom: onReachBottom,
             onScrollSettled: onScrollSettled
@@ -1441,6 +1445,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
         coord.autoFollowOutput = autoFollowOutput
         coord.isViewActive = isViewActive
         coord.onUserTouchBegan = onUserTouchBegan
+        coord.onUserInteraction = onUserInteraction
         coord.onUserDragUp = onUserDragUp
         coord.onReachBottom = onReachBottom
         coord.onScrollSettled = onScrollSettled
@@ -1463,10 +1468,13 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
                         coord.scrollToBottom(force: false, animated: true)
                     }
                 }
-            } else if !wasViewActive && isViewActive && autoFollowOutput {
+            } else if !wasViewActive && isViewActive && isGenerating && autoFollowOutput && coord.isNearBottom() {
                 coord.scheduleBottomFollow()
-            } else if wasGenerating != isGenerating && autoFollowOutput {
+            } else if !wasGenerating && isGenerating && autoFollowOutput && coord.isNearBottom() {
                 coord.scheduleBottomFollow()
+            }
+            if isViewActive {
+                coord.positionAtBottomInitiallyIfNeeded()
             }
         }
     }
@@ -1477,6 +1485,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
         var isViewActive: Bool
         var manualScrollTrigger: Int
         var onUserTouchBegan: () -> Void
+        var onUserInteraction: () -> Void
         var onUserDragUp: () -> Void
         var onReachBottom: () -> Void
         var onScrollSettled: () -> Void
@@ -1489,6 +1498,8 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
         private var animatedTargetY: CGFloat = 0
         private var userScrollActive = false
         private var panInitialOffsetY: CGFloat = 0
+        private var contentTapRecognizer: UITapGestureRecognizer?
+        private var hasPerformedInitialPositioning = false
 
         init(
             isGenerating: Bool,
@@ -1496,6 +1507,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
             isViewActive: Bool,
             manualScrollTrigger: Int,
             onUserTouchBegan: @escaping () -> Void,
+            onUserInteraction: @escaping () -> Void,
             onUserDragUp: @escaping () -> Void,
             onReachBottom: @escaping () -> Void,
             onScrollSettled: @escaping () -> Void
@@ -1505,6 +1517,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
             self.isViewActive = isViewActive
             self.manualScrollTrigger = manualScrollTrigger
             self.onUserTouchBegan = onUserTouchBegan
+            self.onUserInteraction = onUserInteraction
             self.onUserDragUp = onUserDragUp
             self.onReachBottom = onReachBottom
             self.onScrollSettled = onScrollSettled
@@ -1515,10 +1528,23 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
             while let candidate = current {
                 if let sv = candidate as? UIScrollView {
                     if attachedScrollView !== sv {
+                        if let previousScrollView = attachedScrollView {
+                            previousScrollView.panGestureRecognizer.removeTarget(self, action: #selector(handlePan(_:)))
+                            if let tapRecognizer = contentTapRecognizer {
+                                previousScrollView.removeGestureRecognizer(tapRecognizer)
+                            }
+                        }
                         attachedScrollView = sv
                         sv.delaysContentTouches = true
                         sv.canCancelContentTouches = true
                         sv.panGestureRecognizer.addTarget(self, action: #selector(handlePan(_:)))
+                        let tapRecognizer = UITapGestureRecognizer(target: self, action: #selector(handleContentTap(_:)))
+                        tapRecognizer.cancelsTouchesInView = false
+                        tapRecognizer.delaysTouchesBegan = false
+                        tapRecognizer.delaysTouchesEnded = false
+                        tapRecognizer.delegate = self
+                        sv.addGestureRecognizer(tapRecognizer)
+                        contentTapRecognizer = tapRecognizer
                         observeContentSize(of: sv)
                     }
                     break
@@ -1530,6 +1556,17 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
         func cancelActiveAnimation() {
             followAnimator?.stopAnimation(true)
             followAnimator = nil
+        }
+
+        func isNearBottom(tolerance: CGFloat = 72) -> Bool {
+            guard let scrollView = attachedScrollView else { return false }
+            return bottomOffset(for: scrollView) - scrollView.contentOffset.y <= tolerance
+        }
+
+        func positionAtBottomInitiallyIfNeeded() {
+            guard !hasPerformedInitialPositioning else { return }
+            hasPerformedInitialPositioning = true
+            scheduleBottomFollow()
         }
 
         func scrollToBottom(force: Bool = false, animated: Bool = true) {
@@ -1610,23 +1647,33 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
             contentSizeObservation = scrollView.observe(\.contentSize, options: [.new]) { [weak self] sv, _ in
                 guard let self = self else { return }
                 let newHeight = sv.contentSize.height
-                let heightDelta = newHeight - self.lastObservedHeight
-
-                if self.userScrollActive || sv.isTracking || sv.isDragging || sv.isDecelerating {
-                    self.lastObservedHeight = newHeight
-                    return
-                }
-
-                guard self.isViewActive, self.autoFollowOutput else {
-                    self.lastObservedHeight = newHeight
-                    return
-                }
-
+                let previousHeight = self.lastObservedHeight
+                let heightDelta = newHeight - previousHeight
                 self.lastObservedHeight = newHeight
+
                 guard abs(heightDelta) > 0.5 else { return }
+                guard self.isViewActive, self.isGenerating, self.autoFollowOutput else { return }
                 guard !self.userScrollActive, !sv.isTracking, !sv.isDragging, !sv.isDecelerating else { return }
+
+                let previousBottomOffset = max(
+                    -sv.adjustedContentInset.top,
+                    previousHeight - sv.bounds.height + sv.adjustedContentInset.bottom
+                )
+                guard previousBottomOffset - sv.contentOffset.y <= 72 else { return }
                 self.scheduleBottomFollow()
             }
+        }
+
+        @objc private func handleContentTap(_ recognizer: UITapGestureRecognizer) {
+            guard recognizer.state == .ended else { return }
+            onUserInteraction()
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool {
+            true
         }
 
         @objc private func handlePan(_ recognizer: UIPanGestureRecognizer) {
