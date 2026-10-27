@@ -470,24 +470,9 @@ class AgentCoordinator: ObservableObject {
         thinkingStartTime = Date()
         statusText = "思考中"
 
-        var openAITools: [[String: Any]] = []
-        var toolServerMap: [String: (server: MCPServer, originalToolName: String)] = [:]
-
-        for server in servers where server.isEnabled {
-            for tool in server.tools where tool.isEnabled {
-                let safeName = "\(server.id.prefix(6))_\(tool.name)".replacingOccurrences(of: "-", with: "_")
-                toolServerMap[safeName] = (server, tool.rawName)
-                let schemaObj = (try? JSONSerialization.jsonObject(with: Data(tool.inputSchemaJSON.utf8))) as? [String: Any] ?? ["type": "object", "properties": [:]]
-                openAITools.append([
-                    "type": "function",
-                    "function": [
-                        "name": safeName,
-                        "description": "[\(server.name)] \(tool.description)",
-                        "parameters": schemaObj
-                    ]
-                ])
-            }
-        }
+        let preparedTools = OpenAIService.shared.prepareTools(servers: servers)
+        let openAITools = preparedTools.definitions
+        let toolServerMap = preparedTools.serverMap
 
         var stepIndex = 0
 
