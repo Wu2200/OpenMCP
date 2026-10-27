@@ -124,7 +124,6 @@ struct ReasoningFoldCardView: View {
             .font(.system(size: 12.5))
             .foregroundColor(theme.secondaryText)
             .lineSpacing(3)
-            .textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
             .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 10)
