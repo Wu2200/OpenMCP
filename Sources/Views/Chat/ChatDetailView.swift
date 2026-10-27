@@ -187,7 +187,6 @@ struct ChatDetailView: View {
                                                     messageId: turn.primaryMessageId,
                                                     newContent: newContent
                                                 )
-                                                refreshContextTokenCount(force: true)
                                             },
                                             onEditAndResend: { newContent in
                                                 dismissKeyboard()
@@ -342,7 +341,6 @@ struct ChatDetailView: View {
         }
         .onAppear {
             isChatVisible = true
-            refreshContextTokenCount()
             coordinator.streamingState.setDisplayPaused(false)
             if coordinator.isGenerating && autoFollowOutput {
                 manualScrollTrigger &+= 1
@@ -351,18 +349,6 @@ struct ChatDetailView: View {
         .onDisappear {
             isChatVisible = false
             coordinator.streamingState.setDisplayPaused(false)
-        }
-        .onChange(of: currentConversation.messages.count) { _ in
-            refreshContextTokenCount()
-        }
-        .onChange(of: coordinator.isGenerating) { _ in
-            refreshContextTokenCount()
-        }
-        .onChange(of: effectiveSettings) { _ in
-            refreshContextTokenCount(force: true)
-        }
-        .onChange(of: storage.servers) { _ in
-            refreshContextTokenCount(force: true)
         }
         .navigationTitle(currentConversation.title)
         .navigationBarTitleDisplayMode(.inline)
@@ -780,7 +766,12 @@ struct ChatDetailView: View {
                 }
 
                 if !currentConversation.messages.isEmpty {
-                    ContextTokenBadge(conversationId: conversationId, theme: theme)
+                    ContextTokenBadge(
+                        conversationId: conversationId,
+                        messageCount: currentConversation.messages.count,
+                        signature: OpenAIService.shared.contextSignature(settings: effectiveSettings, servers: storage.servers),
+                        theme: theme
+                    )
                 }
 
                 Spacer(minLength: 6)
@@ -1001,28 +992,6 @@ struct ChatDetailView: View {
         .presentationDetents([.medium, .large])
     }
 
-    private func refreshContextTokenCount(force: Bool = false) {
-        guard !coordinator.isGenerating else { return }
-        let messageCount = currentConversation.messages.count
-        if !force,
-           let entry = ContextTokenStore.shared.entries[conversationId],
-           !entry.estimated,
-           entry.messageCount == messageCount {
-            return
-        }
-        let tools = OpenAIService.shared.prepareTools(servers: storage.servers).definitions
-        ContextTokenStore.shared.set(
-            OpenAIService.shared.estimatePromptTokens(
-                settings: effectiveSettings,
-                messages: currentConversation.messages,
-                tools: tools.isEmpty ? nil : tools
-            ),
-            estimated: true,
-            messageCount: messageCount,
-            for: conversationId
-        )
-    }
-
     private func centerTurnForEditing(_ turnId: String, using proxy: ScrollViewProxy) {
         pendingEditScrollTurnId = turnId
         if isKeyboardVisible {
@@ -1094,6 +1063,8 @@ struct ChatDetailView: View {
 private struct ContextTokenBadge: View {
     @ObservedObject var store = ContextTokenStore.shared
     let conversationId: String
+    let messageCount: Int
+    let signature: String
     let theme: AppThemePalette
 
     private func compactText(_ value: Int) -> String {
@@ -1110,11 +1081,13 @@ private struct ContextTokenBadge: View {
     }
 
     var body: some View {
-        if let entry = store.entries[conversationId] {
+        if let entry = store.entries[conversationId],
+           entry.messageCount == messageCount,
+           entry.signature == signature {
             HStack(spacing: 4) {
                 Image(systemName: "square.stack.3d.up")
                     .font(.system(size: 10.5, weight: .semibold))
-                Text("\(entry.estimated ? "≈" : "")\(compactText(entry.count))")
+                Text(compactText(entry.count))
                     .font(.system(size: 11.5, weight: .semibold, design: .rounded).monospacedDigit())
                     .lineLimit(1)
             }
@@ -1125,7 +1098,7 @@ private struct ContextTokenBadge: View {
             .clipShape(Capsule())
             .fixedSize()
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("当前上下文\(entry.estimated ? "估算约" : "") \(entry.count.formatted()) 个 Token")
+            .accessibilityLabel("当前上下文 \(entry.count.formatted()) 个 Token")
         }
     }
 }
