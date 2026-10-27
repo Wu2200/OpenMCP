@@ -210,12 +210,8 @@ struct ToolCallCardView: View {
                             .font(.system(size: 10, weight: .semibold))
                             .foregroundColor(theme.secondaryText)
 
-                        let displayArgs = toolCall.arguments.count > 2000
-                            ? String(toolCall.arguments.prefix(2000)) + "\n...(参数过长已省略)..."
-                            : toolCall.arguments
-
                         ScrollView(.vertical, showsIndicators: true) {
-                            Text(displayArgs)
+                            Text(toolCall.arguments)
                                 .font(.system(size: 10.5, design: .monospaced))
                                 .foregroundColor(theme.primaryText)
                                 .textSelection(.enabled)
@@ -247,12 +243,8 @@ struct ToolCallCardView: View {
                                 .buttonStyle(.plain)
                             }
 
-                            let displayRes = res.count > 2000
-                                ? String(res.prefix(2000)) + "\n...(结果过长已省略)..."
-                                : res
-
                             ScrollView(.vertical, showsIndicators: true) {
-                                Text(displayRes)
+                                Text(res)
                                     .font(.system(size: 10.5, design: .monospaced))
                                     .foregroundColor(theme.primaryText)
                                     .textSelection(.enabled)
