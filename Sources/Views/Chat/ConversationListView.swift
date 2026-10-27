@@ -362,13 +362,10 @@ struct ConversationListView: View {
 
                                 if let label = activity.labels[conv.id] {
                                     HStack(spacing: 4) {
-                                        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { context in
-                                            Circle()
-                                                .trim(from: 0.12, to: 0.78)
-                                                .stroke(theme.accent, style: StrokeStyle(lineWidth: 1.7, lineCap: .round))
-                                                .rotationEffect(.degrees(context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 0.9) / 0.9 * 360))
-                                                .frame(width: 10, height: 10)
-                                        }
+                                        ProgressView()
+                                            .controlSize(.mini)
+                                            .tint(theme.accent)
+                                            .frame(width: 10, height: 10)
                                         Text(label)
                                             .font(.system(size: 11, weight: .semibold))
                                     }
