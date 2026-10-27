@@ -667,21 +667,6 @@ class OpenAIService {
         return (definitions, serverMap)
     }
 
-    func contextSignature(settings: OpenAISettings, servers: [MCPServer]) -> String {
-        var parts: [String] = [settings.baseURL, settings.modelName, settings.systemPrompt]
-        for server in servers where server.isEnabled {
-            for tool in server.tools where tool.isEnabled {
-                parts.append("\(server.id)/\(tool.name)")
-            }
-        }
-        var hash: UInt64 = 14695981039346656037
-        for byte in parts.joined(separator: "\u{1F}").utf8 {
-            hash ^= UInt64(byte)
-            hash = hash &* 1099511628211
-        }
-        return String(hash, radix: 16)
-    }
-
     private func contextTokenTotal(from usage: [String: Any]) -> Int? {
         guard let promptValue = usage["prompt_tokens"] ?? usage["input_tokens"],
               let prompt = tokenCount(from: promptValue),
