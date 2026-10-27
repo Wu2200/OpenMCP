@@ -60,6 +60,8 @@ class DataStorage: ObservableObject {
     private let settingsKey = "OpenMCP_OpenAISettings"
     private let serversKey = "OpenMCP_MCPServers"
     private let conversationsKey = "OpenMCP_Conversations"
+    private let persistenceQueue = DispatchQueue(label: "OpenMCP.DataStorage.persistence", qos: .utility)
+    private var pendingServersSave: DispatchWorkItem?
 
     private init() {
         let loadedSettings: OpenAISettings
@@ -128,11 +130,18 @@ class DataStorage: ObservableObject {
     }
 
     func saveServers() {
-        var persistedServers = servers
-        Self.saveServerCredentials(&persistedServers)
-        if let data = try? JSONEncoder().encode(persistedServers) {
-            UserDefaults.standard.set(data, forKey: serversKey)
+        pendingServersSave?.cancel()
+        let snapshot = servers
+        let key = serversKey
+        let item = DispatchWorkItem {
+            var persistedServers = snapshot
+            DataStorage.saveServerCredentials(&persistedServers)
+            if let data = try? JSONEncoder().encode(persistedServers) {
+                UserDefaults.standard.set(data, forKey: key)
+            }
         }
+        pendingServersSave = item
+        persistenceQueue.asyncAfter(deadline: .now() + 0.25, execute: item)
     }
 
     private static func saveSettingsCredentials(_ value: inout OpenAISettings) {
