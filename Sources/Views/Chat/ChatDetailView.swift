@@ -187,7 +187,7 @@ struct ChatDetailView: View {
                                                     messageId: turn.primaryMessageId,
                                                     newContent: newContent
                                                 )
-                                                refreshContextTokenCount()
+                                                refreshContextTokenCount(force: true)
                                             },
                                             onEditAndResend: { newContent in
                                                 dismissKeyboard()
@@ -359,10 +359,10 @@ struct ChatDetailView: View {
             refreshContextTokenCount()
         }
         .onChange(of: effectiveSettings) { _ in
-            refreshContextTokenCount()
+            refreshContextTokenCount(force: true)
         }
         .onChange(of: storage.servers) { _ in
-            refreshContextTokenCount()
+            refreshContextTokenCount(force: true)
         }
         .navigationTitle(currentConversation.title)
         .navigationBarTitleDisplayMode(.inline)
@@ -1001,8 +1001,15 @@ struct ChatDetailView: View {
         .presentationDetents([.medium, .large])
     }
 
-    private func refreshContextTokenCount() {
+    private func refreshContextTokenCount(force: Bool = false) {
         guard !coordinator.isGenerating else { return }
+        let messageCount = currentConversation.messages.count
+        if !force,
+           let entry = ContextTokenStore.shared.entries[conversationId],
+           !entry.estimated,
+           entry.messageCount == messageCount {
+            return
+        }
         let tools = OpenAIService.shared.prepareTools(servers: storage.servers).definitions
         ContextTokenStore.shared.set(
             OpenAIService.shared.estimatePromptTokens(
@@ -1011,6 +1018,7 @@ struct ChatDetailView: View {
                 tools: tools.isEmpty ? nil : tools
             ),
             estimated: true,
+            messageCount: messageCount,
             for: conversationId
         )
     }
