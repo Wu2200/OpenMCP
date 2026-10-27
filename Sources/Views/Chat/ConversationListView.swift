@@ -489,12 +489,23 @@ struct ConversationListView: View {
 
 private struct ConversationActivityIndicator: View {
     let color: Color
+    @State private var isVisible = false
+    @State private var animationRevision = 0
 
     var body: some View {
         ProgressView()
             .controlSize(.mini)
             .tint(color)
             .frame(width: 10, height: 10)
+            .id(animationRevision)
+            .onAppear {
+                guard !isVisible else { return }
+                isVisible = true
+                animationRevision &+= 1
+            }
+            .onDisappear {
+                isVisible = false
+            }
     }
 }
 
