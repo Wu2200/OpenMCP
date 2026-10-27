@@ -181,6 +181,7 @@ struct MessageBubbleView: View {
             }
         }
         .frame(width: availableWidth)
+        .modifier(ChatLayoutProbe(identifier: "row|\(turn.role.rawValue)|\(turn.id)"))
         .sheet(item: $previewingFileAttachment) { fileAtt in
             AttachmentFilePreviewSheet(attachment: fileAtt, theme: theme)
         }
@@ -263,6 +264,7 @@ struct MessageBubbleView: View {
                                 RoundedRectangle(cornerRadius: 15, style: .continuous)
                                     .stroke(isSelected ? theme.accent.opacity(0.55) : theme.accent.opacity(0.18), lineWidth: 1)
                             )
+                            .modifier(ChatLayoutProbe(identifier: "userText|\(turn.id)"))
                             .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
                             .onTapGesture {
                                 onSelectToggle?()
@@ -371,6 +373,7 @@ struct MessageBubbleView: View {
                             if !turn.toolCalls.isEmpty {
                                 ToolCallSummaryGroupView(toolCalls: turn.toolCalls, theme: theme)
                                     .frame(width: innerContentWidth)
+                                    .modifier(ChatLayoutProbe(identifier: "toolSummary|\(turn.id)"))
                             }
 
                             if !currentReasoning.isEmpty {
@@ -382,6 +385,7 @@ struct MessageBubbleView: View {
                                     theme: theme,
                                     width: innerContentWidth
                                 )
+                                .modifier(ChatLayoutProbe(identifier: "reasoning|\(turn.id)"))
                             }
 
                             if !currentText.isEmpty {
@@ -389,9 +393,11 @@ struct MessageBubbleView: View {
                                     content: currentText,
                                     theme: theme,
                                     contentWidth: innerContentWidth,
-                                    isStreaming: isActiveGeneratingTurn
+                                    isStreaming: isActiveGeneratingTurn,
+                                    diagnosticIDPrefix: turn.id
                                 )
                                 .frame(width: innerContentWidth, alignment: .leading)
+                                .modifier(ChatLayoutProbe(identifier: "markdown|\(turn.id)"))
                             } else if isActiveGeneratingTurn && currentReasoning.isEmpty {
                                 ThinkingStatusView(
                                     statusText: statusText,
@@ -411,6 +417,7 @@ struct MessageBubbleView: View {
                             RoundedRectangle(cornerRadius: 15, style: .continuous)
                                 .stroke(isSelected ? theme.accent.opacity(0.45) : theme.border, lineWidth: 1)
                         )
+                        .modifier(ChatLayoutProbe(identifier: "assistantCard|\(turn.id)"))
                         .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
                         .onTapGesture {
                             onSelectToggle?()
