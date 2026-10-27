@@ -85,8 +85,11 @@ struct ChatLayoutInspectorSheet: View {
                     .buttonStyle(.borderedProminent)
                     .tint(theme.accent)
 
-                    ShareLink(item: report) {
-                        Label("发送报告", systemImage: "square.and.arrow.up")
+                    Button {
+                        UIPasteboard.general.string = report
+                        isCopied = true
+                    } label: {
+                        Label("分享报告", systemImage: "square.and.arrow.up")
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
