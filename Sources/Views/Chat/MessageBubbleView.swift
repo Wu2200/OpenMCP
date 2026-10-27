@@ -329,13 +329,18 @@ struct MessageBubbleView: View {
         let innerContentWidth = max(180, bubbleColumnWidth - 24)
         let scrollInteracting = streamingState.isScrollInteracting
 
-        return HStack(alignment: .top, spacing: 6) {
+        return ZStack(alignment: .topLeading) {
             compactAvatar(isUser: false)
                 .onTapGesture {
                     onSelectToggle?()
                 }
+                .frame(width: 24, height: 26, alignment: .topLeading)
 
-            VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top, spacing: 6) {
+                Color.clear
+                    .frame(width: 24, height: 26)
+
+                VStack(alignment: .leading, spacing: 6) {
                 if isEditing {
                     editEditorBox(allowResend: false)
                         .frame(width: bubbleColumnWidth)
