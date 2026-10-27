@@ -96,7 +96,9 @@ struct ChatLayoutInspectorSheet: View {
                     .buttonStyle(.borderedProminent)
                     .tint(theme.accent)
 
-                    ShareLink(item: report) {
+                    Button {
+                        isSharing = true
+                    } label: {
                         Label("发送报告", systemImage: "square.and.arrow.up")
                             .frame(maxWidth: .infinity)
                     }
