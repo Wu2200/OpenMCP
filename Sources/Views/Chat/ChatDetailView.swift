@@ -138,7 +138,7 @@ struct ChatDetailView: View {
     @State private var pendingDeleteTurn: MessageDisplayTurn? = nil
     @State private var showingClearConversationAlert: Bool = false
     @State private var showingLayoutInspector: Bool = false
-    @State private var isLayoutDiagnosticsEnabled: Bool = false
+    @AppStorage("chatLayoutDiagnosticsEnabled") private var isLayoutDiagnosticsEnabled = false
     @State private var layoutInspectorReport: String = ""
     @State private var layoutFrames: [String: CGRect] = [:]
     @State private var visibleHistoryLimit: Int = 40
@@ -577,7 +577,6 @@ struct ChatDetailView: View {
             LogViewerSheet(theme: theme, filterConversationId: conversationId)
         }
         .sheet(isPresented: $showingLayoutInspector, onDismiss: {
-            isLayoutDiagnosticsEnabled = false
             layoutFrames.removeAll()
         }) {
             ChatLayoutInspectorSheet(
