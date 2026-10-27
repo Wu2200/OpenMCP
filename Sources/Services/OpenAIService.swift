@@ -98,7 +98,9 @@ class OpenAIService {
             payload["tools"] = tools
         }
         payload["stream_options"] = ["include_usage": true]
-        await onPromptTokenCount?(estimatePromptTokens(settings: settings, messages: messages, tools: tools), true)
+        let messageTokens = estimateMessageTokens(openAIMessages)
+        let toolsKey = toolsCalibrationKey(settings: settings, tools: tools)
+        await onPromptTokenCount?(max(1, messageTokens + estimatedToolTokens(tools: tools, key: toolsKey)), true)
 
         let payloadData = try JSONSerialization.data(withJSONObject: payload)
         let profileName = settings.activeProfile?.name ?? "默认配置"
@@ -197,6 +199,9 @@ class OpenAIService {
                    let count = contextTokenTotal(from: usage) {
                     await onPromptTokenCount?(count, false)
                 }
+                if let usage = json["usage"] as? [String: Any] {
+                    recordToolOverhead(usage: usage, messageTokens: messageTokens, toolsKey: toolsKey)
+                }
                 let parsed = try parseNonStreamingJSON(json)
                 let finishReason = ((json["choices"] as? [[String: Any]])?.first?["finish_reason"] as? String) ?? "non_stream_json"
                 if let r = parsed.reasoning, !r.isEmpty {
@@ -287,6 +292,7 @@ class OpenAIService {
 
             let usageObject = (json["usage"] as? [String: Any]) ?? ((json["response"] as? [String: Any])?["usage"] as? [String: Any])
             if let usage = usageObject {
+                recordToolOverhead(usage: usage, messageTokens: messageTokens, toolsKey: toolsKey)
                 if let count = contextTokenTotal(from: usage) {
                     await onPromptTokenCount?(count, false)
                 }
@@ -548,6 +554,9 @@ class OpenAIService {
                    let count = contextTokenTotal(from: usage) {
                     await onPromptTokenCount?(count, false)
                 }
+                if let usage = json["usage"] as? [String: Any] {
+                    recordToolOverhead(usage: usage, messageTokens: messageTokens, toolsKey: toolsKey)
+                }
                 let parsed = try parseNonStreamingJSON(json)
                 if let r = parsed.reasoning, !r.isEmpty {
                     await onReasoningUpdate?(r)
@@ -668,11 +677,61 @@ class OpenAIService {
         return (definitions, serverMap)
     }
 
+    private static let measuredToolTokensStorageKey = "OpenMCP_MeasuredToolTokens"
+    private let measuredToolTokensLock = NSLock()
+    private var measuredToolTokensTable: [String: Int] = (UserDefaults.standard.dictionary(forKey: "OpenMCP_MeasuredToolTokens") as? [String: Int]) ?? [:]
+
     func estimatePromptTokens(settings: OpenAISettings, messages: [ChatMessage], tools: [[String: Any]]? = nil) -> Int {
         let openAIMessages = buildOpenAIMessages(settings: settings, messages: messages)
-        let messageTokens = estimatedTokenCount(in: openAIMessages) + openAIMessages.count * 3 + 3
-        let toolTokens = tools.map { estimatedTokenCount(in: $0) } ?? 0
-        return max(1, messageTokens + toolTokens)
+        let toolsKey = toolsCalibrationKey(settings: settings, tools: tools)
+        return max(1, estimateMessageTokens(openAIMessages) + estimatedToolTokens(tools: tools, key: toolsKey))
+    }
+
+    private func estimateMessageTokens(_ openAIMessages: [[String: Any]]) -> Int {
+        estimatedTokenCount(in: openAIMessages) + openAIMessages.count * 3 + 3
+    }
+
+    private func toolsCalibrationKey(settings: OpenAISettings, tools: [[String: Any]]?) -> String? {
+        guard let tools = tools, !tools.isEmpty,
+              let data = try? JSONSerialization.data(withJSONObject: tools, options: [.sortedKeys]) else { return nil }
+        var hash: UInt64 = 14695981039346656037
+        for byte in data {
+            hash ^= UInt64(byte)
+            hash = hash &* 1099511628211
+        }
+        return "\(settings.baseURL)|\(settings.modelName)|\(tools.count)|\(hash)"
+    }
+
+    private func estimatedToolTokens(tools: [[String: Any]]?, key: String?) -> Int {
+        guard let tools = tools, !tools.isEmpty else { return 0 }
+        if let key = key, let measured = measuredToolTokens(for: key) {
+            return measured
+        }
+        return estimatedTokenCount(in: tools)
+    }
+
+    private func measuredToolTokens(for key: String) -> Int? {
+        measuredToolTokensLock.lock()
+        defer { measuredToolTokensLock.unlock() }
+        return measuredToolTokensTable[key]
+    }
+
+    private func recordToolOverhead(usage: [String: Any], messageTokens: Int, toolsKey: String?) {
+        guard let key = toolsKey,
+              let promptValue = usage["prompt_tokens"] ?? usage["input_tokens"],
+              let prompt = tokenCount(from: promptValue),
+              prompt > messageTokens,
+              messageTokens * 5 <= prompt else { return }
+        let measured = prompt - messageTokens
+        measuredToolTokensLock.lock()
+        defer { measuredToolTokensLock.unlock() }
+        guard measuredToolTokensTable[key] != measured else { return }
+        if measuredToolTokensTable[key] == nil, measuredToolTokensTable.count >= 32,
+           let evicted = measuredToolTokensTable.keys.first {
+            measuredToolTokensTable.removeValue(forKey: evicted)
+        }
+        measuredToolTokensTable[key] = measured
+        UserDefaults.standard.set(measuredToolTokensTable, forKey: Self.measuredToolTokensStorageKey)
     }
 
     private func contextTokenTotal(from usage: [String: Any]) -> Int? {
@@ -725,7 +784,7 @@ class OpenAIService {
             }
 
             if asciiWordLength > 0 {
-                tokens += (asciiWordLength + 3) / 4
+                tokens += (asciiWordLength + 5) / 6
                 asciiWordLength = 0
             }
 
@@ -740,7 +799,7 @@ class OpenAIService {
         }
 
         if asciiWordLength > 0 {
-            tokens += (asciiWordLength + 3) / 4
+            tokens += (asciiWordLength + 5) / 6
         }
         tokens += (asciiPunctuationCount + 3) / 4
         return tokens
