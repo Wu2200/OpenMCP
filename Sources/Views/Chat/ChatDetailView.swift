@@ -18,6 +18,9 @@ struct ChatDetailView: View {
     @State private var isKeyboardVisible: Bool = false
     @State private var pendingDeleteTurn: MessageDisplayTurn? = nil
     @State private var showingClearConversationAlert: Bool = false
+    @State private var showingLayoutInspector: Bool = false
+    @State private var layoutInspectorReport: String = ""
+    @State private var layoutFrames: [String: CGRect] = [:]
     @State private var autoFollowOutput: Bool = true
     @State private var manualScrollTrigger: Int = 0
     @State private var isChatVisible: Bool = true
@@ -275,6 +278,10 @@ struct ChatDetailView: View {
                             }
                         }
                         .frame(width: viewportWidth)
+                        .coordinateSpace(name: ChatLayoutCoordinateSpace.name)
+                        .onPreferenceChange(ChatLayoutFramesPreferenceKey.self) { frames in
+                            layoutFrames = frames
+                        }
                         .scrollDismissesKeyboard(.interactively)
                         .onChange(of: currentConversation.messages.count) { _ in
                             if autoFollowOutput {
@@ -370,6 +377,13 @@ struct ChatDetailView: View {
                     }
 
                     Menu {
+                        Button {
+                            layoutInspectorReport = makeLayoutInspectorReport()
+                            showingLayoutInspector = true
+                        } label: {
+                            Label("对话布局检查器", systemImage: "rectangle.dashed")
+                        }
+
                         Button(action: {
                             dismissKeyboard()
                             showingLogViewerSheet = true
@@ -397,6 +411,9 @@ struct ChatDetailView: View {
         }
         .sheet(isPresented: $showingLogViewerSheet) {
             LogViewerSheet(theme: theme, filterConversationId: conversationId)
+        }
+        .sheet(isPresented: $showingLayoutInspector) {
+            ChatLayoutInspectorSheet(report: layoutInspectorReport, theme: theme)
         }
         .sheet(isPresented: $showingPhotoPicker) {
             PhotoLibraryPicker { images in
@@ -464,6 +481,97 @@ struct ChatDetailView: View {
         } message: {
             Text("将清空当前对话中的所有历史消息，此操作不可恢复。")
         }
+    }
+
+    private func makeLayoutInspectorReport() -> String {
+        let turns = Array(displayTurns.suffix(8))
+        var lines = [
+            "OpenMCP 对话布局诊断报告",
+            "对话：\(currentConversation.title)",
+            "采集时间：\(ISO8601DateFormatter().string(from: Date()))",
+            "坐标单位：pt；坐标系：聊天滚动区域。滚动时 y 值可能为负。",
+            "隐私：不包含对话正文、工具参数、工具结果或密钥。",
+            "",
+            "最近 \(turns.count) 条消息布局"
+        ]
+
+        var previousRow: (id: String, frame: CGRect)?
+
+        for (index, turn) in turns.enumerated() {
+            let shortID = String(turn.id.prefix(8))
+            let row = layoutFrames["row|\(turn.role.rawValue)|\(turn.id)"]
+            lines.append("")
+            lines.append("[\(index + 1)] \(turn.role.rawValue) \(shortID)")
+            lines.append("消息行：\(layoutFrameDescription(row))")
+
+            if let row = row, let previous = previousRow {
+                let gap = row.minY - previous.frame.maxY
+                lines.append("与上一消息行间距：\(String(format: "%.1f", gap)) pt\(gap > 24 ? " [偏大]" : "")")
+            }
+            if let row = row {
+                previousRow = (turn.id, row)
+            }
+
+            guard turn.role == .assistant else { continue }
+
+            let card = layoutFrames["assistantCard|\(turn.id)"]
+            lines.append("助手卡片：\(layoutFrameDescription(card))")
+            if let row = row, let card = card {
+                let topGap = card.minY - row.minY
+                let bottomGap = row.maxY - card.maxY
+                lines.append("卡片相对消息行：顶部 \(String(format: "%.1f", topGap)) pt，底部 \(String(format: "%.1f", bottomGap)) pt")
+            }
+
+            var sections: [(String, CGRect)] = []
+            if let frame = layoutFrames["toolSummary|\(turn.id)"] {
+                sections.append(("工具摘要", frame))
+                lines.append("工具摘要：\(layoutFrameDescription(frame))")
+            }
+            if let frame = layoutFrames["reasoning|\(turn.id)"] {
+                sections.append(("思考摘要", frame))
+                lines.append("思考摘要：\(layoutFrameDescription(frame))")
+            }
+            if let frame = layoutFrames["markdown|\(turn.id)"] {
+                sections.append(("Markdown 正文", frame))
+                lines.append("Markdown 正文：\(layoutFrameDescription(frame))")
+            }
+
+            if sections.count > 1 {
+                for sectionIndex in 1..<sections.count {
+                    let gap = sections[sectionIndex].1.minY - sections[sectionIndex - 1].1.maxY
+                    lines.append("\(sections[sectionIndex - 1].0) → \(sections[sectionIndex].0) 间距：\(String(format: "%.1f", gap)) pt\(gap > 24 ? " [偏大]" : "")")
+                }
+            }
+
+            let blockPrefix = "markdownBlock|\(turn.id)|"
+            let blocks = layoutFrames
+                .filter { $0.key.hasPrefix(blockPrefix) }
+                .sorted { $0.value.minY < $1.value.minY }
+            if !blocks.isEmpty {
+                lines.append("Markdown 块（按屏幕顺序）：")
+                for blockIndex in blocks.indices {
+                    let block = blocks[blockIndex]
+                    let blockID = String(block.key.dropFirst(blockPrefix.count))
+                    lines.append("  块 \(blockID)：\(layoutFrameDescription(block.value))")
+                    if blockIndex > 0 {
+                        let previous = blocks[blockIndex - 1].value
+                        let gap = block.value.minY - previous.maxY
+                        lines.append("  块间距：\(String(format: "%.1f", gap)) pt\(gap > 24 ? " [偏大]" : "")")
+                    }
+                }
+            }
+        }
+
+        if layoutFrames.isEmpty {
+            lines.append("\n尚未收到布局测量数据；请关闭检查器，等待聊天内容显示后重新打开。")
+        }
+
+        return lines.joined(separator: "\n")
+    }
+
+    private func layoutFrameDescription(_ frame: CGRect?) -> String {
+        guard let frame = frame else { return "未测得" }
+        return String(format: "x=%.1f y=%.1f w=%.1f h=%.1f", frame.minX, frame.minY, frame.width, frame.height)
     }
 
     private var emptyConversationHero: some View {
