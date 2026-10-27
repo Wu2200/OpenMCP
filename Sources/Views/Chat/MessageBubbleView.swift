@@ -808,7 +808,6 @@ struct CodeBlockCard: View {
                             .foregroundColor(theme.primaryText)
                             .lineSpacing(3)
                             .fixedSize(horizontal: true, vertical: true)
-                            .textSelection(.enabled)
                             .padding(10)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
