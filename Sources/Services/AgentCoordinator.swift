@@ -214,6 +214,7 @@ final class ContextTokenStore: ObservableObject {
     struct Entry: Codable, Equatable {
         var count: Int
         var estimated: Bool
+        var messageCount: Int?
     }
 
     @Published private(set) var entries: [String: Entry]
@@ -229,8 +230,8 @@ final class ContextTokenStore: ObservableObject {
         }
     }
 
-    func set(_ count: Int, estimated: Bool, for conversationId: String) {
-        let entry = Entry(count: max(0, count), estimated: estimated)
+    func set(_ count: Int, estimated: Bool, messageCount: Int, for conversationId: String) {
+        let entry = Entry(count: max(0, count), estimated: estimated, messageCount: messageCount)
         guard entries[conversationId] != entry else { return }
         entries[conversationId] = entry
         persist()
@@ -560,7 +561,12 @@ class AgentCoordinator: ObservableObject {
                         self.streamingState.pushPartialReasoning(partialReasoning)
                     },
                     onPromptTokenCount: { count, estimated in
-                        ContextTokenStore.shared.set(count, estimated: estimated, for: conversationId)
+                        ContextTokenStore.shared.set(
+                            count,
+                            estimated: estimated,
+                            messageCount: contextMessages.count + (estimated ? 0 : 1),
+                            for: conversationId
+                        )
                     }
                 )
 
@@ -710,7 +716,12 @@ class AgentCoordinator: ObservableObject {
                                 self.streamingState.pushPartialReasoning(partialReasoning)
                             },
                             onPromptTokenCount: { count, estimated in
-                                ContextTokenStore.shared.set(count, estimated: estimated, for: conversationId)
+                                ContextTokenStore.shared.set(
+                                    count,
+                                    estimated: estimated,
+                                    messageCount: contextMessages.count + (estimated ? 0 : 1),
+                                    for: conversationId
+                                )
                             }
                         ), let recText = recovered.content, !recText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                             let combinedReasoning = recovered.reasoning ?? reasoning
