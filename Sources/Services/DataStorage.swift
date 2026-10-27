@@ -55,7 +55,14 @@ class DataStorage: ObservableObject {
     @Published var servers: [MCPServer] {
         didSet { saveServers() }
     }
-    @Published var conversations: [Conversation] = []
+    @Published var conversations: [Conversation] = [] {
+        didSet {
+            scheduleConversationPublication()
+        }
+    }
+
+    private var isBatchingConversationUpdates = false
+    private var pendingConversationPublication: DispatchWorkItem?
 
     private let settingsKey = "OpenMCP_OpenAISettings"
     private let serversKey = "OpenMCP_MCPServers"
