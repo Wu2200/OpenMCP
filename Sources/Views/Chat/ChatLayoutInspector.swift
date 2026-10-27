@@ -22,12 +22,10 @@ struct ChatLayoutFrameSample: Equatable {
 }
 
 struct ChatLayoutFramesPreferenceKey: PreferenceKey {
-    static var defaultValue: [String: CGRect] = [:]
+    static var defaultValue: [ChatLayoutFrameSample] = []
 
-    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
-        for sample in nextValue() {
-            value[sample.identifier] = sample.frame
-        }
+    static func reduce(value: inout [ChatLayoutFrameSample], nextValue: () -> [ChatLayoutFrameSample]) {
+        value.append(contentsOf: nextValue())
     }
 }
 
