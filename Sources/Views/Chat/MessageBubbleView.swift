@@ -329,9 +329,8 @@ struct MessageBubbleView: View {
         let innerContentWidth = max(180, bubbleColumnWidth - 24)
         let scrollInteracting = streamingState.isScrollInteracting
 
-        return HStack(alignment: .top, spacing: 6) {
+        return ZStack(alignment: .topLeading) {
             compactAvatar(isUser: false)
-                .frame(width: 24, height: 26, alignment: .topLeading)
                 .onTapGesture {
                     onSelectToggle?()
                 }
@@ -431,12 +430,13 @@ struct MessageBubbleView: View {
                 }
             }
             .frame(width: bubbleColumnWidth, alignment: .leading)
+            .padding(.leading, 30)
             .modifier(ChatLayoutProbe(identifier: "assistantColumn|\(turn.id)"))
         }
-        .modifier(ChatLayoutProbe(identifier: "assistantHStackContent|\(turn.id)"))
+        .modifier(ChatLayoutProbe(identifier: "assistantRowContent|\(turn.id)"))
         .frame(width: availableWidth, alignment: .leading)
         .fixedSize(horizontal: false, vertical: true)
-        .modifier(ChatLayoutProbe(identifier: "assistantHStack|\(turn.id)"))
+        .modifier(ChatLayoutProbe(identifier: "assistantRow|\(turn.id)"))
     }
 
     private func compactAvatar(isUser: Bool) -> some View {
