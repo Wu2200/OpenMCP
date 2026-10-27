@@ -208,6 +208,46 @@ final class GenerationActivityTracker: ObservableObject {
     }
 }
 
+final class ContextTokenStore: ObservableObject {
+    static let shared = ContextTokenStore()
+
+    struct Entry: Codable, Equatable {
+        var count: Int
+        var estimated: Bool
+    }
+
+    @Published private(set) var entries: [String: Entry]
+
+    private let storageKey = "OpenMCP_ContextTokenEntries"
+
+    private init() {
+        if let data = UserDefaults.standard.data(forKey: storageKey),
+           let decoded = try? JSONDecoder().decode([String: Entry].self, from: data) {
+            entries = decoded
+        } else {
+            entries = [:]
+        }
+    }
+
+    func set(_ count: Int, estimated: Bool, for conversationId: String) {
+        let entry = Entry(count: max(0, count), estimated: estimated)
+        guard entries[conversationId] != entry else { return }
+        entries[conversationId] = entry
+        persist()
+    }
+
+    func remove(_ conversationId: String) {
+        guard entries.removeValue(forKey: conversationId) != nil else { return }
+        persist()
+    }
+
+    private func persist() {
+        if let data = try? JSONEncoder().encode(entries) {
+            UserDefaults.standard.set(data, forKey: storageKey)
+        }
+    }
+}
+
 @MainActor
 class AgentCoordinator: ObservableObject {
     @Published var isGenerating: Bool = false {
@@ -222,8 +262,6 @@ class AgentCoordinator: ObservableObject {
     }
     @Published var errorMessage: String? = nil
     @Published var thinkingStartTime: Date? = nil
-    @Published private(set) var contextTokenCount: Int = 0
-    @Published private(set) var isContextTokenCountEstimated: Bool = true
 
     let streamingState = StreamingTurnState()
 
@@ -243,11 +281,6 @@ class AgentCoordinator: ObservableObject {
     private func publishActivity(_ label: String?) {
         guard let conversationId = activeConversationId else { return }
         GenerationActivityTracker.shared.set(label, for: conversationId)
-    }
-
-    func setContextTokenCount(_ count: Int, estimated: Bool) {
-        contextTokenCount = max(0, count)
-        isContextTokenCountEstimated = estimated
     }
 
     private func retainForActiveGeneration(_ conversationId: String) {
@@ -526,8 +559,8 @@ class AgentCoordinator: ObservableObject {
                         }
                         self.streamingState.pushPartialReasoning(partialReasoning)
                     },
-                    onPromptTokenCount: { [weak self] count, estimated in
-                        self?.setContextTokenCount(count, estimated: estimated)
+                    onPromptTokenCount: { count, estimated in
+                        ContextTokenStore.shared.set(count, estimated: estimated, for: conversationId)
                     }
                 )
 
@@ -676,8 +709,8 @@ class AgentCoordinator: ObservableObject {
                                 }
                                 self.streamingState.pushPartialReasoning(partialReasoning)
                             },
-                            onPromptTokenCount: { [weak self] count, estimated in
-                                self?.setContextTokenCount(count, estimated: estimated)
+                            onPromptTokenCount: { count, estimated in
+                                ContextTokenStore.shared.set(count, estimated: estimated, for: conversationId)
                             }
                         ), let recText = recovered.content, !recText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                             let combinedReasoning = recovered.reasoning ?? reasoning
