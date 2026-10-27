@@ -77,27 +77,6 @@ struct ConversationListView: View {
                                     .tint(theme.isDark ? Color(red: 0.78, green: 0.24, blue: 0.29) : Color(red: 0.76, green: 0.12, blue: 0.16))
                                     .accessibilityLabel("删除对话")
                                 }
-                                .confirmationDialog("确认删除对话？", isPresented: Binding(
-                                    get: { deletingConversation?.id == conv.id },
-                                    set: {
-                                        if !$0 && deletingConversation?.id == conv.id {
-                                            deletingConversation = nil
-                                        }
-                                    }
-                                ), titleVisibility: .visible) {
-                                    Button("取消", role: .cancel) {
-                                        if deletingConversation?.id == conv.id {
-                                            deletingConversation = nil
-                                        }
-                                    }
-                                    Button("删除对话", role: .destructive) {
-                                        guard deletingConversation?.id == conv.id else { return }
-                                        storage.deleteConversation(id: conv.id)
-                                        deletingConversation = nil
-                                    }
-                                } message: {
-                                    Text("将永久删除「\(conv.title)」及其所有消息记录，此操作不可恢复。")
-                                }
                                 .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
                                 .listRowSeparator(.hidden)
                                 .listRowBackground(Color.clear)
@@ -111,6 +90,21 @@ struct ConversationListView: View {
             }
             .navigationTitle("AI 工作台")
             .navigationBarTitleDisplayMode(.large)
+            .confirmationDialog("确认删除对话？", isPresented: Binding(
+                get: { deletingConversation != nil },
+                set: { if !$0 { deletingConversation = nil } }
+            ), titleVisibility: .visible) {
+                Button("取消", role: .cancel) {
+                    deletingConversation = nil
+                }
+                Button("删除对话", role: .destructive) {
+                    guard let target = deletingConversation else { return }
+                    deletingConversation = nil
+                    storage.deleteConversation(id: target.id)
+                }
+            } message: {
+                Text("将永久删除「\(deletingConversation?.title ?? "该对话")」及其所有消息记录，此操作不可恢复。")
+            }
             .toolbarBackground(theme.background, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
             .navigationDestination(for: String.self) { convId in
