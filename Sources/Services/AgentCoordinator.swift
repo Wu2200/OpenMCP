@@ -529,6 +529,9 @@ class AgentCoordinator: ObservableObject {
                     },
                     onReasoningUpdate: { [weak self] partialReasoning in
                         guard let self = self, !self.isCancelledByUser, !Task.isCancelled else { return }
+                        if !partialReasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            self.publishActivity("深度思考中")
+                        }
                         self.streamingState.pushPartialReasoning(partialReasoning)
                     }
                 )
@@ -673,6 +676,9 @@ class AgentCoordinator: ObservableObject {
                             },
                             onReasoningUpdate: { [weak self] partialReasoning in
                                 guard let self = self, !self.isCancelledByUser, !Task.isCancelled else { return }
+                                if !partialReasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                    self.publishActivity("深度思考中")
+                                }
                                 self.streamingState.pushPartialReasoning(partialReasoning)
                             }
                         ), let recText = recovered.content, !recText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
