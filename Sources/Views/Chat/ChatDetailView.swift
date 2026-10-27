@@ -487,7 +487,6 @@ struct ChatDetailView: View {
         let turns = Array(displayTurns.suffix(8))
         var lines = [
             "OpenMCP 对话布局诊断报告",
-            "对话：\(currentConversation.title)",
             "采集时间：\(ISO8601DateFormatter().string(from: Date()))",
             "坐标单位：pt；坐标系：聊天滚动区域。滚动时 y 值可能为负。",
             "隐私：不包含对话正文、工具参数、工具结果或密钥。",
