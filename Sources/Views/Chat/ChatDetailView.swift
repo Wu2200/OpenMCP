@@ -19,6 +19,7 @@ struct ChatDetailView: View {
     @State private var pendingDeleteTurn: MessageDisplayTurn? = nil
     @State private var showingClearConversationAlert: Bool = false
     @State private var showingLayoutInspector: Bool = false
+    @State private var isLayoutDiagnosticsEnabled: Bool = false
     @State private var layoutInspectorReport: String = ""
     @State private var layoutFrames: [String: CGRect] = [:]
     @State private var autoFollowOutput: Bool = true
@@ -278,6 +279,7 @@ struct ChatDetailView: View {
                             }
                         }
                         .frame(width: viewportWidth)
+                        .environment(\.chatLayoutDiagnosticsEnabled, isLayoutDiagnosticsEnabled)
                         .coordinateSpace(name: ChatLayoutCoordinateSpace.name)
                         .onPreferenceChange(ChatLayoutFramesPreferenceKey.self) { frames in
                             layoutFrames = frames
@@ -378,8 +380,12 @@ struct ChatDetailView: View {
 
                     Menu {
                         Button {
-                            layoutInspectorReport = makeLayoutInspectorReport()
-                            showingLayoutInspector = true
+                            layoutFrames.removeAll()
+                            isLayoutDiagnosticsEnabled = true
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                                layoutInspectorReport = makeLayoutInspectorReport()
+                                showingLayoutInspector = true
+                            }
                         } label: {
                             Label("对话布局检查器", systemImage: "rectangle.dashed")
                         }
@@ -412,7 +418,10 @@ struct ChatDetailView: View {
         .sheet(isPresented: $showingLogViewerSheet) {
             LogViewerSheet(theme: theme, filterConversationId: conversationId)
         }
-        .sheet(isPresented: $showingLayoutInspector) {
+        .sheet(isPresented: $showingLayoutInspector, onDismiss: {
+            isLayoutDiagnosticsEnabled = false
+            layoutFrames.removeAll()
+        }) {
             ChatLayoutInspectorSheet(report: layoutInspectorReport, theme: theme)
         }
         .sheet(isPresented: $showingPhotoPicker) {
