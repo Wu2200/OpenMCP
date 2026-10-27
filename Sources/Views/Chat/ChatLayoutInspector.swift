@@ -34,6 +34,7 @@ struct ChatLayoutProbe: ViewModifier {
 }
 
 struct ChatLayoutInspectorSheet: View {
+    @Environment(\.dismiss) private var dismiss
     let report: String
     let theme: AppThemePalette
     @State private var isCopied = false
