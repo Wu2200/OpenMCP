@@ -5,92 +5,206 @@ struct ContextPruningResult {
     var didPrune: Bool
     var estimatedInputTokens: Int
     var toolSchemaTokens: Int
+    var inputBudgetTokens: Int
+    var fitsBudget: Bool
 }
 
 enum ContextPruner {
-    private static let contextNotice = "本次请求因上下文预算压缩了较早对话或已处理的工具结果；未发送的历史仍保留在本地聊天记录中。"
-    private static let truncationNotice = "[工具结果已为控制上下文截短；完整结果仍保留在本地聊天记录中。]"
+    static let contextNotice = "本次请求按上下文预算省略或截短了较早消息或已处理的工具记录；完整聊天记录仍保留在本地。"
+    private static let toolTruncationNotice = "[工具结果因上下文预算截短；完整结果仍保留在本地聊天记录中。]"
+    private static let messageTruncationNotice = "[消息内容因上下文预算截短；完整内容仍保留在本地聊天记录中。]"
+
+    private enum TextField {
+        case content
+        case attachmentText(Int)
+    }
+
+    private struct ToolCallGroup {
+        var messageId: String
+        var callIDs: Set<String>
+    }
 
     static func prepare(
         settings: OpenAISettings,
         messages: [ChatMessage],
         tools: [[String: Any]]?
     ) -> ContextPruningResult {
-        guard !messages.isEmpty else {
-            return ContextPruningResult(messages: [], didPrune: false, estimatedInputTokens: instructionTokens(settings: settings, tools: tools), toolSchemaTokens: toolSchemaTokens(tools))
-        }
-
         let schemaTokens = toolSchemaTokens(tools)
-        let baseInstructionTokens = estimatedTokenCount(settings.systemPrompt) + schemaTokens + 4
         let contextLimit = max(4_096, settings.contextWindowTokens)
         let outputReserve = max(512, min(contextLimit / 10, 8_192))
         let inputBudget = max(1, contextLimit - outputReserve)
+        let baseInstructionTokens = estimatedTokenCount(settings.systemPrompt) + schemaTokens + 4
         var prepared = messages
-        var didPrune = false
+        var didPrune = compactOlderToolHistory(&prepared)
 
         func totalTokens(_ items: [ChatMessage]) -> Int {
-            baseInstructionTokens + estimatedMessageTokens(items) + (didPrune ? estimatedTokenCount(contextNotice) : 0)
+            baseInstructionTokens
+                + estimatedMessageTokens(items)
+                + (didPrune ? estimatedTokenCount(contextNotice) + 2 : 0)
         }
 
-        if totalTokens(prepared) > inputBudget * 4 / 5 {
-            for index in prepared.indices where prepared[index].role == .tool && isConsumedToolResult(at: index, in: prepared) {
-                let compacted = compact(prepared[index].content, characterLimit: 300)
-                if compacted != prepared[index].content {
-                    prepared[index].content = compacted
-                    didPrune = true
-                }
-            }
-        }
-
-        var turns = turnRanges(in: prepared)
-        while totalTokens(prepared) > inputBudget, turns.count > 1 {
-            let oldestTurn = turns.removeFirst()
+        while totalTokens(prepared) > inputBudget {
+            let turns = turnRanges(in: prepared)
+            guard turns.count > 1, let oldestTurn = turns.first else { break }
             prepared.removeSubrange(oldestTurn)
             didPrune = true
-            turns = turnRanges(in: prepared)
         }
 
         if totalTokens(prepared) > inputBudget {
             let currentTurn = turnRanges(in: prepared).last ?? (0..<prepared.count)
-            let callMessages = currentTurn.compactMap { index -> (Int, Set<String>)? in
-                let message = prepared[index]
-                guard message.role == .assistant,
-                      let calls = message.toolCalls,
-                      !calls.isEmpty else { return nil }
-                return (index, Set(calls.map(\.id)))
-            }
-
-            if callMessages.count > 1 {
-                for (index, callIDs) in callMessages.dropLast() {
-                    let message = prepared[index]
-                    if message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        prepared[index].toolCalls = nil
+            let groups = toolCallGroups(in: currentTurn, messages: prepared)
+            for group in groups.dropLast() {
+                guard totalTokens(prepared) > inputBudget else { break }
+                let resultIDs = Set(prepared.compactMap { message in
+                    message.role == .tool ? message.toolCallId : nil
+                })
+                guard group.callIDs.isSubset(of: resultIDs) else { continue }
+                didPrune = true
+                if let index = prepared.firstIndex(where: { $0.id == group.messageId }) {
+                    if prepared[index].content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        prepared.remove(at: index)
                     } else {
                         prepared[index].toolCalls = nil
                     }
-                    for toolIndex in prepared.indices.reversed() where prepared[toolIndex].role == .tool && callIDs.contains(prepared[toolIndex].toolCallId ?? "") {
-                        prepared.remove(at: toolIndex)
-                    }
-                    didPrune = true
+                }
+                prepared.removeAll { message in
+                    message.role == .tool && group.callIDs.contains(message.toolCallId ?? "")
                 }
             }
         }
 
         if totalTokens(prepared) > inputBudget {
-            truncateToolResults(&prepared, availableTokens: max(0, inputBudget - baseInstructionTokens - estimatedTokenCount(contextNotice)), notice: truncationNotice)
-            didPrune = true
+            for index in prepared.indices where prepared[index].role == .tool {
+                guard totalTokens(prepared) > inputBudget else { break }
+                let original = prepared[index].content
+                guard !original.isEmpty else { continue }
+                didPrune = true
+                prepared[index].content = bestFittingText(
+                    original,
+                    notice: toolTruncationNotice,
+                    messages: prepared,
+                    messageIndex: index,
+                    field: .content,
+                    inputBudget: inputBudget,
+                    totalTokens: totalTokens
+                )
+            }
         }
 
+        if totalTokens(prepared) > inputBudget {
+            let currentTurn = turnRanges(in: prepared).last ?? (0..<prepared.count)
+            for index in currentTurn where prepared[index].role == .assistant {
+                guard totalTokens(prepared) > inputBudget else { break }
+                let original = prepared[index].content
+                guard !original.isEmpty else { continue }
+                didPrune = true
+                prepared[index].content = bestFittingText(
+                    original,
+                    notice: messageTruncationNotice,
+                    messages: prepared,
+                    messageIndex: index,
+                    field: .content,
+                    inputBudget: inputBudget,
+                    totalTokens: totalTokens
+                )
+            }
+
+            for index in currentTurn where prepared[index].role == .user {
+                guard totalTokens(prepared) > inputBudget else { break }
+                let attachmentIndices = (prepared[index].attachments ?? []).indices
+                for attachmentIndex in attachmentIndices {
+                    guard totalTokens(prepared) > inputBudget else { break }
+                    guard let original = prepared[index].attachments?[attachmentIndex].textContent,
+                          !original.isEmpty else { continue }
+                    didPrune = true
+                    let replacement = bestFittingText(
+                        original,
+                        notice: messageTruncationNotice,
+                        messages: prepared,
+                        messageIndex: index,
+                        field: .attachmentText(attachmentIndex),
+                        inputBudget: inputBudget,
+                        totalTokens: totalTokens
+                    )
+                    var attachments = prepared[index].attachments ?? []
+                    attachments[attachmentIndex].textContent = replacement
+                    prepared[index].attachments = attachments
+                }
+
+                guard totalTokens(prepared) > inputBudget else { continue }
+                let original = prepared[index].content
+                guard !original.isEmpty else { continue }
+                didPrune = true
+                prepared[index].content = bestFittingText(
+                    original,
+                    notice: messageTruncationNotice,
+                    messages: prepared,
+                    messageIndex: index,
+                    field: .content,
+                    inputBudget: inputBudget,
+                    totalTokens: totalTokens
+                )
+            }
+        }
+
+        let estimatedTokens = totalTokens(prepared)
         return ContextPruningResult(
             messages: prepared,
             didPrune: didPrune,
-            estimatedInputTokens: totalTokens(prepared),
-            toolSchemaTokens: schemaTokens
+            estimatedInputTokens: estimatedTokens,
+            toolSchemaTokens: schemaTokens,
+            inputBudgetTokens: inputBudget,
+            fitsBudget: estimatedTokens <= inputBudget
         )
     }
 
-    private static func instructionTokens(settings: OpenAISettings, tools: [[String: Any]]?) -> Int {
-        estimatedTokenCount(settings.systemPrompt) + toolSchemaTokens(tools) + 4
+    private static func compactOlderToolHistory(_ messages: inout [ChatMessage]) -> Bool {
+        guard !messages.isEmpty else { return false }
+        let currentTurn = turnRanges(in: messages).last ?? (0..<messages.count)
+        let currentMessageIDs = Set(currentTurn.map { messages[$0].id })
+        let currentCallIDs = Set(currentTurn.flatMap { index in
+            messages[index].role == .assistant
+                ? (messages[index].toolCalls ?? []).map(\.id)
+                : []
+        })
+        var compacted: [ChatMessage] = []
+        var didCompact = false
+
+        for message in messages {
+            if message.role == .assistant,
+               let calls = message.toolCalls,
+               !calls.isEmpty,
+               !currentMessageIDs.contains(message.id) {
+                didCompact = true
+                if !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    var textOnlyMessage = message
+                    textOnlyMessage.toolCalls = nil
+                    compacted.append(textOnlyMessage)
+                }
+                continue
+            }
+
+            if message.role == .tool,
+               !currentCallIDs.contains(message.toolCallId ?? "") {
+                didCompact = true
+                continue
+            }
+
+            compacted.append(message)
+        }
+
+        messages = compacted
+        return didCompact
+    }
+
+    private static func toolCallGroups(in range: Range<Int>, messages: [ChatMessage]) -> [ToolCallGroup] {
+        range.compactMap { index in
+            let message = messages[index]
+            guard message.role == .assistant,
+                  let calls = message.toolCalls,
+                  !calls.isEmpty else { return nil }
+            return ToolCallGroup(messageId: message.id, callIDs: Set(calls.map(\.id)))
+        }
     }
 
     private static func toolSchemaTokens(_ tools: [[String: Any]]?) -> Int {
@@ -102,23 +216,42 @@ enum ContextPruner {
 
     private static func estimatedMessageTokens(_ messages: [ChatMessage]) -> Int {
         messages.reduce(0) { total, message in
-            var messageTokens = estimatedTokenCount(message.content) + 4
+            var messageTokens = estimatedTokenCount(serializedText(for: message)) + 4
             messageTokens += estimatedTokenCount(message.toolCallId ?? "")
-
-            for attachment in message.attachments ?? [] {
-                messageTokens += estimatedTokenCount(attachment.fileName)
-                if attachment.kind == .image {
-                    messageTokens += 1_536
-                } else {
-                    messageTokens += estimatedTokenCount(attachment.textContent ?? "")
+            if message.role == .user {
+                messageTokens += (message.attachments ?? []).reduce(0) { count, attachment in
+                    count + (attachment.kind == .image && !(attachment.imageDataBase64 ?? "").isEmpty ? 1_536 : 0)
                 }
             }
-
             for call in message.toolCalls ?? [] {
                 messageTokens += 8 + estimatedTokenCount(call.name) + estimatedTokenCount(call.arguments)
             }
             return total + messageTokens
         }
+    }
+
+    private static func serializedText(for message: ChatMessage) -> String {
+        var combinedText = message.content
+        for attachment in message.attachments ?? [] {
+            switch attachment.kind {
+            case .longText:
+                if let text = attachment.textContent, !text.isEmpty {
+                    combinedText = combinedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        ? text
+                        : combinedText + "\n\n" + text
+                }
+            case .file:
+                if let text = attachment.textContent, !text.isEmpty {
+                    let block = "--- 文件: \(attachment.fileName) ---\n\(text)\n--- 文件结束 ---"
+                    combinedText = combinedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        ? block
+                        : combinedText + "\n\n" + block
+                }
+            case .image:
+                break
+            }
+        }
+        return combinedText
     }
 
     private static func estimatedTokenCount(_ text: String) -> Int {
@@ -172,61 +305,63 @@ enum ContextPruner {
         }
     }
 
-    private static func isConsumedToolResult(at index: Int, in messages: [ChatMessage]) -> Bool {
-        guard index + 1 < messages.count else { return false }
-        return messages[(index + 1)...].contains { message in
-            message.role == .assistant && !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }
-    }
-
-    private static func compact(_ text: String, characterLimit: Int) -> String {
-        guard text.count > characterLimit else { return text }
-        let headCount = characterLimit * 2 / 3
-        let tailCount = characterLimit - headCount
-        return String(text.prefix(headCount)) + "\n…\n" + String(text.suffix(tailCount))
-    }
-
-    private static func truncateToolResults(_ messages: inout [ChatMessage], availableTokens: Int, notice: String) {
-        var remainingTokens = availableTokens
-        for index in messages.indices.reversed() where messages[index].role == .tool {
-            let original = messages[index].content
-            let originalTokens = estimatedTokenCount(original)
-            if originalTokens <= remainingTokens {
-                remainingTokens -= originalTokens
-                continue
-            }
-
-            let replacement = truncatedContent(original, maxTokens: remainingTokens, notice: notice)
-            messages[index].content = replacement
-            remainingTokens = max(0, remainingTokens - estimatedTokenCount(replacement))
-        }
-    }
-
-    private static func truncatedContent(_ text: String, maxTokens: Int, notice: String) -> String {
-        guard maxTokens > 0 else { return "" }
-        if estimatedTokenCount(text) <= maxTokens { return text }
-        if estimatedTokenCount(notice) >= maxTokens {
-            return String(text.prefix(maxTokens))
-        }
-
-        let availableTextTokens = maxTokens - estimatedTokenCount(notice)
+    private static func bestFittingText(
+        _ original: String,
+        notice: String,
+        messages: [ChatMessage],
+        messageIndex: Int,
+        field: TextField,
+        inputBudget: Int,
+        totalTokens: ([ChatMessage]) -> Int
+    ) -> String {
         var low = 0
-        var high = text.count
+        var high = original.count
         var best = ""
 
         while low <= high {
-            let retainedCount = (low + high) / 2
-            let headCount = retainedCount * 2 / 3
-            let tailCount = retainedCount - headCount
-            let candidate = String(text.prefix(headCount)) + "\n…\n" + String(text.suffix(tailCount))
-            if estimatedTokenCount(candidate) <= availableTextTokens {
+            let retainedCharacters = (low + high) / 2
+            let candidate = boundedText(original, retainedCharacters: retainedCharacters, notice: notice)
+            let candidateMessages = replacingText(candidate, in: messages, messageIndex: messageIndex, field: field)
+            if totalTokens(candidateMessages) <= inputBudget {
                 best = candidate
-                low = retainedCount + 1
+                low = retainedCharacters + 1
             } else {
-                high = retainedCount - 1
+                high = retainedCharacters - 1
             }
         }
 
-        return best + "\n\n" + notice
+        return best
+    }
+
+    private static func boundedText(_ text: String, retainedCharacters: Int, notice: String) -> String {
+        guard retainedCharacters < text.count else { return text }
+        guard retainedCharacters > 0 else { return notice }
+        let headCount = retainedCharacters * 2 / 3
+        let tailCount = retainedCharacters - headCount
+        return String(text.prefix(headCount))
+            + "\n…\n"
+            + String(text.suffix(tailCount))
+            + "\n\n"
+            + notice
+    }
+
+    private static func replacingText(
+        _ text: String,
+        in messages: [ChatMessage],
+        messageIndex: Int,
+        field: TextField
+    ) -> [ChatMessage] {
+        var replacement = messages
+        switch field {
+        case .content:
+            replacement[messageIndex].content = text
+        case .attachmentText(let attachmentIndex):
+            guard var attachments = replacement[messageIndex].attachments,
+                  attachments.indices.contains(attachmentIndex) else { return replacement }
+            attachments[attachmentIndex].textContent = text
+            replacement[messageIndex].attachments = attachments
+        }
+        return replacement
     }
 }
+
