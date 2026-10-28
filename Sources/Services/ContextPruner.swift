@@ -203,14 +203,14 @@ enum ContextPruner {
         }
     }
 
-    private static func toolSchemaTokens(_ tools: [[String: Any]]?) -> Int {
+    static func toolSchemaTokens(_ tools: [[String: Any]]?) -> Int {
         guard let tools, !tools.isEmpty,
               let data = try? JSONSerialization.data(withJSONObject: tools, options: [.sortedKeys]),
               let serialized = String(data: data, encoding: .utf8) else { return 0 }
         return estimatedTokenCount(serialized)
     }
 
-    private static func estimatedMessageTokens(_ messages: [ChatMessage]) -> Int {
+    static func estimatedMessageTokens(_ messages: [ChatMessage]) -> Int {
         messages.reduce(0) { total, message in
             var messageTokens = estimatedTokenCount(serializedText(for: message)) + 4
             messageTokens += estimatedTokenCount(message.toolCallId ?? "")
@@ -250,7 +250,7 @@ enum ContextPruner {
         return combinedText
     }
 
-    private static func estimatedTokenCount(_ text: String) -> Int {
+    static func estimatedTokenCount(_ text: String) -> Int {
         var tokens = 0
         var asciiRunLength = 0
 
