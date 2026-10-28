@@ -3,9 +3,6 @@ import Foundation
 enum MCPToolDiscovery {
     static let functionName = "openmcp_discover_mcp_tools"
     static let maximumSearchRounds = 8
-    private static let maximumToolsPerSearch = 12
-    private static let maximumSchemaTokensPerSearch = 8_192
-
     static let definition: [String: Any] = [
         "type": "function",
         "function": [
@@ -48,30 +45,12 @@ enum MCPToolDiscovery {
         let queryTerms = terms(in: query)
         guard !queryTerms.isEmpty, !allTools.isEmpty else { return [] }
 
-        let contextLimit = max(4_096, settings.contextWindowTokens)
-        let outputReserve = max(512, min(contextLimit / 10, 8_192))
-        let inputBudget = max(1, contextLimit - outputReserve)
-        let latestUserMessage = messages.last(where: { $0.role == .user })
-        let fixedTokens = ContextPruner.estimatedTokenCount(settings.systemPrompt)
-            + ContextPruner.estimatedMessageTokens(latestUserMessage.map { [$0] } ?? [])
-            + ContextPruner.toolSchemaTokens([definition])
-            + 512
-        let availableSchemaTokens = min(
-            maximumSchemaTokensPerSearch,
-            max(0, inputBudget - fixedTokens)
-        )
-        guard availableSchemaTokens > 0 else { return [] }
-
         var selected: [[String: Any]] = []
         var selectedNames = Set<String>()
         for tool in existingTools {
-            guard selected.count < maximumToolsPerSearch,
-                  let name = (tool["function"] as? [String: Any])?["name"] as? String,
-                  !selectedNames.contains(name) else { continue }
-            let candidate = selected + [tool]
-            guard ContextPruner.toolSchemaTokens(candidate) <= availableSchemaTokens else { continue }
+            guard let name = (tool["function"] as? [String: Any])?["name"] as? String,
+                  selectedNames.insert(name).inserted else { continue }
             selected.append(tool)
-            selectedNames.insert(name)
         }
 
         let rankedTools = allTools.enumerated().compactMap { index, tool -> (Int, Int, [String: Any])? in
@@ -86,22 +65,16 @@ enum MCPToolDiscovery {
         }
 
         for (_, _, tool) in rankedTools {
-            guard selected.count < maximumToolsPerSearch else { break }
             guard let name = (tool["function"] as? [String: Any])?["name"] as? String,
                   selectedNames.insert(name).inserted else { continue }
-            let candidate = selected + [tool]
-            guard ContextPruner.toolSchemaTokens(candidate) <= availableSchemaTokens else {
-                selectedNames.remove(name)
-                continue
-            }
-            selected = candidate
+            selected.append(tool)
         }
         return selected
     }
 
     static func result(query: String, tools: [[String: Any]]) -> String {
         guard !tools.isEmpty else {
-            return "没有找到与该查询匹配且能放入当前上下文预算的 MCP 工具。请用更具体的英文服务名、动作和对象重新搜索；不要猜测或调用未提供的工具。"
+            return "没有找到与该查询匹配的已启用 MCP 工具。请用更具体的英文服务名、动作和对象重新搜索；不要猜测或调用未提供的工具。"
         }
         let names = tools.compactMap { tool in
             (tool["function"] as? [String: Any])?["name"] as? String
