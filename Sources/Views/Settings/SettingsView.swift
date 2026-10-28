@@ -747,7 +747,7 @@ struct SettingsView: View {
                             .foregroundColor(theme.accent)
                     }
                 }
-                Text("按此上限估算系统提示词、工具定义和对话消息；超出预算时优先压缩已处理的工具结果，再裁剪较早对话。请按当前模型的上下文窗口调整。")
+                Text("按模型窗口估算输入预算并预留输出空间；计入系统提示词、工具定义、消息和附件。超限时优先精简较早的已完成工具记录和对话轮次，必要时截短过长内容。完整记录保留在本地；估算不等于接口精确用量。")
                     .font(.system(size: 11))
                     .foregroundColor(theme.mutedText)
             }
