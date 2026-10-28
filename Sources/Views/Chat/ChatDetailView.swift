@@ -145,6 +145,8 @@ struct ChatDetailView: View {
     @State private var visibleHistoryLimit: Int = 40
     @State private var autoFollowOutput: Bool = true
     @State private var manualScrollTrigger: Int = 0
+    @State private var pendingRetryScrollTurnId: String? = nil
+    @State private var retryScrollGeneration: UInt64 = 0
     @State private var isChatVisible: Bool = true
     @FocusState private var isInputFocused: Bool
 
@@ -351,10 +353,7 @@ struct ChatDetailView: View {
                                             },
                                             onEditAndResend: { newContent in
                                                 dismissKeyboard()
-                                                selectedTurnId = nil
-                                                autoFollowOutput = true
-                                                coordinator.streamingState.setDisplayPaused(false)
-                                                manualScrollTrigger &+= 1
+                                                prepareRetryScroll(for: turn, using: scrollProxy)
                                                 coordinator.startRetryFromMessage(
                                                     conversationId: conversationId,
                                                     messageId: turn.primaryMessageId,
@@ -365,10 +364,7 @@ struct ChatDetailView: View {
                                             },
                                             onRetry: {
                                                 dismissKeyboard()
-                                                selectedTurnId = nil
-                                                autoFollowOutput = true
-                                                coordinator.streamingState.setDisplayPaused(false)
-                                                manualScrollTrigger &+= 1
+                                                prepareRetryScroll(for: turn, using: scrollProxy)
                                                 coordinator.startRetryFromMessage(
                                                     conversationId: conversationId,
                                                     messageId: turn.primaryMessageId,
@@ -396,15 +392,19 @@ struct ChatDetailView: View {
                                             .frame(width: rowAvailableWidth)
                                             .id("error_status")
                                     }
+
+                                    Color.clear
+                                        .frame(height: 1)
+                                        .padding(
+                                            .bottom,
+                                            isKeyboardVisible && (editingTurnId == visibleTurns.last?.id || selectedTurnId == visibleTurns.last?.id)
+                                                ? max(56, geo.size.height * 0.5)
+                                                : 16
+                                        )
+                                        .id("chat_bottom_anchor")
                                 }
                                 .padding(.horizontal, 10)
                                 .padding(.top, 10)
-                                .padding(
-                                    .bottom,
-                                    isKeyboardVisible && (editingTurnId == visibleTurns.last?.id || selectedTurnId == visibleTurns.last?.id)
-                                        ? max(56, geo.size.height * 0.5)
-                                        : 16
-                                )
                                 .frame(width: viewportWidth)
                                 .background(
                                     Color.clear
@@ -440,6 +440,15 @@ struct ChatDetailView: View {
                                         },
                                         onScrollSettled: {
                                             coordinator.streamingState.setDisplayPaused(false)
+                                        },
+                                        onRequestBottom: {
+                                            DispatchQueue.main.async {
+                                                var transaction = Transaction()
+                                                transaction.disablesAnimations = true
+                                                withTransaction(transaction) {
+                                                    scrollProxy.scrollTo("chat_bottom_anchor", anchor: .bottom)
+                                                }
+                                            }
                                         }
                                     )
                                 )
@@ -453,12 +462,16 @@ struct ChatDetailView: View {
                         }
                         .scrollDismissesKeyboard(editingTurnId == nil ? .interactively : .never)
                         .onChange(of: currentConversation.messages.count) { _ in
-                            if autoFollowOutput {
+                            if let turnId = pendingRetryScrollTurnId {
+                                scrollToRetryAnchor(turnId, using: scrollProxy)
+                            } else if autoFollowOutput {
                                 manualScrollTrigger &+= 1
                             }
                         }
                         .onChange(of: coordinator.isGenerating) { _ in
-                            if autoFollowOutput {
+                            if let turnId = pendingRetryScrollTurnId {
+                                scrollToRetryAnchor(turnId, using: scrollProxy)
+                            } else if autoFollowOutput {
                                 manualScrollTrigger &+= 1
                             }
                         }
@@ -477,6 +490,7 @@ struct ChatDetailView: View {
 
                         if !displayTurns.isEmpty {
                             Button(action: {
+                                pendingRetryScrollTurnId = nil
                                 autoFollowOutput = true
                                 coordinator.streamingState.setDisplayPaused(false)
                                 manualScrollTrigger &+= 1
@@ -937,9 +951,7 @@ struct ChatDetailView: View {
                     .contentShape(Capsule())
                     .onTapGesture {
                         dismissKeyboard()
-                        autoFollowOutput = true
-                        coordinator.streamingState.setDisplayPaused(false)
-                        manualScrollTrigger &+= 1
+                        prepareRetryScroll(for: lastTurn, using: scrollProxy)
                         coordinator.startRetryFromMessage(
                             conversationId: conversationId,
                             messageId: lastTurn.primaryMessageId,
@@ -1337,6 +1349,58 @@ struct ChatDetailView: View {
         pendingEditScrollTurnId = turnId
     }
 
+    private func retryAnchorTurnId(for turn: MessageDisplayTurn) -> String? {
+        guard turn.role == .assistant,
+              let messageIndex = currentConversation.messages.firstIndex(where: { $0.id == turn.primaryMessageId }) else {
+            return turn.id
+        }
+        guard let userMessage = currentConversation.messages[...messageIndex].last(where: { $0.role == .user }) else {
+            return turn.id
+        }
+        return userMessage.id
+    }
+
+    private func prepareRetryScroll(for turn: MessageDisplayTurn, using proxy: ScrollViewProxy) {
+        selectedTurnId = nil
+        autoFollowOutput = true
+        coordinator.streamingState.setDisplayPaused(false)
+        guard let anchorTurnId = retryAnchorTurnId(for: turn) else {
+            manualScrollTrigger &+= 1
+            return
+        }
+        scrollToRetryAnchor(anchorTurnId, using: proxy)
+    }
+
+    private func scrollToRetryAnchor(_ turnId: String, using proxy: ScrollViewProxy) {
+        pendingRetryScrollTurnId = turnId
+        retryScrollGeneration &+= 1
+        let generation = retryScrollGeneration
+
+        if let turnIndex = displayTurns.firstIndex(where: { $0.id == turnId }) {
+            let turnsNeeded = displayTurns.count - turnIndex
+            visibleHistoryLimit = max(visibleHistoryLimit, turnsNeeded)
+        }
+
+        for delay in [0.04, 0.14, 0.32, 0.56] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                guard retryScrollGeneration == generation,
+                      pendingRetryScrollTurnId == turnId,
+                      visibleTurns.contains(where: { $0.id == turnId }) else { return }
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    proxy.scrollTo(turnId, anchor: .top)
+                }
+            }
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.72) {
+            guard retryScrollGeneration == generation,
+                  pendingRetryScrollTurnId == turnId else { return }
+            pendingRetryScrollTurnId = nil
+        }
+    }
+
     private func scrollEditorToCenter(_ turnId: String, using proxy: ScrollViewProxy) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
             guard pendingEditScrollTurnId == turnId else { return }
@@ -1447,6 +1511,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
     var onUserDragUp: () -> Void
     var onReachBottom: () -> Void
     var onScrollSettled: () -> Void
+    var onRequestBottom: () -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -1458,7 +1523,8 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
             onUserInteraction: onUserInteraction,
             onUserDragUp: onUserDragUp,
             onReachBottom: onReachBottom,
-            onScrollSettled: onScrollSettled
+            onScrollSettled: onScrollSettled,
+            onRequestBottom: onRequestBottom
         )
     }
 
@@ -1481,6 +1547,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
         coord.onUserDragUp = onUserDragUp
         coord.onReachBottom = onReachBottom
         coord.onScrollSettled = onScrollSettled
+        coord.onRequestBottom = onRequestBottom
         let triggerChanged = (coord.manualScrollTrigger != manualScrollTrigger)
         coord.manualScrollTrigger = manualScrollTrigger
 
@@ -1488,7 +1555,6 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
             coord.attachIfNeeded(from: uiView)
             if !isViewActive {
                 coord.cancelScheduledBottomFollow()
-                coord.cancelActiveAnimation()
             } else if triggerChanged {
                 coord.scheduleBottomFollow(force: true)
             } else if !wasViewActive && isViewActive && isGenerating && autoFollowOutput && coord.isNearBottom() {
@@ -1512,14 +1578,13 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
         var onUserDragUp: () -> Void
         var onReachBottom: () -> Void
         var onScrollSettled: () -> Void
+        var onRequestBottom: () -> Void
         private weak var attachedScrollView: UIScrollView?
         private var contentSizeObservation: NSKeyValueObservation?
         private var lastObservedHeight: CGFloat = 0
         private var scrollSettleWorkItem: DispatchWorkItem?
         private var bottomFollowWorkItem: DispatchWorkItem?
         private var bottomFollowGeneration: UInt64 = 0
-        private var followAnimator: UIViewPropertyAnimator?
-        private var animatedTargetY: CGFloat = 0
         private var userScrollActive = false
         private var panInitialOffsetY: CGFloat = 0
         private var contentTapRecognizer: UITapGestureRecognizer?
@@ -1534,7 +1599,8 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
             onUserInteraction: @escaping () -> Void,
             onUserDragUp: @escaping () -> Void,
             onReachBottom: @escaping () -> Void,
-            onScrollSettled: @escaping () -> Void
+            onScrollSettled: @escaping () -> Void,
+            onRequestBottom: @escaping () -> Void
         ) {
             self.isGenerating = isGenerating
             self.autoFollowOutput = autoFollowOutput
@@ -1545,6 +1611,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
             self.onUserDragUp = onUserDragUp
             self.onReachBottom = onReachBottom
             self.onScrollSettled = onScrollSettled
+            self.onRequestBottom = onRequestBottom
         }
 
         func attachIfNeeded(from view: UIView) {
@@ -1577,11 +1644,6 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
             }
         }
 
-        func cancelActiveAnimation() {
-            followAnimator?.stopAnimation(true)
-            followAnimator = nil
-        }
-
         func isNearBottom(tolerance: CGFloat = 72) -> Bool {
             guard let scrollView = attachedScrollView else { return false }
             return bottomOffset(for: scrollView) - scrollView.contentOffset.y <= tolerance
@@ -1593,48 +1655,13 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
             scheduleBottomFollow(force: true)
         }
 
-        func scrollToBottom(force: Bool = false, animated: Bool = true) {
-            guard isViewActive, let sv = attachedScrollView else { return }
-            guard force || (autoFollowOutput && !userScrollActive && !sv.isTracking && !sv.isDragging && !sv.isDecelerating) else { return }
-
-            let targetY = bottomOffset(for: sv)
+        func requestBottom(force: Bool = false) {
+            guard isViewActive, let scrollView = attachedScrollView else { return }
+            guard force || (autoFollowOutput && !userScrollActive && !scrollView.isTracking && !scrollView.isDragging && !scrollView.isDecelerating) else { return }
             if force {
                 userScrollActive = false
-                cancelActiveAnimation()
-                animatedTargetY = targetY
-                if abs(sv.contentOffset.y - targetY) > 1.0 {
-                    sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: targetY), animated: false)
-                }
-                return
             }
-
-            let delta = targetY - sv.contentOffset.y
-            guard abs(delta) > 1.5 else { return }
-
-            if !animated {
-                cancelActiveAnimation()
-                animatedTargetY = targetY
-                sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: targetY), animated: false)
-                return
-            }
-
-            if followAnimator?.isRunning == true && abs(targetY - animatedTargetY) < 4.0 {
-                return
-            }
-
-            animatedTargetY = targetY
-            cancelActiveAnimation()
-
-            let duration = min(0.24, max(0.14, Double(abs(delta)) / 900.0))
-            let animator = UIViewPropertyAnimator(duration: duration, curve: .easeOut) { [weak sv] in
-                guard let sv = sv else { return }
-                sv.contentOffset = CGPoint(x: sv.contentOffset.x, y: targetY)
-            }
-            animator.addCompletion { [weak self] _ in
-                self?.followAnimator = nil
-            }
-            followAnimator = animator
-            animator.startAnimation()
+            onRequestBottom()
         }
 
         func cancelScheduledBottomFollow() {
@@ -1662,7 +1689,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
                       (force || self.autoFollowOutput),
                       let scrollView = self.attachedScrollView else { return }
                 scrollView.layoutIfNeeded()
-                self.scrollToBottom(force: force, animated: false)
+                self.requestBottom(force: force)
                 guard remainingRetries > 0 else {
                     self.bottomFollowWorkItem = nil
                     return
@@ -1699,7 +1726,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
                 self.lastObservedHeight = newHeight
 
                 guard abs(heightDelta) > 0.5 else { return }
-                guard self.isViewActive, self.autoFollowOutput else { return }
+                guard self.isViewActive, self.isGenerating, self.autoFollowOutput else { return }
                 guard !self.userScrollActive, !sv.isTracking, !sv.isDragging, !sv.isDecelerating else { return }
 
                 let previousBottomOffset = max(
@@ -1732,7 +1759,6 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
                 cancelScheduledBottomFollow()
                 userScrollActive = true
                 panInitialOffsetY = sv.contentOffset.y
-                cancelActiveAnimation()
                 onUserTouchBegan()
             case .changed:
                 let translationY = recognizer.translation(in: sv).y
