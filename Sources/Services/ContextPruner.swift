@@ -10,7 +10,7 @@ struct ContextPruningResult {
 }
 
 enum ContextPruner {
-    static let contextNotice = "本次请求已省略较早轮次的工具调用记录及结果，并可能按上下文预算裁剪较早消息或工具结果；完整聊天记录仍保留在本地。"
+    static let contextNotice = "本次请求省略了较早轮次的工具调用及其结果；如上下文仍超限，会按预算裁剪较早消息或已完成工具记录。完整聊天记录仍保留在本地。"
     private static let toolTruncationNotice = "[工具结果因上下文预算截短；完整结果仍保留在本地聊天记录中。]"
     private static let messageTruncationNotice = "[消息内容因上下文预算截短；完整内容仍保留在本地聊天记录中。]"
 
