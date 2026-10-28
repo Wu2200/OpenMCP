@@ -65,12 +65,14 @@ enum MCPToolDiscovery {
         var selected: [[String: Any]] = []
         var selectedNames = Set<String>()
         for tool in existingTools {
-            guard let name = (tool["function"] as? [String: Any])?["name"] as? String,
-                  selectedNames.insert(name).inserted else { continue }
+            guard selected.count < maximumToolsPerSearch,
+                  let name = (tool["function"] as? [String: Any])?["name"] as? String,
+                  !selectedNames.contains(name) else { continue }
+            let candidate = selected + [tool]
+            guard ContextPruner.toolSchemaTokens(candidate) <= availableSchemaTokens else { continue }
             selected.append(tool)
+            selectedNames.insert(name)
         }
-        guard selected.count < maximumToolsPerSearch,
-              ContextPruner.toolSchemaTokens(selected) < availableSchemaTokens else { return [] }
 
         let rankedTools = allTools.enumerated().compactMap { index, tool -> (Int, Int, [String: Any])? in
             let score = relevanceScore(queryTerms: queryTerms, tool: tool)
