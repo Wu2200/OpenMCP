@@ -134,6 +134,7 @@ struct ChatDetailView: View {
     @State private var previewingStagedAttachment: ChatAttachment? = nil
     @State private var selectedTurnId: String? = nil
     @State private var pendingEditScrollTurnId: String? = nil
+    @State private var editingTurnId: String? = nil
     @State private var isKeyboardVisible: Bool = false
     @State private var pendingDeleteTurn: MessageDisplayTurn? = nil
     @State private var showingClearConversationAlert: Bool = false
@@ -333,7 +334,12 @@ struct ChatDetailView: View {
                                                 }
                                             },
                                             onEditBegin: {
+                                                editingTurnId = turn.id
                                                 centerTurnForEditing(turn.id, using: scrollProxy)
+                                            },
+                                            onEditEnd: {
+                                                editingTurnId = nil
+                                                pendingEditScrollTurnId = nil
                                             },
                                             onDismissSelection: {
                                                 handleBackgroundTap()
@@ -399,7 +405,7 @@ struct ChatDetailView: View {
                                 .padding(.top, 10)
                                 .padding(
                                     .bottom,
-                                    isKeyboardVisible && selectedTurnId == visibleTurns.last?.id
+                                    isKeyboardVisible && (editingTurnId == visibleTurns.last?.id || selectedTurnId == visibleTurns.last?.id)
                                         ? max(56, geo.size.height * 0.5)
                                         : 56
                                 )
@@ -449,7 +455,7 @@ struct ChatDetailView: View {
                         .onPreferenceChange(ChatLayoutFramesPreferenceKey.self) { samples in
                             layoutFrames = samples
                         }
-                        .scrollDismissesKeyboard(.interactively)
+                        .scrollDismissesKeyboard(editingTurnId == nil ? .interactively : .never)
                         .onChange(of: currentConversation.messages.count) { _ in
                             if autoFollowOutput {
                                 manualScrollTrigger &+= 1
@@ -1346,7 +1352,7 @@ struct ChatDetailView: View {
         if isInputFocused {
             dismissKeyboard()
         }
-        if selectedTurnId != nil {
+        if selectedTurnId != nil && editingTurnId == nil {
             withAnimation(.easeInOut(duration: 0.15)) {
                 selectedTurnId = nil
             }
