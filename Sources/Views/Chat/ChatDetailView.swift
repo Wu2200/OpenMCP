@@ -388,7 +388,7 @@ struct ChatDetailView: View {
                                     }
 
                                     if let err = coordinator.errorMessage {
-                                        errorBanner(err)
+                                        errorBanner(err, using: scrollProxy)
                                             .frame(width: rowAvailableWidth)
                                             .id("error_status")
                                     }
@@ -926,7 +926,7 @@ struct ChatDetailView: View {
         }
     }
 
-    private func errorBanner(_ message: String) -> some View {
+    private func errorBanner(_ message: String, using scrollProxy: ScrollViewProxy) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "exclamationmark.octagon.fill")
                 .foregroundColor(.red)
