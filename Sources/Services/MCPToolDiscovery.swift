@@ -41,6 +41,7 @@ enum MCPToolDiscovery {
     static func selectTools(
         query: String,
         allTools: [[String: Any]],
+        existingTools: [[String: Any]],
         settings: OpenAISettings,
         messages: [ChatMessage]
     ) -> [[String: Any]] {
@@ -61,6 +62,16 @@ enum MCPToolDiscovery {
         )
         guard availableSchemaTokens > 0 else { return [] }
 
+        var selected: [[String: Any]] = []
+        var selectedNames = Set<String>()
+        for tool in existingTools {
+            guard let name = (tool["function"] as? [String: Any])?["name"] as? String,
+                  selectedNames.insert(name).inserted else { continue }
+            selected.append(tool)
+        }
+        guard selected.count < maximumToolsPerSearch,
+              ContextPruner.toolSchemaTokens(selected) < availableSchemaTokens else { return [] }
+
         let rankedTools = allTools.enumerated().compactMap { index, tool -> (Int, Int, [String: Any])? in
             let score = relevanceScore(queryTerms: queryTerms, tool: tool)
             guard score > 0 else { return nil }
@@ -72,11 +83,15 @@ enum MCPToolDiscovery {
             return $0.0 > $1.0
         }
 
-        var selected: [[String: Any]] = []
         for (_, _, tool) in rankedTools {
             guard selected.count < maximumToolsPerSearch else { break }
+            guard let name = (tool["function"] as? [String: Any])?["name"] as? String,
+                  selectedNames.insert(name).inserted else { continue }
             let candidate = selected + [tool]
-            guard ContextPruner.toolSchemaTokens(candidate) <= availableSchemaTokens else { continue }
+            guard ContextPruner.toolSchemaTokens(candidate) <= availableSchemaTokens else {
+                selectedNames.remove(name)
+                continue
+            }
             selected = candidate
         }
         return selected
