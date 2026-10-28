@@ -512,9 +512,11 @@ class AgentCoordinator: ObservableObject {
         statusText = "思考中"
 
         let preparedTools = OpenAIService.shared.prepareTools(servers: servers)
-        let openAITools = preparedTools.definitions
+        let availableMCPTools = preparedTools.definitions
         let toolServerMap = preparedTools.serverMap
-
+        var selectedMCPTools: [[String: Any]] = []
+        var discoveryAttempts = 0
+        var requestMessages = conversation.messages
         var stepIndex = 0
 
         while true {
@@ -522,7 +524,15 @@ class AgentCoordinator: ObservableObject {
                 return
             }
             stepIndex += 1
-            let contextMessages = conversation.messages
+            let contextMessages = requestMessages
+            let requestTools: [[String: Any]]? = {
+                guard !availableMCPTools.isEmpty else { return nil }
+                var tools = selectedMCPTools
+                if discoveryAttempts < MCPToolDiscovery.maximumSearchRounds {
+                    tools.append(MCPToolDiscovery.definition)
+                }
+                return tools.isEmpty ? nil : tools
+            }()
             let placeholderMsg = ChatMessage(
                 role: .assistant,
                 content: "",
@@ -542,7 +552,7 @@ class AgentCoordinator: ObservableObject {
                 let (content, reasoning, toolCalls) = try await OpenAIService.shared.streamChatCompletion(
                     settings: effectiveSettings,
                     messages: contextMessages,
-                    tools: openAITools.isEmpty ? nil : openAITools,
+                    tools: requestTools,
                     conversationId: conversationId,
                     conversationTitle: conversation.title,
                     turnId: turnId,
