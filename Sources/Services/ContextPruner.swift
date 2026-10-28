@@ -11,6 +11,7 @@ struct ContextPruningResult {
 
 enum ContextPruner {
     static let contextNotice = "本次请求因上下文预算省略了较早消息或已完成的工具调用及结果；完整聊天记录仍保留在本地。"
+    private static let consumedToolResultNotice = "[该工具结果已被后续回答处理；因上下文压力，仅保留首尾片段。]"
     private static let toolTruncationNotice = "[工具结果因上下文预算截短；完整结果仍保留在本地聊天记录中。]"
     private static let messageTruncationNotice = "[消息内容因上下文预算截短；完整内容仍保留在本地聊天记录中。]"
 
@@ -41,6 +42,10 @@ enum ContextPruner {
             baseInstructionTokens
                 + estimatedMessageTokens(items)
                 + (didPrune ? estimatedTokenCount(contextNotice) + 2 : 0)
+        }
+
+        if Double(totalTokens(prepared)) >= Double(inputBudget) * 0.8 {
+            didPrune = maskConsumedToolResults(&prepared)
         }
 
         if totalTokens(prepared) > inputBudget {
@@ -157,6 +162,35 @@ enum ContextPruner {
             inputBudgetTokens: inputBudget,
             fitsBudget: estimatedTokens <= inputBudget
         )
+    }
+
+    private static func maskConsumedToolResults(_ messages: inout [ChatMessage]) -> Bool {
+        var hasSubstantiveAssistantTextAfter = false
+        var didMask = false
+
+        for index in messages.indices.reversed() {
+            let message = messages[index]
+            if message.role == .tool,
+               hasSubstantiveAssistantTextAfter,
+               message.content.count > 400 {
+                let compacted = String(message.content.prefix(180))
+                    + "\n…\n"
+                    + String(message.content.suffix(100))
+                    + "\n"
+                    + consumedToolResultNotice
+                if compacted.count < message.content.count {
+                    messages[index].content = compacted
+                    didMask = true
+                }
+            }
+
+            if message.role == .assistant,
+               !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                hasSubstantiveAssistantTextAfter = true
+            }
+        }
+
+        return didMask
     }
 
     private static func toolCallGroups(in range: Range<Int>, messages: [ChatMessage]) -> [ToolCallGroup] {
