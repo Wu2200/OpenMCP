@@ -397,7 +397,12 @@ struct ChatDetailView: View {
                                 }
                                 .padding(.horizontal, 10)
                                 .padding(.top, 10)
-                                .padding(.bottom, 56)
+                                .padding(
+                                    .bottom,
+                                    isKeyboardVisible && selectedTurnId == visibleTurns.last?.id
+                                        ? max(56, geo.size.height * 0.5)
+                                        : 56
+                                )
                                 .frame(width: viewportWidth)
                                 .background(
                                     Color.clear
