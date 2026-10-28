@@ -707,8 +707,7 @@ class OpenAIService {
         var retainedToolCallIDs = Set<String>()
 
         for (turnDistance, range) in turnRanges.reversed().enumerated() {
-            let retainedRoundLimit = turnDistance == 0 ? 4 : (turnDistance <= 2 ? 1 : 0)
-            guard retainedRoundLimit > 0 else { continue }
+            guard turnDistance == 0 else { continue }
 
             let callMessages = range.compactMap { index -> ChatMessage? in
                 let message = messages[index]
@@ -718,7 +717,7 @@ class OpenAIService {
                 return message
             }
 
-            for message in callMessages.suffix(retainedRoundLimit) {
+            for message in callMessages {
                 retainedAssistantCallIDs.insert(message.id)
                 for call in message.toolCalls ?? [] {
                     retainedToolCallIDs.insert(call.id)
@@ -726,30 +725,8 @@ class OpenAIService {
             }
         }
 
-        let totalToolContentLimit = 24_000
-        let perToolContentLimit = 8_000
-        var remainingToolContentBudget = totalToolContentLimit
-        var boundedToolContentByMessageID: [String: String] = [:]
-        var didCompact = false
-
-        for message in messages.reversed() where message.role == .tool {
-            guard let callID = message.toolCallId,
-                  retainedToolCallIDs.contains(callID) else { continue }
-
-            let retainedCount = min(
-                message.content.count,
-                min(perToolContentLimit, remainingToolContentBudget)
-            )
-            var boundedContent = String(message.content.prefix(retainedCount))
-            if retainedCount < message.content.count {
-                boundedContent += "\n\n[工具结果已截断或省略；完整结果仍保留在对话记录中。]"
-                didCompact = true
-            }
-            boundedToolContentByMessageID[message.id] = boundedContent
-            remainingToolContentBudget -= retainedCount
-        }
-
         var compactedMessages: [ChatMessage] = []
+        var didCompact = false
 
         for message in messages {
             if message.role == .assistant,
@@ -767,13 +744,12 @@ class OpenAIService {
             }
 
             if message.role == .tool {
-                guard let boundedContent = boundedToolContentByMessageID[message.id] else {
+                guard let callID = message.toolCallId,
+                      retainedToolCallIDs.contains(callID) else {
                     didCompact = true
                     continue
                 }
-                var boundedMessage = message
-                boundedMessage.content = boundedContent
-                compactedMessages.append(boundedMessage)
+                compactedMessages.append(message)
                 continue
             }
 
@@ -787,7 +763,7 @@ class OpenAIService {
         let context = compactToolHistory(messages)
         var systemPrompt = settings.systemPrompt
         if context.didCompact {
-            let contextNotice = "为控制上下文，本次请求已省略较早的工具调用历史或截断过长的工具结果；如需缺失数据，请重新调用相关工具。"
+            let contextNotice = "为控制上下文，本次请求仅保留当前轮次的工具调用及结果；较早轮次的工具记录已省略，如需相关数据，请重新调用工具。"
             if systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 systemPrompt = contextNotice
             } else {
