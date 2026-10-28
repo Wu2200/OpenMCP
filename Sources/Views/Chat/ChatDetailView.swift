@@ -1712,6 +1712,8 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
             switch recognizer.state {
             case .began:
                 scrollSettleWorkItem?.cancel()
+                bottomFollowWorkItem?.cancel()
+                bottomFollowWorkItem = nil
                 userScrollActive = true
                 panInitialOffsetY = sv.contentOffset.y
                 cancelActiveAnimation()
@@ -1719,7 +1721,8 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
             case .changed:
                 let translationY = recognizer.translation(in: sv).y
                 let distanceFromBottom = bottomOffset(for: sv) - sv.contentOffset.y
-                if (translationY > 18 || sv.contentOffset.y < panInitialOffsetY - 16) && distanceFromBottom > 68 {
+                let movedAwayFromBottom = translationY < -18 || sv.contentOffset.y > panInitialOffsetY + 16
+                if movedAwayFromBottom && distanceFromBottom > 68 {
                     onUserDragUp()
                 }
             case .ended, .cancelled, .failed:
