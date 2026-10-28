@@ -35,7 +35,7 @@ enum ContextPruner {
         let inputBudget = max(1, contextLimit - outputReserve)
         let baseInstructionTokens = estimatedTokenCount(settings.systemPrompt) + schemaTokens + 4
         var prepared = messages
-        var didPrune = omitCompletedToolHistoryFromPriorTurns(&prepared)
+        var didPrune = false
 
         func totalTokens(_ items: [ChatMessage]) -> Int {
             baseInstructionTokens
@@ -157,45 +157,6 @@ enum ContextPruner {
             inputBudgetTokens: inputBudget,
             fitsBudget: estimatedTokens <= inputBudget
         )
-    }
-
-    private static func omitCompletedToolHistoryFromPriorTurns(_ messages: inout [ChatMessage]) -> Bool {
-        guard !messages.isEmpty else { return false }
-        let currentTurn = turnRanges(in: messages).last ?? (0..<messages.count)
-        let currentMessageIDs = Set(currentTurn.map { messages[$0].id })
-        let currentCallIDs = Set(currentTurn.flatMap { index in
-            messages[index].role == .assistant
-                ? (messages[index].toolCalls ?? []).map(\.id)
-                : []
-        })
-        var retainedMessages: [ChatMessage] = []
-        var didPrune = false
-
-        for message in messages {
-            if message.role == .assistant,
-               let calls = message.toolCalls,
-               !calls.isEmpty,
-               !currentMessageIDs.contains(message.id) {
-                didPrune = true
-                if !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    var textOnlyMessage = message
-                    textOnlyMessage.toolCalls = nil
-                    retainedMessages.append(textOnlyMessage)
-                }
-                continue
-            }
-
-            if message.role == .tool,
-               !currentCallIDs.contains(message.toolCallId ?? "") {
-                didPrune = true
-                continue
-            }
-
-            retainedMessages.append(message)
-        }
-
-        messages = retainedMessages
-        return didPrune
     }
 
     private static func toolCallGroups(in range: Range<Int>, messages: [ChatMessage]) -> [ToolCallGroup] {
