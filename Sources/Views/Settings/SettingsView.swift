@@ -772,6 +772,11 @@ struct SettingsView: View {
                             }
                         }
                         .onSubmit(dismissKeyboard)
+                        .onChange(of: focusedField) { newValue in
+                            if newValue != .contextWindow {
+                                commitContextWindowInput()
+                            }
+                        }
                     Text("tokens")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundColor(theme.mutedText)
