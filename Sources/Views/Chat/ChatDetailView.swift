@@ -405,7 +405,7 @@ struct ChatDetailView: View {
                                 .padding(.top, 10)
                                 .padding(
                                     .bottom,
-                                    isKeyboardVisible && (editingTurnId == visibleTurns.last?.id || selectedTurnId == visibleTurns.last?.id)
+                                    editingTurnId == visibleTurns.last?.id || (isKeyboardVisible && selectedTurnId == visibleTurns.last?.id)
                                         ? max(56, geo.size.height * 0.5)
                                         : 56
                                 )
@@ -510,8 +510,7 @@ struct ChatDetailView: View {
                 .frame(width: viewportWidth)
                 .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidShowNotification)) { _ in
                     isKeyboardVisible = true
-                    guard let turnId = pendingEditScrollTurnId else { return }
-                    scrollEditorToCenter(turnId, using: scrollProxy)
+                    pendingEditScrollTurnId = nil
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidHideNotification)) { _ in
                     isKeyboardVisible = false
@@ -1333,9 +1332,7 @@ struct ChatDetailView: View {
 
     private func centerTurnForEditing(_ turnId: String, using proxy: ScrollViewProxy) {
         pendingEditScrollTurnId = turnId
-        if isKeyboardVisible {
-            scrollEditorToCenter(turnId, using: proxy)
-        }
+        scrollEditorToCenter(turnId, using: proxy)
     }
 
     private func scrollEditorToCenter(_ turnId: String, using proxy: ScrollViewProxy) {
