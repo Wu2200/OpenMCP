@@ -246,10 +246,6 @@ struct ChatDetailView: View {
         max(0, displayTurns.count - visibleHistoryLimit)
     }
 
-    private var isShowingEntireHistory: Bool {
-        visibleHistoryLimit >= displayTurns.count
-    }
-
     private var activeToolCount: Int {
         storage.servers.filter { $0.isEnabled }.reduce(0) { $0 + $1.tools.filter { $0.isEnabled }.count }
     }
@@ -310,7 +306,7 @@ struct ChatDetailView: View {
 
                                     let turns = visibleTurns
                                     ForEach(Array(turns.enumerated()), id: \.element.id) { index, turn in
-                                        let isLastAssistant = isShowingEntireHistory && index == turns.count - 1 && turn.role == .assistant
+                                        let isLastAssistant = index == turns.count - 1 && turn.role == .assistant
                                         let activeGenerating = coordinator.isGenerating && isLastAssistant
 
                                         MessageBubbleView(
@@ -389,7 +385,7 @@ struct ChatDetailView: View {
                                         .id(turn.id)
                                     }
 
-                                    if coordinator.isGenerating && (!isShowingEntireHistory || visibleTurns.last?.role != .assistant) {
+                                    if coordinator.isGenerating && visibleTurns.last?.role != .assistant {
                                         generatingStatusRow
                                             .frame(width: rowAvailableWidth, alignment: .leading)
                                             .id("generating_status")
