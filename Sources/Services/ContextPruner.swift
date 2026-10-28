@@ -35,36 +35,12 @@ enum ContextPruner {
         let inputBudget = max(1, contextLimit - outputReserve)
         let baseInstructionTokens = estimatedTokenCount(settings.systemPrompt) + schemaTokens + 4
         var prepared = messages
-        var didPrune = false
+        var didPrune = omitPriorTurnToolHistory(&prepared)
 
         func totalTokens(_ items: [ChatMessage]) -> Int {
             baseInstructionTokens
                 + estimatedMessageTokens(items)
                 + (didPrune ? estimatedTokenCount(contextNotice) + 2 : 0)
-        }
-
-        if totalTokens(prepared) > inputBudget {
-            let groups = turnRanges(in: prepared).flatMap { turn in
-                toolCallGroups(in: turn, messages: prepared)
-            }
-            for group in groups.dropLast() {
-                guard totalTokens(prepared) > inputBudget else { break }
-                let resultIDs = Set(prepared.compactMap { message in
-                    message.role == .tool ? message.toolCallId : nil
-                })
-                guard group.callIDs.isSubset(of: resultIDs) else { continue }
-                didPrune = true
-                if let index = prepared.firstIndex(where: { $0.id == group.messageId }) {
-                    if prepared[index].content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        prepared.remove(at: index)
-                    } else {
-                        prepared[index].toolCalls = nil
-                    }
-                }
-                prepared.removeAll { message in
-                    message.role == .tool && group.callIDs.contains(message.toolCallId ?? "")
-                }
-            }
         }
 
         while totalTokens(prepared) > inputBudget {
@@ -157,6 +133,48 @@ enum ContextPruner {
             inputBudgetTokens: inputBudget,
             fitsBudget: estimatedTokens <= inputBudget
         )
+    }
+
+    private static func omitPriorTurnToolHistory(_ messages: inout [ChatMessage]) -> Bool {
+        let turns = turnRanges(in: messages)
+        guard turns.count > 1 else { return false }
+
+        let priorMessageIDs = Set(turns.dropLast().flatMap { turn in
+            turn.map { messages[$0].id }
+        })
+        let currentCallIDs = Set((turns.last ?? (0..<messages.count)).flatMap { index in
+            messages[index].role == .assistant
+                ? (messages[index].toolCalls ?? []).map(\\.id)
+                : []
+        })
+        var retainedMessages: [ChatMessage] = []
+        var didPrune = false
+
+        for message in messages {
+            if message.role == .assistant,
+               let calls = message.toolCalls,
+               !calls.isEmpty,
+               priorMessageIDs.contains(message.id) {
+                didPrune = true
+                if !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    var textOnlyMessage = message
+                    textOnlyMessage.toolCalls = nil
+                    retainedMessages.append(textOnlyMessage)
+                }
+                continue
+            }
+
+            if message.role == .tool,
+               !currentCallIDs.contains(message.toolCallId ?? "") {
+                didPrune = true
+                continue
+            }
+
+            retainedMessages.append(message)
+        }
+
+        messages = retainedMessages
+        return didPrune
     }
 
     private static func toolCallGroups(in range: Range<Int>, messages: [ChatMessage]) -> [ToolCallGroup] {
