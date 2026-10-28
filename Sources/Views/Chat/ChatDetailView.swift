@@ -403,7 +403,7 @@ struct ChatDetailView: View {
                                     .bottom,
                                     isKeyboardVisible && (editingTurnId == visibleTurns.last?.id || selectedTurnId == visibleTurns.last?.id)
                                         ? max(56, geo.size.height * 0.5)
-                                        : 56
+                                        : 16
                                 )
                                 .frame(width: viewportWidth)
                                 .background(
@@ -457,8 +457,8 @@ struct ChatDetailView: View {
                                 manualScrollTrigger &+= 1
                             }
                         }
-                        .onChange(of: coordinator.isGenerating) { generating in
-                            if generating && autoFollowOutput {
+                        .onChange(of: coordinator.isGenerating) { _ in
+                            if autoFollowOutput {
                                 manualScrollTrigger &+= 1
                             }
                         }
@@ -1487,19 +1487,10 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
         DispatchQueue.main.async {
             coord.attachIfNeeded(from: uiView)
             if !isViewActive {
+                coord.cancelScheduledBottomFollow()
                 coord.cancelActiveAnimation()
             } else if triggerChanged {
-                coord.scrollToBottom(force: true)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-                    if coord.isViewActive && coord.autoFollowOutput {
-                        coord.scrollToBottom(force: false, animated: true)
-                    }
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
-                    if coord.isViewActive && coord.autoFollowOutput {
-                        coord.scrollToBottom(force: false, animated: true)
-                    }
-                }
+                coord.scheduleBottomFollow(force: true)
             } else if !wasViewActive && isViewActive && isGenerating && autoFollowOutput && coord.isNearBottom() {
                 coord.scheduleBottomFollow()
             } else if !wasGenerating && isGenerating && autoFollowOutput && coord.isNearBottom() {
@@ -1526,6 +1517,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
         private var lastObservedHeight: CGFloat = 0
         private var scrollSettleWorkItem: DispatchWorkItem?
         private var bottomFollowWorkItem: DispatchWorkItem?
+        private var bottomFollowGeneration: UInt64 = 0
         private var followAnimator: UIViewPropertyAnimator?
         private var animatedTargetY: CGFloat = 0
         private var userScrollActive = false
@@ -1598,7 +1590,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
         func positionAtBottomInitiallyIfNeeded() {
             guard !hasPerformedInitialPositioning else { return }
             hasPerformedInitialPositioning = true
-            scheduleBottomFollow()
+            scheduleBottomFollow(force: true)
         }
 
         func scrollToBottom(force: Bool = false, animated: Bool = true) {
@@ -1645,19 +1637,42 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
             animator.startAnimation()
         }
 
-        func scheduleBottomFollow() {
+        func cancelScheduledBottomFollow() {
+            bottomFollowGeneration &+= 1
             bottomFollowWorkItem?.cancel()
-            scheduleBottomFollowAttempt(after: 0.04, remainingRetries: 3)
+            bottomFollowWorkItem = nil
         }
 
-        private func scheduleBottomFollowAttempt(after delay: TimeInterval, remainingRetries: Int) {
+        func scheduleBottomFollow(force: Bool = false) {
+            cancelScheduledBottomFollow()
+            let generation = bottomFollowGeneration
+            scheduleBottomFollowAttempt(after: 0.02, remainingRetries: 5, force: force, generation: generation)
+        }
+
+        private func scheduleBottomFollowAttempt(
+            after delay: TimeInterval,
+            remainingRetries: Int,
+            force: Bool,
+            generation: UInt64
+        ) {
             let item = DispatchWorkItem { [weak self] in
-                guard let self = self, self.isViewActive, self.autoFollowOutput,
+                guard let self = self,
+                      self.bottomFollowGeneration == generation,
+                      self.isViewActive,
+                      (force || self.autoFollowOutput),
                       let scrollView = self.attachedScrollView else { return }
                 scrollView.layoutIfNeeded()
-                self.scrollToBottom(animated: false)
-                guard remainingRetries > 0 else { return }
-                self.scheduleBottomFollowAttempt(after: 0.12, remainingRetries: remainingRetries - 1)
+                self.scrollToBottom(force: force, animated: false)
+                guard remainingRetries > 0 else {
+                    self.bottomFollowWorkItem = nil
+                    return
+                }
+                self.scheduleBottomFollowAttempt(
+                    after: 0.1,
+                    remainingRetries: remainingRetries - 1,
+                    force: force,
+                    generation: generation
+                )
             }
             bottomFollowWorkItem = item
             DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
@@ -1684,7 +1699,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
                 self.lastObservedHeight = newHeight
 
                 guard abs(heightDelta) > 0.5 else { return }
-                guard self.isViewActive, self.isGenerating, self.autoFollowOutput else { return }
+                guard self.isViewActive, self.autoFollowOutput else { return }
                 guard !self.userScrollActive, !sv.isTracking, !sv.isDragging, !sv.isDecelerating else { return }
 
                 let previousBottomOffset = max(
@@ -1714,8 +1729,7 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
             switch recognizer.state {
             case .began:
                 scrollSettleWorkItem?.cancel()
-                bottomFollowWorkItem?.cancel()
-                bottomFollowWorkItem = nil
+                cancelScheduledBottomFollow()
                 userScrollActive = true
                 panInitialOffsetY = sv.contentOffset.y
                 cancelActiveAnimation()
