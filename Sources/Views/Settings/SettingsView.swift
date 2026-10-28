@@ -7,6 +7,7 @@ struct SettingsView: View {
     @State private var fetchErrorMessage: String? = nil
     @State private var fetchSuccessMessage: String? = nil
     @State private var showApiKey: Bool = false
+    @State private var contextWindowInput: String = ""
     @State private var showingModelManagerSheet: Bool = false
     @State private var modelSearchText: String = ""
     @State private var customModelInput: String = ""
@@ -20,6 +21,7 @@ struct SettingsView: View {
         case profileName
         case baseURL
         case apiKey
+        case contextWindow
         case systemPrompt
         case modelSearch
         case customModel
@@ -151,8 +153,20 @@ struct SettingsView: View {
     }
 
     private func dismissKeyboard() {
+        if focusedField == .contextWindow {
+            commitContextWindowInput()
+        }
         focusedField = nil
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    }
+
+    private func commitContextWindowInput() {
+        guard let value = Int(contextWindowInput), value >= 4_096 else {
+            contextWindowInput = String(storage.settings.contextWindowTokens)
+            return
+        }
+        storage.settings.contextWindowTokens = value
+        contextWindowInput = String(value)
     }
 
     private var currentThemeSummaryName: String {
@@ -735,19 +749,34 @@ struct SettingsView: View {
                     .tint(theme.accent)
             }
 
-            VStack(alignment: .leading, spacing: 6) {
-                Stepper(value: $storage.settings.contextWindowTokens, in: 4_096...1_000_000, step: 4_096) {
-                    HStack {
-                        Text("上下文窗口上限")
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundColor(theme.secondaryText)
-                        Spacer()
-                        Text("\(storage.settings.contextWindowTokens.formatted()) tokens")
-                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                            .foregroundColor(theme.accent)
-                    }
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Text("上下文窗口上限")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(theme.secondaryText)
+                    Spacer(minLength: 4)
+                    TextField("1000000", text: $contextWindowInput)
+                        .focused($focusedField, equals: .contextWindow)
+                        .keyboardType(.numberPad)
+                        .multilineTextAlignment(.trailing)
+                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                        .foregroundColor(theme.accent)
+                        .frame(width: 140)
+                        .onAppear {
+                            contextWindowInput = String(storage.settings.contextWindowTokens)
+                        }
+                        .onChange(of: contextWindowInput) { newValue in
+                            let digits = String(newValue.filter { $0 >= "0" && $0 <= "9" })
+                            if digits != newValue {
+                                contextWindowInput = digits
+                            }
+                        }
+                        .onSubmit(dismissKeyboard)
+                    Text("tokens")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(theme.mutedText)
                 }
-                Text("按模型窗口估算输入预算并预留输出空间；计入系统提示词、工具定义、消息和附件。达到预算约 80% 时，精简已被后续回答处理的旧工具结果；超出预算时再裁剪较早工具调用、对话轮次和较长内容，并优先保留尚未处理的最新工具结果。完整聊天记录保留在本地；Token 数为估算值。")
+                Text("默认 1,000,000。输入后收起键盘保存，最小值为 4,096；本设置用于本地估算和裁剪，不会改变模型服务端的实际上下文能力。系统提示词、工具定义、消息和附件都会计入预算，历史超出预算时只裁剪本次请求，完整记录保留在本地。Token 数为估算值。")
                     .font(.system(size: 11))
                     .foregroundColor(theme.mutedText)
             }
