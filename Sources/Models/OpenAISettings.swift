@@ -48,6 +48,7 @@ struct OpenAISettings: Codable, Equatable {
     var providerProfiles: [AIProviderProfile] = []
     var activeProfileId: String = ""
     var systemPrompt: String = "You are a helpful assistant with tool calling capabilities."
+    var contextWindowTokens: Int = 32_768
     var temperature: Double = 0.7
     var themePreset: String = SoftThemePreset.warmOat.rawValue
     var useCustomBackground: Bool = false
@@ -63,6 +64,7 @@ struct OpenAISettings: Codable, Equatable {
         providerProfiles: [AIProviderProfile] = [],
         activeProfileId: String = "",
         systemPrompt: String = "You are a helpful assistant with tool calling capabilities.",
+        contextWindowTokens: Int = 32_768,
         temperature: Double = 0.7,
         themePreset: String = SoftThemePreset.warmOat.rawValue,
         useCustomBackground: Bool = false,
@@ -75,6 +77,7 @@ struct OpenAISettings: Codable, Equatable {
         self.availableModels = availableModels
         self.enabledModels = enabledModels
         self.systemPrompt = systemPrompt
+        self.contextWindowTokens = max(4_096, contextWindowTokens)
         self.temperature = temperature
         self.themePreset = themePreset
         self.useCustomBackground = useCustomBackground
@@ -114,6 +117,7 @@ struct OpenAISettings: Codable, Equatable {
         self.availableModels = decodedAvailable
         self.enabledModels = decodedEnabled
         self.systemPrompt = try container.decodeIfPresent(String.self, forKey: .systemPrompt) ?? "You are a helpful assistant with tool calling capabilities."
+        self.contextWindowTokens = max(4_096, try container.decodeIfPresent(Int.self, forKey: .contextWindowTokens) ?? 32_768)
         self.temperature = try container.decodeIfPresent(Double.self, forKey: .temperature) ?? 0.7
         self.themePreset = try container.decodeIfPresent(String.self, forKey: .themePreset) ?? SoftThemePreset.warmOat.rawValue
         self.useCustomBackground = try container.decodeIfPresent(Bool.self, forKey: .useCustomBackground) ?? false
