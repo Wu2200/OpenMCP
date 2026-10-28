@@ -2,7 +2,7 @@ import Foundation
 
 enum MCPToolDiscovery {
     static let functionName = "openmcp_discover_mcp_tools"
-    static let maximumSearchRounds = 4
+    static let maximumSearchRounds = 8
     private static let maximumToolsPerSearch = 12
     private static let maximumSchemaTokensPerSearch = 8_192
 
@@ -10,7 +10,7 @@ enum MCPToolDiscovery {
         "type": "function",
         "function": [
             "name": functionName,
-            "description": "在执行 MCP 操作前，根据用户任务搜索最相关的可用 MCP 工具。请使用简短英文关键词，包含服务、动作和目标对象。普通问答不要调用此工具。搜索到的工具会在下一轮作为可调用工具提供。",
+            "description": "当用户请求需要访问或修改已启用 MCP 服务中的实时数据时，必须先调用此工具搜索相关操作。普通知识问答、闲聊和纯文本处理不要调用。使用简短英文关键词，包含服务、动作和目标对象；搜索本身不执行操作，匹配到的真实工具会在下一轮提供。",},{
             "parameters": [
                 "type": "object",
                 "properties": [
@@ -126,7 +126,10 @@ enum MCPToolDiscovery {
             "tool", "tools", "mcp", "please", "find", "search", "available", "related", "relevant",
             "that", "this", "which", "what", "when", "where", "how", "can", "could", "would"
         ]
-        let parts = text.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted)
+        let separatedCamelCase = text
+            .replacingOccurrences(of: "([a-z0-9])([A-Z])", with: "$1 $2", options: .regularExpression)
+            .replacingOccurrences(of: "([A-Z])([A-Z][a-z])", with: "$1 $2", options: .regularExpression)
+        let parts = separatedCamelCase.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted)
         return Set(parts.filter { $0.count > 1 && !ignored.contains($0) })
     }
 }
