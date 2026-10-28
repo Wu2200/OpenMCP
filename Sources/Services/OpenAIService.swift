@@ -85,7 +85,19 @@ class OpenAIService {
             throw URLError(.badURL)
         }
 
-        let openAIMessages = buildOpenAIMessages(settings: settings, messages: messages)
+        let contextPlan = ContextPruner.prepare(settings: settings, messages: messages, tools: tools)
+        guard contextPlan.fitsBudget else {
+            throw NSError(
+                domain: "OpenAIService",
+                code: -2,
+                userInfo: [NSLocalizedDescriptionKey: "当前请求的估算输入上下文为 \(contextPlan.estimatedInputTokens) tokens，超过预算 \(contextPlan.inputBudgetTokens) tokens。请减少启用工具、缩短系统提示词或调高上下文上限。"]
+            )
+        }
+        let openAIMessages = buildOpenAIMessages(
+            settings: settings,
+            messages: contextPlan.messages,
+            contextNotice: contextPlan.didPrune ? ContextPruner.contextNotice : nil
+        )
 
         var payload: [String: Any] = [
             "model": settings.modelName,
@@ -103,7 +115,7 @@ class OpenAIService {
         let profileName = settings.activeProfile?.name ?? "默认配置"
         let toolCount = tools?.count ?? 0
         let stepPrefix = stepIndex.map { "第 \($0) 步 · " } ?? ""
-        let requestHeaderDetails = "Endpoint: \(fullEndpoint)\nProfile: \(profileName)\nModel: \(settings.modelName)\nTemperature: \(settings.temperature)\nMessages Count: \(openAIMessages.count)\nTools Enabled: \(toolCount)\nPayload Bytes: \(payloadData.count)"
+        let requestHeaderDetails = "Endpoint: \(fullEndpoint)\nProfile: \(profileName)\nModel: \(settings.modelName)\nTemperature: \(settings.temperature)\nMessages Count: \(openAIMessages.count)\nTools Enabled: \(toolCount)\nEstimated Input Tokens: \(contextPlan.estimatedInputTokens) / \(contextPlan.inputBudgetTokens)\nEstimated Tool Schema Tokens: \(contextPlan.toolSchemaTokens)\nContext Pruned: \(contextPlan.didPrune ? "Yes" : "No")\nPayload Bytes: \(payloadData.count)"
 
         let requestLogId = await MainActor.run {
             AppLogManager.shared.log(
@@ -759,11 +771,13 @@ class OpenAIService {
         return (compactedMessages, didCompact)
     }
 
-    private func buildOpenAIMessages(settings: OpenAISettings, messages: [ChatMessage]) -> [[String: Any]] {
-        let context = compactToolHistory(messages)
+    private func buildOpenAIMessages(
+        settings: OpenAISettings,
+        messages: [ChatMessage],
+        contextNotice: String?
+    ) -> [[String: Any]] {
         var systemPrompt = settings.systemPrompt
-        if context.didCompact {
-            let contextNotice = "为控制上下文，本次请求仅保留当前轮次的工具调用及结果；较早轮次的工具记录已省略，如需相关数据，请重新调用工具。"
+        if let contextNotice {
             if systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 systemPrompt = contextNotice
             } else {
@@ -779,7 +793,7 @@ class OpenAIService {
             ])
         }
 
-        for msg in context.messages {
+        for msg in messages {
             var combinedText = msg.content
             let attachments = msg.attachments ?? []
 
