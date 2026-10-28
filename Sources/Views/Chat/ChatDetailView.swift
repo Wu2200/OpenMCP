@@ -1278,6 +1278,12 @@ struct ChatDetailView: View {
                 } else {
                     ScrollView {
                         VStack(spacing: 14) {
+                            Text("已启用的工具会按问题按需搜索；每次只把相关工具定义发送给 AI。")
+                                .font(.system(size: 12))
+                                .foregroundColor(theme.secondaryText)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 2)
+
                             ForEach(storage.servers) { server in
                                 VStack(alignment: .leading, spacing: 10) {
                                     HStack {
