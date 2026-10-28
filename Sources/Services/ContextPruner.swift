@@ -10,7 +10,7 @@ struct ContextPruningResult {
 }
 
 enum ContextPruner {
-    static let contextNotice = "本次请求按上下文预算省略或截短了较早消息或已处理的工具记录；完整聊天记录仍保留在本地。"
+    static let contextNotice = "本次请求已省略较早轮次的工具调用记录及结果，并可能按上下文预算裁剪较早消息或工具结果；完整聊天记录仍保留在本地。"
     private static let toolTruncationNotice = "[工具结果因上下文预算截短；完整结果仍保留在本地聊天记录中。]"
     private static let messageTruncationNotice = "[消息内容因上下文预算截短；完整内容仍保留在本地聊天记录中。]"
 
@@ -35,7 +35,7 @@ enum ContextPruner {
         let inputBudget = max(1, contextLimit - outputReserve)
         let baseInstructionTokens = estimatedTokenCount(settings.systemPrompt) + schemaTokens + 4
         var prepared = messages
-        var didPrune = false
+        var didPrune = omitCompletedToolHistoryFromPriorTurns(&prepared)
 
         func totalTokens(_ items: [ChatMessage]) -> Int {
             baseInstructionTokens
@@ -72,29 +72,6 @@ enum ContextPruner {
             guard turns.count > 1, let oldestTurn = turns.first else { break }
             prepared.removeSubrange(oldestTurn)
             didPrune = true
-        }
-
-        if totalTokens(prepared) > inputBudget {
-            let currentTurn = turnRanges(in: prepared).last ?? (0..<prepared.count)
-            let groups = toolCallGroups(in: currentTurn, messages: prepared)
-            for group in groups.dropLast() {
-                guard totalTokens(prepared) > inputBudget else { break }
-                let resultIDs = Set(prepared.compactMap { message in
-                    message.role == .tool ? message.toolCallId : nil
-                })
-                guard group.callIDs.isSubset(of: resultIDs) else { continue }
-                didPrune = true
-                if let index = prepared.firstIndex(where: { $0.id == group.messageId }) {
-                    if prepared[index].content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        prepared.remove(at: index)
-                    } else {
-                        prepared[index].toolCalls = nil
-                    }
-                }
-                prepared.removeAll { message in
-                    message.role == .tool && group.callIDs.contains(message.toolCallId ?? "")
-                }
-            }
         }
 
         if totalTokens(prepared) > inputBudget {
@@ -180,6 +157,45 @@ enum ContextPruner {
             inputBudgetTokens: inputBudget,
             fitsBudget: estimatedTokens <= inputBudget
         )
+    }
+
+    private static func omitCompletedToolHistoryFromPriorTurns(_ messages: inout [ChatMessage]) -> Bool {
+        guard !messages.isEmpty else { return false }
+        let currentTurn = turnRanges(in: messages).last ?? (0..<messages.count)
+        let currentMessageIDs = Set(currentTurn.map { messages[$0].id })
+        let currentCallIDs = Set(currentTurn.flatMap { index in
+            messages[index].role == .assistant
+                ? (messages[index].toolCalls ?? []).map(\.id)
+                : []
+        })
+        var retainedMessages: [ChatMessage] = []
+        var didPrune = false
+
+        for message in messages {
+            if message.role == .assistant,
+               let calls = message.toolCalls,
+               !calls.isEmpty,
+               !currentMessageIDs.contains(message.id) {
+                didPrune = true
+                if !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    var textOnlyMessage = message
+                    textOnlyMessage.toolCalls = nil
+                    retainedMessages.append(textOnlyMessage)
+                }
+                continue
+            }
+
+            if message.role == .tool,
+               !currentCallIDs.contains(message.toolCallId ?? "") {
+                didPrune = true
+                continue
+            }
+
+            retainedMessages.append(message)
+        }
+
+        messages = retainedMessages
+        return didPrune
     }
 
     private static func toolCallGroups(in range: Range<Int>, messages: [ChatMessage]) -> [ToolCallGroup] {
