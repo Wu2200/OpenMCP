@@ -287,7 +287,7 @@ struct ChatDetailView: View {
                                         handleBackgroundTap()
                                     }
                             } else {
-                                LazyVStack(spacing: 12) {
+                                VStack(spacing: 12) {
                                     if hiddenTurnCount > 0 {
                                         Button {
                                             visibleHistoryLimit = min(displayTurns.count, visibleHistoryLimit + 40)
@@ -455,6 +455,7 @@ struct ChatDetailView: View {
                             }
                         }
                         .frame(width: viewportWidth)
+                        .chatDefaultScrollAnchor(displayTurns.isEmpty ? .top : .bottom)
                         .environment(\.chatLayoutDiagnosticsEnabled, isLayoutDiagnosticsEnabled)
                         .coordinateSpace(name: ChatLayoutCoordinateSpace.name)
                         .onPreferenceChange(ChatLayoutFramesPreferenceKey.self) { samples in
@@ -1652,6 +1653,11 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
         func positionAtBottomInitiallyIfNeeded() {
             guard !hasPerformedInitialPositioning else { return }
             hasPerformedInitialPositioning = true
+            if #available(iOS 17.0, *) {
+                if isNearBottom(tolerance: 24) {
+                    return
+                }
+            }
             scheduleBottomFollow(force: true)
         }
 
@@ -1673,7 +1679,8 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
         func scheduleBottomFollow(force: Bool = false) {
             cancelScheduledBottomFollow()
             let generation = bottomFollowGeneration
-            scheduleBottomFollowAttempt(after: 0.02, remainingRetries: 5, force: force, generation: generation)
+            let retries = isGenerating ? 4 : 2
+            scheduleBottomFollowAttempt(after: 0.02, remainingRetries: retries, force: force, generation: generation)
         }
 
         private func scheduleBottomFollowAttempt(
@@ -1688,14 +1695,17 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
                       self.isViewActive,
                       (force || self.autoFollowOutput),
                       let scrollView = self.attachedScrollView else { return }
-                scrollView.layoutIfNeeded()
                 self.requestBottom(force: force)
+                if !self.isGenerating && self.isNearBottom(tolerance: 12) {
+                    self.bottomFollowWorkItem = nil
+                    return
+                }
                 guard remainingRetries > 0 else {
                     self.bottomFollowWorkItem = nil
                     return
                 }
                 self.scheduleBottomFollowAttempt(
-                    after: 0.1,
+                    after: 0.08,
                     remainingRetries: remainingRetries - 1,
                     force: force,
                     generation: generation
@@ -1792,6 +1802,17 @@ private struct ChatScrollViewIntrospector: UIViewRepresentable {
             }
             scrollSettleWorkItem = item
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.04, execute: item)
+        }
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func chatDefaultScrollAnchor(_ anchor: UnitPoint?) -> some View {
+        if #available(iOS 17.0, *) {
+            self.defaultScrollAnchor(anchor)
+        } else {
+            self
         }
     }
 }
