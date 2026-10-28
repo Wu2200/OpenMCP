@@ -726,8 +726,30 @@ class OpenAIService {
             }
         }
 
-        var compactedMessages: [ChatMessage] = []
+        let totalToolContentLimit = 24_000
+        let perToolContentLimit = 8_000
+        var remainingToolContentBudget = totalToolContentLimit
+        var boundedToolContentByMessageID: [String: String] = [:]
         var didCompact = false
+
+        for message in messages.reversed() where message.role == .tool {
+            guard let callID = message.toolCallId,
+                  retainedToolCallIDs.contains(callID) else { continue }
+
+            let retainedCount = min(
+                message.content.count,
+                min(perToolContentLimit, remainingToolContentBudget)
+            )
+            var boundedContent = String(message.content.prefix(retainedCount))
+            if retainedCount < message.content.count {
+                boundedContent += "\n\n[工具结果已截断或省略；完整结果仍保留在对话记录中。]"
+                didCompact = true
+            }
+            boundedToolContentByMessageID[message.id] = boundedContent
+            remainingToolContentBudget -= retainedCount
+        }
+
+        var compactedMessages: [ChatMessage] = []
 
         for message in messages {
             if message.role == .assistant,
@@ -745,18 +767,12 @@ class OpenAIService {
             }
 
             if message.role == .tool {
-                guard let callID = message.toolCallId,
-                      retainedToolCallIDs.contains(callID) else {
+                guard let boundedContent = boundedToolContentByMessageID[message.id] else {
                     didCompact = true
                     continue
                 }
-
                 var boundedMessage = message
-                if boundedMessage.content.count > 12_000 {
-                    boundedMessage.content = String(boundedMessage.content.prefix(12_000))
-                        + "\n\n[工具结果已截断：原始内容 \(message.content.count) 字，本次请求保留前 12000 字；完整结果仍保留在对话记录中。]"
-                    didCompact = true
-                }
+                boundedMessage.content = boundedContent
                 compactedMessages.append(boundedMessage)
                 continue
             }
