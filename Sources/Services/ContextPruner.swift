@@ -35,12 +35,36 @@ enum ContextPruner {
         let inputBudget = max(1, contextLimit - outputReserve)
         let baseInstructionTokens = estimatedTokenCount(settings.systemPrompt) + schemaTokens + 4
         var prepared = messages
-        var didPrune = compactOlderToolHistory(&prepared)
+        var didPrune = false
 
         func totalTokens(_ items: [ChatMessage]) -> Int {
             baseInstructionTokens
                 + estimatedMessageTokens(items)
                 + (didPrune ? estimatedTokenCount(contextNotice) + 2 : 0)
+        }
+
+        if totalTokens(prepared) > inputBudget {
+            let groups = turnRanges(in: prepared).flatMap { turn in
+                toolCallGroups(in: turn, messages: prepared)
+            }
+            for group in groups.dropLast() {
+                guard totalTokens(prepared) > inputBudget else { break }
+                let resultIDs = Set(prepared.compactMap { message in
+                    message.role == .tool ? message.toolCallId : nil
+                })
+                guard group.callIDs.isSubset(of: resultIDs) else { continue }
+                didPrune = true
+                if let index = prepared.firstIndex(where: { $0.id == group.messageId }) {
+                    if prepared[index].content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        prepared.remove(at: index)
+                    } else {
+                        prepared[index].toolCalls = nil
+                    }
+                }
+                prepared.removeAll { message in
+                    message.role == .tool && group.callIDs.contains(message.toolCallId ?? "")
+                }
+            }
         }
 
         while totalTokens(prepared) > inputBudget {
@@ -156,45 +180,6 @@ enum ContextPruner {
             inputBudgetTokens: inputBudget,
             fitsBudget: estimatedTokens <= inputBudget
         )
-    }
-
-    private static func compactOlderToolHistory(_ messages: inout [ChatMessage]) -> Bool {
-        guard !messages.isEmpty else { return false }
-        let currentTurn = turnRanges(in: messages).last ?? (0..<messages.count)
-        let currentMessageIDs = Set(currentTurn.map { messages[$0].id })
-        let currentCallIDs = Set(currentTurn.flatMap { index in
-            messages[index].role == .assistant
-                ? (messages[index].toolCalls ?? []).map(\.id)
-                : []
-        })
-        var compacted: [ChatMessage] = []
-        var didCompact = false
-
-        for message in messages {
-            if message.role == .assistant,
-               let calls = message.toolCalls,
-               !calls.isEmpty,
-               !currentMessageIDs.contains(message.id) {
-                didCompact = true
-                if !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    var textOnlyMessage = message
-                    textOnlyMessage.toolCalls = nil
-                    compacted.append(textOnlyMessage)
-                }
-                continue
-            }
-
-            if message.role == .tool,
-               !currentCallIDs.contains(message.toolCallId ?? "") {
-                didCompact = true
-                continue
-            }
-
-            compacted.append(message)
-        }
-
-        messages = compacted
-        return didCompact
     }
 
     private static func toolCallGroups(in range: Range<Int>, messages: [ChatMessage]) -> [ToolCallGroup] {
