@@ -144,6 +144,7 @@ struct MessageBubbleView: View {
     var isSelected: Bool = false
     var onSelectToggle: (() -> Void)? = nil
     var onEditBegin: (() -> Void)? = nil
+    var onEditEnd: (() -> Void)? = nil
     var onDismissSelection: (() -> Void)? = nil
     var onEditSave: ((String) -> Void)? = nil
     var onEditAndResend: ((String) -> Void)? = nil
@@ -494,7 +495,10 @@ struct MessageBubbleView: View {
                     isEditing = true
                 }
                 onEditBegin?()
-                isEditFieldFocused = true
+                DispatchQueue.main.async {
+                    guard isEditing else { return }
+                    isEditFieldFocused = true
+                }
             }
 
             if !copyTarget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -582,6 +586,7 @@ struct MessageBubbleView: View {
                         withAnimation(.easeInOut(duration: 0.15)) {
                             isEditing = false
                         }
+                        onEditEnd?()
                     }
 
                 Spacer()
@@ -601,6 +606,7 @@ struct MessageBubbleView: View {
                         withAnimation(.easeInOut(duration: 0.15)) {
                             isEditing = false
                         }
+                        onEditEnd?()
                         onEditSave?(trimmed)
                     }
 
@@ -624,6 +630,7 @@ struct MessageBubbleView: View {
                         withAnimation(.easeInOut(duration: 0.15)) {
                             isEditing = false
                         }
+                        onEditEnd?()
                         onEditAndResend?(trimmed)
                     }
                 }
