@@ -48,7 +48,8 @@ struct OpenAISettings: Codable, Equatable {
     var providerProfiles: [AIProviderProfile] = []
     var activeProfileId: String = ""
     var systemPrompt: String = "You are a helpful assistant with tool calling capabilities."
-    var contextWindowTokens: Int = 32_768
+    var contextWindowTokens: Int = 1_000_000
+    private var contextWindowTokensMigrationVersion: Int = 1
     var temperature: Double = 0.7
     var themePreset: String = SoftThemePreset.warmOat.rawValue
     var useCustomBackground: Bool = false
@@ -64,7 +65,7 @@ struct OpenAISettings: Codable, Equatable {
         providerProfiles: [AIProviderProfile] = [],
         activeProfileId: String = "",
         systemPrompt: String = "You are a helpful assistant with tool calling capabilities.",
-        contextWindowTokens: Int = 32_768,
+        contextWindowTokens: Int = 1_000_000,
         temperature: Double = 0.7,
         themePreset: String = SoftThemePreset.warmOat.rawValue,
         useCustomBackground: Bool = false,
@@ -78,6 +79,7 @@ struct OpenAISettings: Codable, Equatable {
         self.enabledModels = enabledModels
         self.systemPrompt = systemPrompt
         self.contextWindowTokens = max(4_096, contextWindowTokens)
+        self.contextWindowTokensMigrationVersion = 1
         self.temperature = temperature
         self.themePreset = themePreset
         self.useCustomBackground = useCustomBackground
@@ -117,7 +119,15 @@ struct OpenAISettings: Codable, Equatable {
         self.availableModels = decodedAvailable
         self.enabledModels = decodedEnabled
         self.systemPrompt = try container.decodeIfPresent(String.self, forKey: .systemPrompt) ?? "You are a helpful assistant with tool calling capabilities."
-        self.contextWindowTokens = max(4_096, try container.decodeIfPresent(Int.self, forKey: .contextWindowTokens) ?? 32_768)
+        let decodedContextWindowTokens = try container.decodeIfPresent(Int.self, forKey: .contextWindowTokens) ?? 1_000_000
+        let decodedContextWindowTokensMigrationVersion = try container.decodeIfPresent(Int.self, forKey: .contextWindowTokensMigrationVersion) ?? 0
+        self.contextWindowTokens = max(
+            4_096,
+            decodedContextWindowTokensMigrationVersion == 0 && decodedContextWindowTokens == 32_768
+                ? 1_000_000
+                : decodedContextWindowTokens
+        )
+        self.contextWindowTokensMigrationVersion = 1
         self.temperature = try container.decodeIfPresent(Double.self, forKey: .temperature) ?? 0.7
         self.themePreset = try container.decodeIfPresent(String.self, forKey: .themePreset) ?? SoftThemePreset.warmOat.rawValue
         self.useCustomBackground = try container.decodeIfPresent(Bool.self, forKey: .useCustomBackground) ?? false
