@@ -193,7 +193,7 @@ class OpenAIService {
             }
             if let json = try? JSONSerialization.jsonObject(with: rawData) as? [String: Any] {
                 if let usage = json["usage"] as? [String: Any],
-                   let count = contextTokenTotal(from: usage) {
+                   let count = contextInputTokenCount(from: usage) {
                     await onContextTokenCount?(count)
                 }
                 let parsed = try parseNonStreamingJSON(json)
@@ -286,7 +286,7 @@ class OpenAIService {
 
             let usageObject = (json["usage"] as? [String: Any]) ?? ((json["response"] as? [String: Any])?["usage"] as? [String: Any])
             if let usage = usageObject {
-                if let count = contextTokenTotal(from: usage) {
+                if let count = contextInputTokenCount(from: usage) {
                     await onContextTokenCount?(count)
                 }
                 let p = usage["prompt_tokens"] ?? usage["input_tokens"] ?? 0
@@ -544,7 +544,7 @@ class OpenAIService {
             if let data = joined.data(using: .utf8),
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                 if let usage = json["usage"] as? [String: Any],
-                   let count = contextTokenTotal(from: usage) {
+                   let count = contextInputTokenCount(from: usage) {
                     await onContextTokenCount?(count)
                 }
                 let parsed = try parseNonStreamingJSON(json)
@@ -667,16 +667,11 @@ class OpenAIService {
         return (definitions, serverMap)
     }
 
-    private func contextTokenTotal(from usage: [String: Any]) -> Int? {
+    private func contextInputTokenCount(from usage: [String: Any]) -> Int? {
         guard let promptValue = usage["prompt_tokens"] ?? usage["input_tokens"],
               let prompt = tokenCount(from: promptValue),
               prompt > 0 else { return nil }
-        var completion = (usage["completion_tokens"] ?? usage["output_tokens"]).flatMap { tokenCount(from: $0) } ?? 0
-        let details = (usage["completion_tokens_details"] as? [String: Any]) ?? (usage["output_tokens_details"] as? [String: Any])
-        if let reasoningValue = details?["reasoning_tokens"], let reasoning = tokenCount(from: reasoningValue) {
-            completion = max(0, completion - reasoning)
-        }
-        return prompt + completion
+        return prompt
     }
 
     private func tokenCount(from value: Any) -> Int? {
@@ -685,16 +680,114 @@ class OpenAIService {
         return count >= 0 ? count : nil
     }
 
+    private func compactToolHistory(_ messages: [ChatMessage]) -> (messages: [ChatMessage], didCompact: Bool) {
+        guard !messages.isEmpty else { return (messages, false) }
+
+        var turnRanges: [Range<Int>] = []
+        var turnStart = 0
+        var hasUserMessage = false
+
+        for index in messages.indices where messages[index].role == .user {
+            if hasUserMessage {
+                turnRanges.append(turnStart..<index)
+            } else if index > 0 {
+                turnRanges.append(0..<index)
+            }
+            turnStart = index
+            hasUserMessage = true
+        }
+
+        if hasUserMessage {
+            turnRanges.append(turnStart..<messages.count)
+        } else {
+            turnRanges.append(0..<messages.count)
+        }
+
+        var retainedAssistantCallIDs = Set<String>()
+        var retainedToolCallIDs = Set<String>()
+
+        for (turnDistance, range) in turnRanges.reversed().enumerated() {
+            let retainedRoundLimit = turnDistance == 0 ? 4 : (turnDistance <= 2 ? 1 : 0)
+            guard retainedRoundLimit > 0 else { continue }
+
+            let callMessages = range.compactMap { index -> ChatMessage? in
+                let message = messages[index]
+                guard message.role == .assistant,
+                      let calls = message.toolCalls,
+                      !calls.isEmpty else { return nil }
+                return message
+            }
+
+            for message in callMessages.suffix(retainedRoundLimit) {
+                retainedAssistantCallIDs.insert(message.id)
+                for call in message.toolCalls ?? [] {
+                    retainedToolCallIDs.insert(call.id)
+                }
+            }
+        }
+
+        var compactedMessages: [ChatMessage] = []
+        var didCompact = false
+
+        for message in messages {
+            if message.role == .assistant,
+               let calls = message.toolCalls,
+               !calls.isEmpty,
+               !retainedAssistantCallIDs.contains(message.id) {
+                didCompact = true
+                let text = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !text.isEmpty {
+                    var textOnlyMessage = message
+                    textOnlyMessage.toolCalls = nil
+                    compactedMessages.append(textOnlyMessage)
+                }
+                continue
+            }
+
+            if message.role == .tool {
+                guard let callID = message.toolCallId,
+                      retainedToolCallIDs.contains(callID) else {
+                    didCompact = true
+                    continue
+                }
+
+                var boundedMessage = message
+                if boundedMessage.content.count > 12_000 {
+                    boundedMessage.content = String(boundedMessage.content.prefix(12_000))
+                        + "\n\n[工具结果已截断：原始内容 \(message.content.count) 字，本次请求保留前 12000 字；完整结果仍保留在对话记录中。]"
+                    didCompact = true
+                }
+                compactedMessages.append(boundedMessage)
+                continue
+            }
+
+            compactedMessages.append(message)
+        }
+
+        return (compactedMessages, didCompact)
+    }
+
     private func buildOpenAIMessages(settings: OpenAISettings, messages: [ChatMessage]) -> [[String: Any]] {
+        let context = compactToolHistory(messages)
+        var systemPrompt = settings.systemPrompt
+        if context.didCompact {
+            let contextNotice = "为控制上下文，本次请求已省略较早的工具调用历史或截断过长的工具结果；如需缺失数据，请重新调用相关工具。"
+            if systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                systemPrompt = contextNotice
+            } else {
+                systemPrompt += "\n\n" + contextNotice
+            }
+        }
+
         var openAIMessages: [[String: Any]] = []
-        if !settings.systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if !systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             openAIMessages.append([
                 "role": "system",
-                "content": settings.systemPrompt
+                "content": systemPrompt
             ])
         }
 
-        for msg in messages {
+        for msg in context.messages {
             var combinedText = msg.content
             let attachments = msg.attachments ?? []
 
