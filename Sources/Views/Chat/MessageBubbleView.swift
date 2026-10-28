@@ -495,7 +495,7 @@ struct MessageBubbleView: View {
                     isEditing = true
                 }
                 onEditBegin?()
-                DispatchQueue.main.async {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
                     guard isEditing else { return }
                     isEditFieldFocused = true
                 }
