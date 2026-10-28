@@ -591,15 +591,57 @@ class AgentCoordinator: ObservableObject {
                 DataStorage.shared.endConversationUpdateBatch()
 
                 if let calls = toolCalls, !calls.isEmpty {
-                    var executingCalls = calls.map { c -> ToolCallItem in
-                        var item = c
+                    let requestAssistantMessage = ChatMessage(
+                        role: .assistant,
+                        content: finalText,
+                        reasoningContent: reasoning,
+                        toolCalls: calls
+                    )
+                    let previouslyExposedToolNames = Set(selectedMCPTools.compactMap {
+                        ($0["function"] as? [String: Any])?["name"] as? String
+                    })
+                    let discoveryCalls = calls.filter { MCPToolDiscovery.isDiscoveryCall(name: $0.name) }
+                    let actualCalls = calls.filter { !MCPToolDiscovery.isDiscoveryCall(name: $0.name) }
+                    var requestResultsByCallId: [String: ChatMessage] = [:]
+
+                    if let discoveryCall = discoveryCalls.first {
+                        discoveryAttempts = min(
+                            MCPToolDiscovery.maximumSearchRounds,
+                            discoveryAttempts + discoveryCalls.count
+                        )
+                        let query = MCPToolDiscovery.query(from: discoveryCall.arguments)
+                        selectedMCPTools = MCPToolDiscovery.selectTools(
+                            query: query,
+                            allTools: availableMCPTools,
+                            existingTools: selectedMCPTools,
+                            settings: effectiveSettings,
+                            messages: contextMessages
+                        )
+                        requestResultsByCallId[discoveryCall.id] = ChatMessage(
+                            role: .tool,
+                            content: MCPToolDiscovery.result(query: query, tools: selectedMCPTools),
+                            toolCallId: discoveryCall.id
+                        )
+                        for extraCall in discoveryCalls.dropFirst() {
+                            requestResultsByCallId[extraCall.id] = ChatMessage(
+                                role: .tool,
+                                content: "本轮已处理一个工具搜索请求；如需其他工具，请在下一轮继续搜索。",
+                                toolCallId: extraCall.id
+                            )
+                        }
+                    }
+
+                    var executingCalls = actualCalls.map { call -> ToolCallItem in
+                        var item = call
                         item.isExecuting = true
                         return item
                     }
-                    conversation.messages[msgIndex].toolCalls = executingCalls
-                    DataStorage.shared.beginConversationUpdateBatch()
-                    DataStorage.shared.updateConversation(conversation, persistImmediately: false)
-                    DataStorage.shared.endConversationUpdateBatch()
+                    conversation.messages[msgIndex].toolCalls = executingCalls.isEmpty ? nil : executingCalls
+                    if !executingCalls.isEmpty {
+                        DataStorage.shared.beginConversationUpdateBatch()
+                        DataStorage.shared.updateConversation(conversation, persistImmediately: false)
+                        DataStorage.shared.endConversationUpdateBatch()
+                    }
 
                     for i in executingCalls.indices {
                         if isCancelledByUser || Task.isCancelled {
@@ -609,7 +651,8 @@ class AgentCoordinator: ObservableObject {
                         statusText = "调用工具中"
 
                         var toolOutput = ""
-                        if let mapping = toolServerMap[call.name] {
+                        if previouslyExposedToolNames.contains(call.name),
+                           let mapping = toolServerMap[call.name] {
                             let callStart = CFAbsoluteTimeGetCurrent()
                             do {
                                 toolOutput = try await MCPService.shared.callTool(
@@ -691,11 +734,29 @@ class AgentCoordinator: ObservableObject {
                         )
                         currentRunGeneratedMessageIds.insert(toolMsg.id)
                         conversation.messages.append(toolMsg)
+                        requestResultsByCallId[call.id] = toolMsg
                         DataStorage.shared.beginConversationUpdateBatch()
                         DataStorage.shared.updateConversation(conversation, persistImmediately: false)
                         DataStorage.shared.endConversationUpdateBatch()
                     }
 
+                    requestMessages.append(requestAssistantMessage)
+                    for call in calls {
+                        if let result = requestResultsByCallId[call.id] {
+                            requestMessages.append(result)
+                        }
+                    }
+
+                    if actualCalls.isEmpty,
+                       finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                       (reasoning ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                       msgIndex < conversation.messages.count {
+                        conversation.messages.remove(at: msgIndex)
+                        currentRunGeneratedMessageIds.remove(placeholderMsg.id)
+                    }
+                    DataStorage.shared.beginConversationUpdateBatch()
+                    DataStorage.shared.updateConversation(conversation, persistImmediately: false)
+                    DataStorage.shared.endConversationUpdateBatch()
                     DataStorage.shared.saveConversations()
                     statusText = "思考中"
                 } else {
