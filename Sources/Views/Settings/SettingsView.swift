@@ -736,6 +736,23 @@ struct SettingsView: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
+                Stepper(value: $storage.settings.contextWindowTokens, in: 4_096...1_000_000, step: 4_096) {
+                    HStack {
+                        Text("上下文窗口上限")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundColor(theme.secondaryText)
+                        Spacer()
+                        Text("\(storage.settings.contextWindowTokens.formatted()) tokens")
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .foregroundColor(theme.accent)
+                    }
+                }
+                Text("按此上限估算系统提示词、工具定义和对话消息；超出预算时优先压缩已处理的工具结果，再裁剪较早对话。请按当前模型的上下文窗口调整。")
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.mutedText)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
                 HStack {
                     Text("系统提示词 (System Prompt)")
                         .font(.system(size: 13, weight: .medium))
