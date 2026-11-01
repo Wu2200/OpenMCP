@@ -115,9 +115,6 @@ struct ReasoningFoldCardView: View, Equatable {
         .onChange(of: isExpanded) { _ in
             invalidateCellLayout()
         }
-        .onChange(of: isExpanded) { _ in
-            invalidateCellLayout()
-        }
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -502,11 +499,11 @@ struct MessageBubbleView: View, Equatable {
                                     contentWidth: innerContentWidth,
                                     isStreaming: false
                                 )
-                                .frame(width: innerContentWidth, alignment: .leading)
-                                .modifier(ChatLayoutProbe(identifier: "markdown|\(turn.id)"))
-                                            }
-                                        }
-                                        .padding(.horizontal, 12)
+                                    .frame(width: innerContentWidth, alignment: .leading)
+                                    .modifier(ChatLayoutProbe(identifier: "markdown|\(turn.id)"))
+                            }
+                        }
+                        .padding(.horizontal, 12)
                         .padding(.vertical, 10)
                         .frame(width: bubbleColumnWidth, alignment: .leading)
                         .background(theme.cardBackground)
