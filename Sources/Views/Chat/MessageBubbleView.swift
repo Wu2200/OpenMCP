@@ -112,9 +112,6 @@ struct ReasoningFoldCardView: View, Equatable {
         }
         .frame(width: width, alignment: .leading)
         .background(theme.elevatedBackground.opacity(0.65))
-        .onChange(of: isExpanded) { _ in
-            invalidateCellLayout()
-        }
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
