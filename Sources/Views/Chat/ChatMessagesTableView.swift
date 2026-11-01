@@ -779,15 +779,14 @@ final class ChatMessagesTableViewController: UIViewController, UITableViewDataSo
     private var hasPendingDeferredHeightRefresh: Bool = false
 
     private func captureViewportAnchor(rowId: String) {
-        guard let scrollView = Optional(tableView),
-              let rowIndex = rows.firstIndex(where: { $0.id == rowId }) else { return }
+        guard let rowIndex = rows.firstIndex(where: { $0.id == rowId }) else { return }
         let indexPath = IndexPath(row: rowIndex, section: 0)
-        guard let visiblePaths = scrollView.indexPathsForVisibleRows, visiblePaths.contains(indexPath) else { return }
-        let rowRect = scrollView.rectForRow(at: indexPath)
+        guard let visiblePaths = tableView.indexPathsForVisibleRows, visiblePaths.contains(indexPath) else { return }
+        let rowRect = tableView.rectForRow(at: indexPath)
         pendingViewportAnchor = (
             rowId: rowId,
-            viewportMinY: rowRect.minY - scrollView.contentOffset.y,
-            fallbackOffsetY: scrollView.contentOffset.y
+            viewportMinY: rowRect.minY - tableView.contentOffset.y,
+            fallbackOffsetY: tableView.contentOffset.y
         )
     }
 
