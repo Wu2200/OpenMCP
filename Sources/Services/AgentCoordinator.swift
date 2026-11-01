@@ -43,12 +43,13 @@ final class StreamingTurnState: ObservableObject {
 
     func setDisplayPaused(_ paused: Bool) {}
 
-    /// 手指拖动或惯性滑行时自适应降低 UI 文本刷新频率（不断流、松手不跳变），把主线程优先让给 UIScrollView 60/120fps 滑动
+    /// 手指拖动或惯性滑行时暂停 UI 文本刷新（网络流继续实时写入 targetText 绝不丢字），滑动停稳后平滑追赶，确保滑动期间 0 主线程重排
     func setUserScrolling(_ scrolling: Bool) {
         guard isUserScrolling != scrolling else { return }
         isUserScrolling = scrolling
-        if drainTimer != nil {
+        if scrolling {
             stopDrainTimer()
+        } else if displayedTextUTF8Count != targetText.utf8.count || displayedReasoningUTF8Count != targetReasoning.utf8.count {
             ensureDrainTimer()
         }
     }
@@ -56,6 +57,7 @@ final class StreamingTurnState: ObservableObject {
     func pushPartialText(_ newText: String) {
         guard targetText.utf8.count != newText.utf8.count || targetText != newText else { return }
         targetText = newText
+        guard !isUserScrolling else { return }
 
         if displayedTextUTF8Count == 0 && !newText.isEmpty {
             let (initialSlice, byteCount) = Self.safeUTF8Prefix(of: newText, targetBytes: 54)
@@ -70,6 +72,7 @@ final class StreamingTurnState: ObservableObject {
     func pushPartialReasoning(_ newReasoning: String) {
         guard targetReasoning.utf8.count != newReasoning.utf8.count || targetReasoning != newReasoning else { return }
         targetReasoning = newReasoning
+        guard !isUserScrolling else { return }
 
         let stillOnlyReasoning = targetText.isEmpty && !newReasoning.isEmpty
         if displayedReasoningUTF8Count == 0 && !newReasoning.isEmpty {
@@ -80,13 +83,9 @@ final class StreamingTurnState: ObservableObject {
     }
 
     private func ensureDrainTimer() {
-        let desiredInterval = isUserScrolling ? Self.scrollingTickInterval : Self.normalTickInterval
-        if drainTimer != nil && abs(currentTimerInterval - desiredInterval) < 0.005 {
-            return
-        }
-        stopDrainTimer()
-        currentTimerInterval = desiredInterval
-        let timer = Timer(timeInterval: desiredInterval, repeats: true) { [weak self] _ in
+        guard !isUserScrolling, drainTimer == nil else { return }
+        currentTimerInterval = Self.normalTickInterval
+        let timer = Timer(timeInterval: Self.normalTickInterval, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.tickDrain()
             }

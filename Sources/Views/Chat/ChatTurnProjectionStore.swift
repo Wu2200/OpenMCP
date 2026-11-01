@@ -19,10 +19,6 @@ struct AssistantTurnStep: Identifiable, Equatable {
     var isEmptyPlaceholder: Bool {
         trimmedContent.isEmpty && trimmedReasoning.isEmpty && toolCalls.isEmpty
     }
-
-    var isPureToolCalls: Bool {
-        trimmedContent.isEmpty && trimmedReasoning.isEmpty && !toolCalls.isEmpty
-    }
 }
 
 struct MessageDisplayTurn: Identifiable, Equatable {
@@ -36,6 +32,14 @@ struct MessageDisplayTurn: Identifiable, Equatable {
     var steps: [AssistantTurnStep]
     var createdAt: Date
     var underlyingMessageIds: [String]
+
+    var isCompletelyEmptyAssistantTurn: Bool {
+        role == .assistant
+            && content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && reasoningContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && toolCalls.isEmpty
+            && attachments.isEmpty
+    }
 }
 
 @MainActor
@@ -46,7 +50,6 @@ final class ChatTurnProjectionStore: ObservableObject {
     @Published private(set) var selectedModelName: String?
     @Published private(set) var rawMessageCount: Int
 
-    /// 零堆内存分配的 64 位轻量级会话指纹，不拷贝任何长文本、图片或工具返回结果
     private struct QuickStamp: Equatable {
         let title: String
         let selectedProfileId: String?
@@ -124,7 +127,6 @@ final class ChatTurnProjectionStore: ObservableObject {
             self.turns = []
         }
 
-        // 使用 dropFirst() 避免订阅瞬间重复执行初始化已完成的全量投影计算
         conversationsCancellable = DataStorage.shared.$conversations
             .dropFirst()
             .sink { [weak self] conversations in
@@ -198,6 +200,10 @@ final class ChatTurnProjectionStore: ObservableObject {
         for message in messages {
             switch message.role {
             case .user:
+                // 若遇到新的用户消息前残留了历史空占位 assistant turn，先清理掉避免空卡片
+                if let lastIdx = turns.indices.last, turns[lastIdx].isCompletelyEmptyAssistantTurn {
+                    turns.removeLast()
+                }
                 turns.append(
                     MessageDisplayTurn(
                         id: message.id,
@@ -242,20 +248,7 @@ final class ChatTurnProjectionStore: ObservableObject {
                         }
                         turns[lastIndex].primaryMessageId = message.id
                     }
-
-                    if let stepLastIdx = turns[lastIndex].steps.indices.last {
-                        let prevStep = turns[lastIndex].steps[stepLastIdx]
-                        if prevStep.isEmptyPlaceholder {
-                            turns[lastIndex].steps[stepLastIdx] = newStep
-                        } else if prevStep.isPureToolCalls && newStep.isPureToolCalls {
-                            turns[lastIndex].steps[stepLastIdx].toolCalls.append(contentsOf: newStep.toolCalls)
-                        } else {
-                            turns[lastIndex].steps.append(newStep)
-                        }
-                    } else {
-                        turns[lastIndex].steps.append(newStep)
-                    }
-
+                    turns[lastIndex].steps.append(newStep)
                     turns[lastIndex].underlyingMessageIds.append(message.id)
                 } else {
                     turns.append(

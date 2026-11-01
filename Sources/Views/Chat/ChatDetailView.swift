@@ -2,79 +2,27 @@ import Combine
 import SwiftUI
 import UIKit
 
-private struct ChatLayoutDiagnosticsEnabledKey: EnvironmentKey {
-    static let defaultValue = false
-}
-
-extension EnvironmentValues {
-    var chatLayoutDiagnosticsEnabled: Bool {
-        get { self[ChatLayoutDiagnosticsEnabledKey.self] }
-        set { self[ChatLayoutDiagnosticsEnabledKey.self] = newValue }
-    }
-}
-
-struct ChatLayoutCoordinateSpace {
-    static let name = "OpenMCP.ChatLayout"
-}
-
-struct ChatLayoutFramesPreferenceKey: PreferenceKey {
-    static var defaultValue: [String: CGRect] = [:]
-
-    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
-        value.merge(nextValue(), uniquingKeysWith: { _, next in next })
-    }
-}
-
 struct ChatLayoutProbe: ViewModifier {
     let identifier: String?
-    @Environment(\.chatLayoutDiagnosticsEnabled) private var diagnosticsEnabled
 
-    @ViewBuilder
     func body(content: Content) -> some View {
-        if diagnosticsEnabled, let identifier = identifier {
-            content.background {
-                GeometryReader { geometry in
-                    Color.clear.preference(
-                        key: ChatLayoutFramesPreferenceKey.self,
-                        value: [identifier: geometry.frame(in: .named(ChatLayoutCoordinateSpace.name))]
-                    )
-                }
-            }
-        } else {
-            content
-        }
+        content
     }
-}
-
-private final class LayoutFramesBox {
-    var frames: [String: CGRect] = [:]
 }
 
 struct ChatLayoutInspectorSheet: View {
     @Environment(\.dismiss) private var dismiss
     let report: String
     let theme: AppThemePalette
-    @Binding var isDiagnosticsEnabled: Bool
-    var onDiagnosticsChanged: (Bool) -> Void
     @State private var isCopied = false
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 12) {
-                Text("报告包含消息区域的位置、尺寸和间距，不包含消息正文、工具参数、工具结果或密钥。请复制后粘贴给我。")
+                Text("报告包含当前可见消息行的真实位置与尺寸，不包含消息正文、工具参数、工具结果或密钥。")
                     .font(.system(size: 12))
                     .foregroundColor(theme.secondaryText)
                     .frame(maxWidth: .infinity, alignment: .leading)
-
-                Toggle(isOn: $isDiagnosticsEnabled) {
-                    Label("启用布局测量（关闭检查器后自动停用）", systemImage: "ruler")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(theme.primaryText)
-                }
-                .tint(theme.accent)
-                .onChange(of: isDiagnosticsEnabled) { enabled in
-                    onDiagnosticsChanged(enabled)
-                }
 
                 ScrollView {
                     Text(report)
@@ -124,7 +72,6 @@ struct ChatLayoutInspectorSheet: View {
     }
 }
 
-/// 仅订阅 settings 与 servers 变更，避免 DataStorage.$conversations 高频更新导致整页重绘
 @MainActor
 private final class ChatWorkspaceObserver: ObservableObject {
     @Published private(set) var settings: OpenAISettings
@@ -156,9 +103,6 @@ private final class ChatWorkspaceObserver: ObservableObject {
 }
 
 struct ChatDetailView: View {
-    private static let initialVisibleTurnLimit = 12
-    private static let historyExpandStep = 18
-
     let conversationId: String
     @ObservedObject private var coordinator: AgentCoordinator
     @StateObject private var turnProjection: ChatTurnProjectionStore
@@ -173,28 +117,20 @@ struct ChatDetailView: View {
     @State private var showingDocumentPicker: Bool = false
     @State private var previewingStagedAttachment: ChatAttachment? = nil
     @State private var selectedTurnId: String? = nil
-    @State private var pendingEditScrollTurnId: String? = nil
     @State private var editingTurnId: String? = nil
-    @State private var isKeyboardVisible: Bool = false
     @State private var pendingDeleteTurn: MessageDisplayTurn? = nil
     @State private var showingClearConversationAlert: Bool = false
     @State private var showingLayoutInspector: Bool = false
-    @State private var isLayoutDiagnosticsEnabled: Bool = false
     @State private var layoutInspectorReport: String = ""
-    @State private var layoutFramesBox = LayoutFramesBox()
-    @State private var visibleHistoryLimit: Int = ChatDetailView.initialVisibleTurnLimit
     @State private var autoFollowOutput: Bool = true
-    @State private var showJumpToBottomButton: Bool = false
-    @State private var forceBottomScrollRevision: Int = 0
-    @State private var prependHistoryAnchorRevision: Int = 0
-    @State private var isChatVisible: Bool = true
+    @State private var scrollToBottomTrigger: Int = 0
+    @State private var inspectorBridge = ChatTableInspectorBridge()
     @FocusState private var isInputFocused: Bool
 
     init(conversationId: String) {
         self.conversationId = conversationId
         self._coordinator = ObservedObject(wrappedValue: AgentCoordinator.coordinator(for: conversationId))
         self._turnProjection = StateObject(wrappedValue: ChatTurnProjectionStore(conversationId: conversationId))
-        // 清理旧版本遗留的持久化布局探针开关，避免几百个 GeometryReader 在后台常驻拖慢滚动帧率
         UserDefaults.standard.removeObject(forKey: "chatLayoutDiagnosticsEnabled")
     }
 
@@ -221,15 +157,58 @@ struct ChatDetailView: View {
     }
 
     private var displayTurns: [MessageDisplayTurn] {
-        turnProjection.turns
+        let rawTurns = turnProjection.turns
+        // 非生成状态下若最后一条也是残留的空占位，过滤掉避免空卡片
+        if !coordinator.isGenerating, let last = rawTurns.last, last.isCompletelyEmptyAssistantTurn {
+            return Array(rawTurns.dropLast())
+        }
+        return rawTurns
     }
 
-    private var visibleTurns: [MessageDisplayTurn] {
-        Array(displayTurns.suffix(visibleHistoryLimit))
-    }
+    private var tableRowItems: [ChatListRowItem] {
+        let turns = displayTurns
+        var items: [ChatListRowItem] = []
+        items.reserveCapacity(turns.count + 2)
 
-    private var hiddenTurnCount: Int {
-        max(0, displayTurns.count - visibleHistoryLimit)
+        let modelName = effectiveSettings.modelName
+        let globalGenerating = coordinator.isGenerating
+
+        for (index, turn) in turns.enumerated() {
+            let isLastAssistant = (index == turns.count - 1 && turn.role == .assistant)
+            let activeGenerating = globalGenerating && isLastAssistant
+
+            items.append(
+                .turn(
+                    turn: turn,
+                    isActiveGenerating: activeGenerating,
+                    isSelected: selectedTurnId == turn.id,
+                    isGeneratingGlobal: globalGenerating,
+                    statusText: activeGenerating ? coordinator.statusText : "",
+                    thinkingStartTime: activeGenerating ? coordinator.thinkingStartTime : nil,
+                    modelName: modelName
+                )
+            )
+        }
+
+        if globalGenerating && turns.last?.role != .assistant {
+            items.append(
+                .generatingStatus(
+                    statusText: coordinator.statusText,
+                    startDate: coordinator.thinkingStartTime ?? Date()
+                )
+            )
+        }
+
+        if let err = coordinator.errorMessage {
+            items.append(
+                .errorBanner(
+                    message: err,
+                    canRetry: !turns.isEmpty
+                )
+            )
+        }
+
+        return items
     }
 
     private var activeToolCount: Int {
@@ -246,246 +225,164 @@ struct ChatDetailView: View {
     var body: some View {
         GeometryReader { geo in
             let viewportWidth = max(320, geo.size.width)
-            let contentMaxWidth = min(viewportWidth, 760)
-            let rowAvailableWidth = max(280, contentMaxWidth - 20)
+            let turns = displayTurns
 
-            ScrollViewReader { scrollProxy in
-                ZStack {
-                    theme.background
-                        .ignoresSafeArea()
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            handleBackgroundTap()
-                        }
+            ZStack {
+                theme.background
+                    .ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        handleBackgroundTap()
+                    }
 
-                    VStack(spacing: 0) {
-                        ZStack(alignment: .bottomTrailing) {
+                VStack(spacing: 0) {
+                    ZStack(alignment: .bottomTrailing) {
+                        if turns.isEmpty && !coordinator.isGenerating && coordinator.errorMessage == nil {
                             ScrollView(.vertical, showsIndicators: true) {
-                                if displayTurns.isEmpty && !coordinator.isGenerating {
-                                    emptyConversationHero
-                                        .padding(.horizontal, 14)
-                                        .padding(.top, 24)
-                                        .frame(maxWidth: contentMaxWidth)
-                                        .frame(maxWidth: .infinity)
-                                        .frame(minHeight: max(300, geo.size.height - 130), alignment: .top)
-                                        .contentShape(Rectangle())
-                                        .onTapGesture {
-                                            handleBackgroundTap()
-                                        }
-                                } else {
-                                    VStack(spacing: 12) {
-                                        if hiddenTurnCount > 0 {
-                                            Button {
-                                                loadOlderHistoryBatch()
-                                            } label: {
-                                                Label("加载更早的 \(hiddenTurnCount) 条消息", systemImage: "arrow.up")
-                                                    .font(.system(size: 12, weight: .semibold))
-                                                    .foregroundColor(theme.accent)
-                                                    .padding(.horizontal, 14)
-                                                    .padding(.vertical, 8)
-                                                    .frame(maxWidth: .infinity)
-                                                    .background(theme.cardBackground)
-                                                    .clipShape(Capsule())
-                                                    .overlay(Capsule().stroke(theme.border, lineWidth: 1))
-                                            }
-                                            .buttonStyle(.plain)
-                                            .padding(.bottom, 2)
-                                        }
-
-                                        let turns = visibleTurns
-                                        ForEach(Array(turns.enumerated()), id: \.element.id) { index, turn in
-                                            let isLastAssistant = index == turns.count - 1 && turn.role == .assistant
-                                            let activeGenerating = coordinator.isGenerating && isLastAssistant
-
-                                            MessageBubbleView(
-                                                turn: turn,
-                                                theme: theme,
-                                                availableWidth: rowAvailableWidth,
-                                                modelName: effectiveSettings.modelName,
-                                                isGenerating: coordinator.isGenerating,
-                                                isActiveGeneratingTurn: activeGenerating,
-                                                statusText: activeGenerating ? coordinator.statusText : "",
-                                                thinkingStartTime: activeGenerating ? coordinator.thinkingStartTime : nil,
-                                                streamingState: coordinator.streamingState,
-                                                isSelected: selectedTurnId == turn.id,
-                                                onSelectToggle: {
-                                                    if isInputFocused {
-                                                        dismissKeyboard()
-                                                    }
-                                                    let isSelecting = selectedTurnId != turn.id
-                                                    withAnimation(.easeInOut(duration: 0.15)) {
-                                                        selectedTurnId = isSelecting ? turn.id : nil
-                                                    }
-                                                },
-                                                onEditBegin: {
-                                                    editingTurnId = turn.id
-                                                    centerTurnForEditing(turn.id, using: scrollProxy)
-                                                },
-                                                onEditEnd: {
-                                                    editingTurnId = nil
-                                                    pendingEditScrollTurnId = nil
-                                                },
-                                                onDismissSelection: {
-                                                    handleBackgroundTap()
-                                                },
-                                                onEditSave: { newContent in
-                                                    dismissKeyboard()
-                                                    selectedTurnId = nil
-                                                    storage.updateMessageContent(
-                                                        conversationId: conversationId,
-                                                        messageId: turn.primaryMessageId,
-                                                        newContent: newContent
-                                                    )
-                                                },
-                                                onEditAndResend: { newContent in
-                                                    dismissKeyboard()
-                                                    selectedTurnId = nil
-                                                    requestAutoFollowFromBottom()
-                                                    coordinator.startRetryFromMessage(
-                                                        conversationId: conversationId,
-                                                        messageId: turn.primaryMessageId,
-                                                        newPrompt: newContent,
-                                                        settings: workspace.settings,
-                                                        servers: workspace.servers
-                                                    )
-                                                },
-                                                onRetry: {
-                                                    dismissKeyboard()
-                                                    selectedTurnId = nil
-                                                    requestAutoFollowFromBottom()
-                                                    coordinator.startRetryFromMessage(
-                                                        conversationId: conversationId,
-                                                        messageId: turn.primaryMessageId,
-                                                        settings: workspace.settings,
-                                                        servers: workspace.servers
-                                                    )
-                                                },
-                                                onDelete: {
-                                                    dismissKeyboard()
-                                                    pendingDeleteTurn = turn
-                                                }
-                                            )
-                                            .equatable()
-                                            .id(turn.id)
-                                        }
-
-                                        if coordinator.isGenerating && visibleTurns.last?.role != .assistant {
-                                            generatingStatusRow
-                                                .frame(width: rowAvailableWidth, alignment: .leading)
-                                                .id("generating_status")
-                                        }
-
-                                        if let err = coordinator.errorMessage {
-                                            errorBanner(err)
-                                                .frame(width: rowAvailableWidth)
-                                                .id("error_status")
-                                        }
-
-                                        Color.clear
-                                            .frame(
-                                                height: isKeyboardVisible && (editingTurnId == visibleTurns.last?.id || selectedTurnId == visibleTurns.last?.id)
-                                                    ? max(48, geo.size.height * 0.42)
-                                                    : 14
-                                            )
-                                            .id("chat_bottom_anchor")
+                                emptyConversationHero
+                                    .padding(.horizontal, 14)
+                                    .padding(.top, 24)
+                                    .frame(width: viewportWidth)
+                                    .frame(minHeight: max(300, geo.size.height - 130), alignment: .top)
+                                    .contentShape(Rectangle())
+                                    .onTapGesture {
+                                        handleBackgroundTap()
                                     }
-                                    .padding(.horizontal, 10)
-                                    .padding(.top, 10)
-                                    .frame(maxWidth: contentMaxWidth)
-                                    .frame(maxWidth: .infinity)
-                                    .background(
-                                        Color.clear
-                                            .contentShape(Rectangle())
-                                            .onTapGesture {
-                                                handleBackgroundTap()
-                                            }
+                            }
+                            .frame(width: viewportWidth)
+                            .scrollDismissesKeyboard(.interactively)
+                        } else {
+                            ChatMessagesTableView(
+                                conversationId: conversationId,
+                                rows: tableRowItems,
+                                theme: theme,
+                                isGenerating: coordinator.isGenerating,
+                                autoFollowOutput: autoFollowOutput,
+                                editingTurnId: editingTurnId,
+                                selectedTurnId: selectedTurnId,
+                                scrollToBottomTrigger: scrollToBottomTrigger,
+                                streamingState: coordinator.streamingState,
+                                inspectorBridge: inspectorBridge,
+                                onAutoFollowChanged: { newFollow in
+                                    if autoFollowOutput != newFollow {
+                                        autoFollowOutput = newFollow
+                                    }
+                                },
+                                onUserScrollingChanged: { scrolling in
+                                    coordinator.streamingState.setUserScrolling(scrolling)
+                                },
+                                onSelectToggle: { turn in
+                                    if isInputFocused {
+                                        dismissKeyboard()
+                                    }
+                                    selectedTurnId = (selectedTurnId == turn.id) ? nil : turn.id
+                                },
+                                onEditBegin: { turn in
+                                    editingTurnId = turn.id
+                                },
+                                onEditEnd: { _ in
+                                    editingTurnId = nil
+                                },
+                                onDismissSelection: {
+                                    handleBackgroundTap()
+                                },
+                                onEditSave: { turn, newContent in
+                                    dismissKeyboard()
+                                    selectedTurnId = nil
+                                    editingTurnId = nil
+                                    storage.updateMessageContent(
+                                        conversationId: conversationId,
+                                        messageId: turn.primaryMessageId,
+                                        newContent: newContent
                                     )
-                                    .background(
-                                        ChatScrollBridgeView(
-                                            isViewActive: isChatVisible,
-                                            isGenerating: coordinator.isGenerating,
-                                            hasMessages: !displayTurns.isEmpty || coordinator.isGenerating,
-                                            hasHiddenHistory: hiddenTurnCount > 0,
-                                            autoFollowOutput: autoFollowOutput,
-                                            forceBottomRevision: forceBottomScrollRevision,
-                                            prependHistoryRevision: prependHistoryAnchorRevision,
-                                            onAutoFollowChanged: { newFollow in
-                                                if autoFollowOutput != newFollow {
-                                                    autoFollowOutput = newFollow
-                                                }
-                                            },
-                                            onJumpButtonVisibilityChanged: { visible in
-                                                if showJumpToBottomButton != visible {
-                                                    withAnimation(.easeOut(duration: 0.16)) {
-                                                        showJumpToBottomButton = visible
-                                                    }
-                                                }
-                                            },
-                                            onUserScrollingChanged: { scrolling in
-                                                coordinator.streamingState.setUserScrolling(scrolling)
-                                            },
-                                            onReachTopForMoreHistory: {
-                                                loadOlderHistoryBatch()
-                                            }
-                                        )
+                                },
+                                onEditAndResend: { turn, newContent in
+                                    dismissKeyboard()
+                                    selectedTurnId = nil
+                                    editingTurnId = nil
+                                    requestScrollToBottom()
+                                    coordinator.startRetryFromMessage(
+                                        conversationId: conversationId,
+                                        messageId: turn.primaryMessageId,
+                                        newPrompt: newContent,
+                                        settings: workspace.settings,
+                                        servers: workspace.servers
+                                    )
+                                },
+                                onRetryTurn: { turn in
+                                    dismissKeyboard()
+                                    selectedTurnId = nil
+                                    requestScrollToBottom()
+                                    coordinator.startRetryFromMessage(
+                                        conversationId: conversationId,
+                                        messageId: turn.primaryMessageId,
+                                        settings: workspace.settings,
+                                        servers: workspace.servers
+                                    )
+                                },
+                                onDeleteTurn: { turn in
+                                    dismissKeyboard()
+                                    pendingDeleteTurn = turn
+                                },
+                                onRetryLastFromError: {
+                                    guard let lastTurn = turns.last else { return }
+                                    dismissKeyboard()
+                                    requestScrollToBottom()
+                                    coordinator.startRetryFromMessage(
+                                        conversationId: conversationId,
+                                        messageId: lastTurn.primaryMessageId,
+                                        settings: workspace.settings,
+                                        servers: workspace.servers
                                     )
                                 }
-                            }
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .environment(\.chatLayoutDiagnosticsEnabled, isLayoutDiagnosticsEnabled)
-                            .coordinateSpace(name: ChatLayoutCoordinateSpace.name)
-                            .onPreferenceChange(ChatLayoutFramesPreferenceKey.self) { samples in
-                                if isLayoutDiagnosticsEnabled {
-                                    layoutFramesBox.frames = samples
-                                }
-                            }
-                            .scrollDismissesKeyboard(editingTurnId == nil ? .interactively : .never)
-
-                            LinearGradient(
-                                stops: [
-                                    .init(color: theme.background.opacity(0), location: 0),
-                                    .init(color: theme.background.opacity(0.88), location: 1)
-                                ],
-                                startPoint: .top,
-                                endPoint: .bottom
                             )
-                            .frame(height: 16)
-                            .frame(maxWidth: .infinity)
-                            .allowsHitTesting(false)
-
-                            if showJumpToBottomButton && !displayTurns.isEmpty {
-                                jumpToBottomButton
-                                    .padding(.trailing, 14)
-                                    .padding(.bottom, 10)
-                                    .transition(.opacity.combined(with: .scale(scale: 0.92)))
-                            }
+                            .frame(width: viewportWidth)
                         }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                        composerDock(contentMaxWidth: contentMaxWidth)
+                        LinearGradient(
+                            stops: [
+                                .init(color: theme.background.opacity(0), location: 0),
+                                .init(color: theme.background.opacity(0.85), location: 1)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                        .frame(width: viewportWidth, height: 12)
+                        .allowsHitTesting(false)
+
+                        if !turns.isEmpty {
+                            Button {
+                                requestScrollToBottom()
+                            } label: {
+                                Image(systemName: "arrow.down")
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundColor(autoFollowOutput ? theme.primaryText : theme.accent)
+                                    .frame(width: 32, height: 32)
+                                    .background(theme.cardBackground)
+                                    .clipShape(Circle())
+                                    .overlay(
+                                        Circle()
+                                            .stroke(autoFollowOutput ? theme.border : theme.accent.opacity(0.45), lineWidth: 1)
+                                    )
+                                    .shadow(color: Color.black.opacity(theme.isDark ? 0.28 : 0.08), radius: 5, x: 0, y: 2)
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.trailing, 14)
+                            .padding(.bottom, 8)
+                        }
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidShowNotification)) { _ in
-                        isKeyboardVisible = true
-                        guard let turnId = pendingEditScrollTurnId else { return }
-                        scrollEditorToCenter(turnId, using: scrollProxy)
-                    }
-                    .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidHideNotification)) { _ in
-                        isKeyboardVisible = false
-                    }
+                    .frame(width: viewportWidth)
+
+                    composerDock(viewportWidth: viewportWidth)
                 }
+                .frame(width: viewportWidth)
             }
         }
         .onAppear {
-            isChatVisible = true
-            visibleHistoryLimit = Self.initialVisibleTurnLimit
             autoFollowOutput = true
-            showJumpToBottomButton = false
             coordinator.streamingState.setUserScrolling(false)
         }
         .onDisappear {
-            isChatVisible = false
-            isLayoutDiagnosticsEnabled = false
             coordinator.streamingState.setUserScrolling(false)
         }
         .navigationTitle(turnProjection.conversationTitle)
@@ -509,12 +406,11 @@ struct ChatDetailView: View {
 
                     Menu {
                         Button {
-                            layoutFramesBox.frames.removeAll()
-                            isLayoutDiagnosticsEnabled = true
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                                layoutInspectorReport = makeLayoutInspectorReport()
-                                showingLayoutInspector = true
-                            }
+                            layoutInspectorReport = inspectorBridge.makeReport(
+                                conversationTitle: turnProjection.conversationTitle,
+                                selectedTurnId: selectedTurnId
+                            )
+                            showingLayoutInspector = true
                         } label: {
                             Label("对话布局检查器", systemImage: "rectangle.dashed")
                         }
@@ -547,22 +443,10 @@ struct ChatDetailView: View {
         .sheet(isPresented: $showingLogViewerSheet) {
             LogViewerSheet(theme: theme, filterConversationId: conversationId)
         }
-        .sheet(isPresented: $showingLayoutInspector, onDismiss: {
-            isLayoutDiagnosticsEnabled = false
-            layoutFramesBox.frames.removeAll()
-        }) {
+        .sheet(isPresented: $showingLayoutInspector) {
             ChatLayoutInspectorSheet(
                 report: layoutInspectorReport,
-                theme: theme,
-                isDiagnosticsEnabled: $isLayoutDiagnosticsEnabled,
-                onDiagnosticsChanged: { enabled in
-                    layoutFramesBox.frames.removeAll()
-                    guard enabled else { return }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                        guard isLayoutDiagnosticsEnabled else { return }
-                        layoutInspectorReport = makeLayoutInspectorReport()
-                    }
-                }
+                theme: theme
             )
         }
         .sheet(isPresented: $showingPhotoPicker) {
@@ -633,125 +517,10 @@ struct ChatDetailView: View {
         }
     }
 
-    private func loadOlderHistoryBatch() {
-        guard hiddenTurnCount > 0 else { return }
-        prependHistoryAnchorRevision &+= 1
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            visibleHistoryLimit = min(displayTurns.count, visibleHistoryLimit + Self.historyExpandStep)
-        }
-    }
-
-    private var jumpToBottomButton: some View {
-        Button {
-            requestAutoFollowFromBottom()
-        } label: {
-            HStack(spacing: 5) {
-                if coordinator.isGenerating {
-                    Circle()
-                        .fill(theme.accent)
-                        .frame(width: 6, height: 6)
-                    Text("回到底部")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(theme.primaryText)
-                }
-                Image(systemName: "arrow.down")
-                    .font(.system(size: 12.5, weight: .bold))
-                    .foregroundColor(coordinator.isGenerating ? theme.accent : theme.primaryText)
-            }
-            .padding(.horizontal, coordinator.isGenerating ? 12 : 9.5)
-            .padding(.vertical, coordinator.isGenerating ? 7.5 : 9.5)
-            .background(theme.cardBackground)
-            .clipShape(Capsule())
-            .overlay(
-                Capsule()
-                    .stroke(coordinator.isGenerating ? theme.accent.opacity(0.45) : theme.border, lineWidth: 1)
-            )
-            .shadow(color: Color.black.opacity(theme.isDark ? 0.3 : 0.1), radius: 6, x: 0, y: 2)
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func requestAutoFollowFromBottom() {
+    private func requestScrollToBottom() {
         autoFollowOutput = true
-        showJumpToBottomButton = false
         coordinator.streamingState.setUserScrolling(false)
-        forceBottomScrollRevision &+= 1
-    }
-
-    private func makeLayoutInspectorReport() -> String {
-        let frames = layoutFramesBox.frames
-        let turns = Array(visibleTurns.suffix(8))
-        var lines = [
-            "OpenMCP 对话布局诊断报告",
-            "采集时间：\(ISO8601DateFormatter().string(from: Date()))",
-            "坐标单位：pt；坐标系：聊天滚动区域。滚动时 y 值可能为负。",
-            "隐私：不包含对话正文、工具参数、工具结果或密钥。",
-            "",
-            "最近 \(turns.count) 条消息布局"
-        ]
-
-        var previousRow: (id: String, frame: CGRect)?
-
-        for (index, turn) in turns.enumerated() {
-            let shortID = String(turn.id.prefix(8))
-            let row = frames["row|\(turn.role.rawValue)|\(turn.id)"]
-            lines.append("")
-            lines.append("[\(index + 1)] \(turn.role.rawValue) \(shortID)")
-            lines.append("消息行：\(layoutFrameDescription(row))")
-
-            if let row = row, let previous = previousRow {
-                let gap = row.minY - previous.frame.maxY
-                lines.append("与上一消息行间距：\(String(format: "%.1f", gap)) pt\(gap > 24 ? " [偏大]" : "")")
-            }
-            if let row = row {
-                previousRow = (turn.id, row)
-            }
-
-            guard turn.role == .assistant else { continue }
-
-            let card = frames["assistantCard|\(turn.id)"]
-            let column = frames["assistantColumn|\(turn.id)"]
-            let hStack = frames["assistantHStack|\(turn.id)"]
-            let avatar = frames["avatar|assistant|\(turn.id)"]
-            let actionBar = frames["actionBar|\(turn.id)"]
-            let editor = frames["editor|\(turn.id)"]
-            lines.append("当前选中状态：\(selectedTurnId == turn.id ? "是" : "否")")
-            lines.append("助手 HStack 外框：\(layoutFrameDescription(hStack))")
-            lines.append("助手头像：\(layoutFrameDescription(avatar))")
-            lines.append("助手列：\(layoutFrameDescription(column))")
-            if let editor = editor {
-                lines.append("编辑器：\(layoutFrameDescription(editor))")
-            }
-            lines.append("助手卡片：\(layoutFrameDescription(card))")
-            if let card = card, let actionBar = actionBar {
-                let cardToActions = actionBar.minY - card.maxY
-                lines.append("操作栏：\(layoutFrameDescription(actionBar))")
-                lines.append("卡片底部 → 操作栏顶部：\(String(format: "%.1f", cardToActions)) pt")
-            }
-
-            if let frame = frames["toolSummary|\(turn.id)"] {
-                lines.append("工具摘要：\(layoutFrameDescription(frame))")
-            }
-            if let frame = frames["reasoning|\(turn.id)"] {
-                lines.append("思考摘要：\(layoutFrameDescription(frame))")
-            }
-            if let frame = frames["markdown|\(turn.id)"] {
-                lines.append("Markdown 正文外框：\(layoutFrameDescription(frame))")
-            }
-        }
-
-        if frames.isEmpty {
-            lines.append("\n尚未收到布局测量数据；请等待聊天内容显示后重试。")
-        }
-
-        return lines.joined(separator: "\n")
-    }
-
-    private func layoutFrameDescription(_ frame: CGRect?) -> String {
-        guard let frame = frame else { return "未测得" }
-        return String(format: "x=%.1f y=%.1f w=%.1f h=%.1f", frame.minX, frame.minY, frame.width, frame.height)
+        scrollToBottomTrigger &+= 1
     }
 
     private var emptyConversationHero: some View {
@@ -828,90 +597,7 @@ struct ChatDetailView: View {
         }
     }
 
-    private var generatingStatusRow: some View {
-        HStack(alignment: .top, spacing: 6) {
-            ZStack {
-                Circle()
-                    .fill(theme.accent.opacity(0.14))
-                    .frame(width: 24, height: 24)
-                Image(systemName: "sparkles")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(theme.accent)
-            }
-            .padding(.top, 2)
-
-            ThinkingStatusView(
-                statusText: coordinator.statusText,
-                startDate: coordinator.thinkingStartTime ?? Date(),
-                theme: theme,
-                isPaused: false
-            )
-            .padding(.horizontal, 13)
-            .padding(.vertical, 9)
-            .background(theme.cardBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 15, style: .continuous)
-                    .stroke(theme.border, lineWidth: 1)
-            )
-
-            Spacer(minLength: 36)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    handleBackgroundTap()
-                }
-        }
-    }
-
-    private func errorBanner(_ message: String) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "exclamationmark.octagon.fill")
-                .foregroundColor(.red)
-                .font(.system(size: 15))
-            VStack(alignment: .leading, spacing: 6) {
-                Text(message)
-                    .font(.system(size: 13))
-                    .foregroundColor(theme.primaryText)
-                    .textSelection(.enabled)
-
-                if let lastTurn = displayTurns.last {
-                    Button {
-                        dismissKeyboard()
-                        requestAutoFollowFromBottom()
-                        coordinator.startRetryFromMessage(
-                            conversationId: conversationId,
-                            messageId: lastTurn.primaryMessageId,
-                            settings: workspace.settings,
-                            servers: workspace.servers
-                        )
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "arrow.clockwise")
-                            Text("立即重试")
-                        }
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 5)
-                        .background(theme.accent)
-                        .clipShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            Spacer()
-        }
-        .padding(12)
-        .background(Color.red.opacity(0.08))
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color.red.opacity(0.25), lineWidth: 1)
-        )
-        .padding(.leading, 30)
-    }
-
-    private func composerDock(contentMaxWidth: CGFloat) -> some View {
+    private func composerDock(viewportWidth: CGFloat) -> some View {
         let hasInput = !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pendingAttachments.isEmpty
         let canSend = hasInput && !coordinator.isGenerating
 
@@ -938,9 +624,7 @@ struct ChatDetailView: View {
                     .contentShape(Rectangle())
                     .onTapGesture {
                         if selectedTurnId != nil {
-                            withAnimation(.easeInOut(duration: 0.15)) {
-                                selectedTurnId = nil
-                            }
+                            selectedTurnId = nil
                         }
                         isInputFocused = true
                     }
@@ -1141,8 +825,7 @@ struct ChatDetailView: View {
         .padding(.horizontal, 10)
         .padding(.top, 4)
         .padding(.bottom, 6)
-        .frame(maxWidth: contentMaxWidth)
-        .frame(maxWidth: .infinity)
+        .frame(width: viewportWidth)
         .background(
             theme.background
                 .contentShape(Rectangle())
@@ -1285,28 +968,12 @@ struct ChatDetailView: View {
         .presentationDetents([.medium, .large])
     }
 
-    private func centerTurnForEditing(_ turnId: String, using proxy: ScrollViewProxy) {
-        pendingEditScrollTurnId = turnId
-    }
-
-    private func scrollEditorToCenter(_ turnId: String, using proxy: ScrollViewProxy) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-            guard pendingEditScrollTurnId == turnId else { return }
-            withAnimation(.easeOut(duration: 0.2)) {
-                proxy.scrollTo("message-editor-\(turnId)", anchor: .center)
-            }
-            pendingEditScrollTurnId = nil
-        }
-    }
-
     private func handleBackgroundTap() {
         if isInputFocused {
             dismissKeyboard()
         }
         if selectedTurnId != nil && editingTurnId == nil {
-            withAnimation(.easeInOut(duration: 0.15)) {
-                selectedTurnId = nil
-            }
+            selectedTurnId = nil
         }
     }
 
@@ -1322,7 +989,7 @@ struct ChatDetailView: View {
         inputText = ""
         pendingAttachments = []
         selectedTurnId = nil
-        requestAutoFollowFromBottom()
+        requestScrollToBottom()
         dismissKeyboard()
         coordinator.startSendMessage(
             conversationId: conversationId,
@@ -1335,7 +1002,7 @@ struct ChatDetailView: View {
 
     private func sendSpecificPrompt(_ prompt: String) {
         selectedTurnId = nil
-        requestAutoFollowFromBottom()
+        requestScrollToBottom()
         dismissKeyboard()
         coordinator.startSendMessage(
             conversationId: conversationId,
@@ -1381,432 +1048,6 @@ private struct ContextTokenBadge: View {
             .fixedSize()
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("当前上下文 \(entry.count.formatted()) 个 Token")
-        }
-    }
-}
-
-private struct ChatScrollBridgeView: UIViewRepresentable {
-    var isViewActive: Bool
-    var isGenerating: Bool
-    var hasMessages: Bool
-    var hasHiddenHistory: Bool
-    var autoFollowOutput: Bool
-    var forceBottomRevision: Int
-    var prependHistoryRevision: Int
-    var onAutoFollowChanged: (Bool) -> Void
-    var onJumpButtonVisibilityChanged: (Bool) -> Void
-    var onUserScrollingChanged: (Bool) -> Void
-    var onReachTopForMoreHistory: () -> Void
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(
-            isViewActive: isViewActive,
-            isGenerating: isGenerating,
-            hasMessages: hasMessages,
-            hasHiddenHistory: hasHiddenHistory,
-            autoFollowOutput: autoFollowOutput,
-            forceBottomRevision: forceBottomRevision,
-            prependHistoryRevision: prependHistoryRevision,
-            onAutoFollowChanged: onAutoFollowChanged,
-            onJumpButtonVisibilityChanged: onJumpButtonVisibilityChanged,
-            onUserScrollingChanged: onUserScrollingChanged,
-            onReachTopForMoreHistory: onReachTopForMoreHistory
-        )
-    }
-
-    func makeUIView(context: Context) -> BridgeProbeUIView {
-        let view = BridgeProbeUIView()
-        view.isUserInteractionEnabled = false
-        view.backgroundColor = .clear
-        view.onMoveToWindowOrSuperview = { [weak coordinator = context.coordinator] probe in
-            coordinator?.attachIfNeeded(from: probe)
-        }
-        return view
-    }
-
-    func updateUIView(_ uiView: BridgeProbeUIView, context: Context) {
-        let coord = context.coordinator
-        coord.isViewActive = isViewActive
-        coord.isGenerating = isGenerating
-        coord.hasMessages = hasMessages
-        coord.hasHiddenHistory = hasHiddenHistory
-        coord.onAutoFollowChanged = onAutoFollowChanged
-        coord.onJumpButtonVisibilityChanged = onJumpButtonVisibilityChanged
-        coord.onUserScrollingChanged = onUserScrollingChanged
-        coord.onReachTopForMoreHistory = onReachTopForMoreHistory
-
-        if coord.autoFollowOutput != autoFollowOutput {
-            coord.autoFollowOutput = autoFollowOutput
-        }
-
-        let forceChanged = coord.forceBottomRevision != forceBottomRevision
-        coord.forceBottomRevision = forceBottomRevision
-
-        let prependChanged = coord.prependHistoryRevision != prependHistoryRevision
-        coord.prependHistoryRevision = prependHistoryRevision
-
-        coord.attachIfNeeded(from: uiView)
-
-        if prependChanged {
-            coord.capturePrependAnchor()
-        }
-
-        if forceChanged && isViewActive {
-            coord.scrollToBottomRequestedByUser()
-        }
-    }
-
-    final class BridgeProbeUIView: UIView {
-        var onMoveToWindowOrSuperview: ((UIView) -> Void)?
-
-        override func didMoveToSuperview() {
-            super.didMoveToSuperview()
-            onMoveToWindowOrSuperview?(self)
-        }
-
-        override func didMoveToWindow() {
-            super.didMoveToWindow()
-            onMoveToWindowOrSuperview?(self)
-        }
-    }
-
-    final class Coordinator: NSObject {
-        var isViewActive: Bool
-        var isGenerating: Bool
-        var hasMessages: Bool
-        var hasHiddenHistory: Bool
-        var autoFollowOutput: Bool
-        var forceBottomRevision: Int
-        var prependHistoryRevision: Int
-        var onAutoFollowChanged: (Bool) -> Void
-        var onJumpButtonVisibilityChanged: (Bool) -> Void
-        var onUserScrollingChanged: (Bool) -> Void
-        var onReachTopForMoreHistory: () -> Void
-
-        private weak var attachedScrollView: UIScrollView?
-        private var contentSizeObservation: NSKeyValueObservation?
-        private var boundsObservation: NSKeyValueObservation?
-        private var contentOffsetObservation: NSKeyValueObservation?
-
-        private var isProgrammaticScroll: Bool = false
-        private var isUserPanning: Bool = false
-        private var isAnimatingToBottom: Bool = false
-        private var initialPositioningDeadline: CFAbsoluteTime = 0
-        private var didPerformInitialSnap: Bool = false
-        private var pendingPrependAnchor: (height: CGFloat, offsetY: CGFloat)? = nil
-        private var lastAutoPrependTime: CFAbsoluteTime = 0
-        private var lastReportedJumpButtonVisible: Bool = false
-        private var lastReportedUserScrolling: Bool = false
-        private var settleCheckWorkItem: DispatchWorkItem? = nil
-
-        init(
-            isViewActive: Bool,
-            isGenerating: Bool,
-            hasMessages: Bool,
-            hasHiddenHistory: Bool,
-            autoFollowOutput: Bool,
-            forceBottomRevision: Int,
-            prependHistoryRevision: Int,
-            onAutoFollowChanged: @escaping (Bool) -> Void,
-            onJumpButtonVisibilityChanged: @escaping (Bool) -> Void,
-            onUserScrollingChanged: @escaping (Bool) -> Void,
-            onReachTopForMoreHistory: @escaping () -> Void
-        ) {
-            self.isViewActive = isViewActive
-            self.isGenerating = isGenerating
-            self.hasMessages = hasMessages
-            self.hasHiddenHistory = hasHiddenHistory
-            self.autoFollowOutput = autoFollowOutput
-            self.forceBottomRevision = forceBottomRevision
-            self.prependHistoryRevision = prependHistoryRevision
-            self.onAutoFollowChanged = onAutoFollowChanged
-            self.onJumpButtonVisibilityChanged = onJumpButtonVisibilityChanged
-            self.onUserScrollingChanged = onUserScrollingChanged
-            self.onReachTopForMoreHistory = onReachTopForMoreHistory
-            super.init()
-            if hasMessages {
-                self.initialPositioningDeadline = CFAbsoluteTimeGetCurrent() + 0.35
-            }
-        }
-
-        deinit {
-            settleCheckWorkItem?.cancel()
-            contentSizeObservation?.invalidate()
-            boundsObservation?.invalidate()
-            contentOffsetObservation?.invalidate()
-        }
-
-        func attachIfNeeded(from view: UIView) {
-            var current: UIView? = view.superview
-            while let candidate = current {
-                if let sv = candidate as? UIScrollView {
-                    if attachedScrollView !== sv {
-                        detachCurrentScrollView()
-                        attachedScrollView = sv
-                        sv.delaysContentTouches = false
-                        sv.canCancelContentTouches = true
-                        sv.keyboardDismissMode = .interactive
-                        sv.panGestureRecognizer.addTarget(self, action: #selector(handlePan(_:)))
-                        setupObservations(for: sv)
-                        performInitialSnapIfNeeded(on: sv)
-                    }
-                    return
-                }
-                current = candidate.superview
-            }
-        }
-
-        private func detachCurrentScrollView() {
-            if let prev = attachedScrollView {
-                prev.panGestureRecognizer.removeTarget(self, action: #selector(handlePan(_:)))
-            }
-            settleCheckWorkItem?.cancel()
-            contentSizeObservation?.invalidate()
-            boundsObservation?.invalidate()
-            contentOffsetObservation?.invalidate()
-            contentSizeObservation = nil
-            boundsObservation = nil
-            contentOffsetObservation = nil
-            attachedScrollView = nil
-        }
-
-        func capturePrependAnchor() {
-            guard let sv = attachedScrollView else { return }
-            pendingPrependAnchor = (height: sv.contentSize.height, offsetY: sv.contentOffset.y)
-        }
-
-        func scrollToBottomRequestedByUser() {
-            autoFollowOutput = true
-            isUserPanning = false
-            pendingPrependAnchor = nil
-            reportUserScrolling(false)
-            reportJumpButtonVisibility(false)
-
-            guard let sv = attachedScrollView, sv.bounds.height > 0 else { return }
-            let targetY = bottomOffset(for: sv)
-            let distance = targetY - sv.contentOffset.y
-            guard abs(distance) > 1 else { return }
-
-            if distance > sv.bounds.height * 1.6 {
-                setOffsetSynchronously(on: sv, y: max(-sv.adjustedContentInset.top, targetY - sv.bounds.height * 0.45))
-            }
-
-            isAnimatingToBottom = true
-            sv.setContentOffset(CGPoint(x: 0, y: bottomOffset(for: sv)), animated: true)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) { [weak self] in
-                guard let self else { return }
-                self.isAnimatingToBottom = false
-                if self.autoFollowOutput, let sv = self.attachedScrollView, !self.isUserInteracting(with: sv) {
-                    self.setOffsetSynchronously(on: sv, y: self.bottomOffset(for: sv))
-                }
-            }
-        }
-
-        private func isUserInteracting(with sv: UIScrollView) -> Bool {
-            isUserPanning || sv.isTracking || sv.isDragging || sv.isDecelerating
-        }
-
-        private func bottomOffset(for sv: UIScrollView) -> CGFloat {
-            let minOffset = -sv.adjustedContentInset.top
-            let rawMax = sv.contentSize.height - sv.bounds.height + sv.adjustedContentInset.bottom
-            return max(minOffset, rawMax)
-        }
-
-        private func setOffsetSynchronously(on sv: UIScrollView, y: CGFloat) {
-            let clampedMin = -sv.adjustedContentInset.top
-            let targetY = max(clampedMin, y)
-            guard abs(sv.contentOffset.y - targetY) > 0.5 else { return }
-            isProgrammaticScroll = true
-            sv.contentOffset = CGPoint(x: sv.contentOffset.x, y: targetY)
-            isProgrammaticScroll = false
-        }
-
-        private func performInitialSnapIfNeeded(on sv: UIScrollView) {
-            guard hasMessages,
-                  !didPerformInitialSnap,
-                  sv.bounds.height > 10,
-                  sv.contentSize.height > 10 else { return }
-            didPerformInitialSnap = true
-            if initialPositioningDeadline == 0 {
-                initialPositioningDeadline = CFAbsoluteTimeGetCurrent() + 0.30
-            }
-            setOffsetSynchronously(on: sv, y: bottomOffset(for: sv))
-        }
-
-        private func setupObservations(for sv: UIScrollView) {
-            contentSizeObservation = sv.observe(\.contentSize, options: [.old, .new]) { [weak self] scrollView, change in
-                guard let self, self.isViewActive else { return }
-                let oldHeight = change.oldValue?.height ?? 0
-                let newHeight = change.newValue?.height ?? scrollView.contentSize.height
-                guard abs(newHeight - oldHeight) > 0.5, scrollView.bounds.height > 10 else { return }
-
-                // 顶部加载更早历史消息时：同帧补偿高度差，视口锚定不跳动
-                if let anchor = self.pendingPrependAnchor, newHeight > anchor.height + 4 {
-                    self.pendingPrependAnchor = nil
-                    let delta = newHeight - anchor.height
-                    self.setOffsetSynchronously(on: scrollView, y: anchor.offsetY + delta)
-                    return
-                }
-
-                // 初次进页面的稳定窗口内静默贴底
-                if self.hasMessages,
-                   !self.isUserInteracting(with: scrollView),
-                   self.autoFollowOutput,
-                   CFAbsoluteTimeGetCurrent() <= self.initialPositioningDeadline {
-                    self.didPerformInitialSnap = true
-                    self.setOffsetSynchronously(on: scrollView, y: self.bottomOffset(for: scrollView))
-                    return
-                }
-
-                guard !self.isUserInteracting(with: scrollView), !self.isAnimatingToBottom else {
-                    self.refreshJumpButtonState(for: scrollView)
-                    return
-                }
-
-                if self.autoFollowOutput {
-                    self.setOffsetSynchronously(on: scrollView, y: self.bottomOffset(for: scrollView))
-                    self.reportJumpButtonVisibility(false)
-                } else {
-                    let maxAllowed = self.bottomOffset(for: scrollView)
-                    if scrollView.contentOffset.y > maxAllowed + 1 {
-                        self.setOffsetSynchronously(on: scrollView, y: maxAllowed)
-                    }
-                    self.refreshJumpButtonState(for: scrollView)
-                }
-            }
-
-            boundsObservation = sv.observe(\.bounds, options: [.old, .new]) { [weak self] scrollView, change in
-                guard let self, self.isViewActive else { return }
-                let oldH = change.oldValue?.size.height ?? 0
-                let newH = change.newValue?.size.height ?? scrollView.bounds.height
-                guard abs(newH - oldH) > 1, newH > 10 else { return }
-
-                if !self.didPerformInitialSnap {
-                    self.performInitialSnapIfNeeded(on: scrollView)
-                    return
-                }
-
-                if self.autoFollowOutput && !self.isUserInteracting(with: scrollView) && !self.isAnimatingToBottom {
-                    self.setOffsetSynchronously(on: scrollView, y: self.bottomOffset(for: scrollView))
-                } else {
-                    self.refreshJumpButtonState(for: scrollView)
-                }
-            }
-
-            contentOffsetObservation = sv.observe(\.contentOffset, options: [.new]) { [weak self] scrollView, _ in
-                guard let self, self.isViewActive, !self.isProgrammaticScroll, !self.isAnimatingToBottom else { return }
-                let distanceFromBottom = self.bottomOffset(for: scrollView) - scrollView.contentOffset.y
-
-                if self.isUserInteracting(with: scrollView) {
-                    // 灵敏脱离：手指向上滚离底部超过 18pt 立即停止底部跟随，绝不硬拽粘手
-                    if distanceFromBottom > 18 && self.autoFollowOutput {
-                        self.autoFollowOutput = false
-                        DispatchQueue.main.async { [weak self] in
-                            self?.onAutoFollowChanged(false)
-                        }
-                    } else if distanceFromBottom <= 10 && !self.autoFollowOutput && !scrollView.isDragging {
-                        self.autoFollowOutput = true
-                        DispatchQueue.main.async { [weak self] in
-                            self?.onAutoFollowChanged(true)
-                        }
-                    }
-
-                    // 向上滑接近顶部时自动无感加载更早历史消息
-                    let distanceFromTop = scrollView.contentOffset.y + scrollView.adjustedContentInset.top
-                    let now = CFAbsoluteTimeGetCurrent()
-                    if self.hasHiddenHistory,
-                       self.didPerformInitialSnap,
-                       self.pendingPrependAnchor == nil,
-                       distanceFromTop < 260,
-                       now - self.lastAutoPrependTime > 0.28 {
-                        self.lastAutoPrependTime = now
-                        self.pendingPrependAnchor = (height: scrollView.contentSize.height, offsetY: scrollView.contentOffset.y)
-                        DispatchQueue.main.async { [weak self] in
-                            self?.onReachTopForMoreHistory()
-                        }
-                    }
-                } else if distanceFromBottom <= 12 && !self.autoFollowOutput {
-                    self.autoFollowOutput = true
-                    DispatchQueue.main.async { [weak self] in
-                        self?.onAutoFollowChanged(true)
-                    }
-                }
-
-                self.refreshJumpButtonState(for: scrollView)
-            }
-        }
-
-        private func refreshJumpButtonState(for sv: UIScrollView) {
-            let scrollableRange = sv.contentSize.height - sv.bounds.height + sv.adjustedContentInset.top + sv.adjustedContentInset.bottom
-            guard scrollableRange > 60 else {
-                reportJumpButtonVisibility(false)
-                return
-            }
-            let distanceFromBottom = bottomOffset(for: sv) - sv.contentOffset.y
-            let shouldShow = distanceFromBottom > 48
-            reportJumpButtonVisibility(shouldShow)
-        }
-
-        private func reportJumpButtonVisibility(_ visible: Bool) {
-            guard lastReportedJumpButtonVisible != visible else { return }
-            lastReportedJumpButtonVisible = visible
-            DispatchQueue.main.async { [weak self] in
-                self?.onJumpButtonVisibilityChanged(visible)
-            }
-        }
-
-        private func reportUserScrolling(_ scrolling: Bool) {
-            guard lastReportedUserScrolling != scrolling else { return }
-            lastReportedUserScrolling = scrolling
-            DispatchQueue.main.async { [weak self] in
-                self?.onUserScrollingChanged(scrolling)
-            }
-        }
-
-        private func scheduleSettleCheck() {
-            settleCheckWorkItem?.cancel()
-            let item = DispatchWorkItem { [weak self] in
-                guard let self, let sv = self.attachedScrollView else { return }
-                if sv.isTracking || sv.isDragging || sv.isDecelerating {
-                    self.scheduleSettleCheck()
-                    return
-                }
-                self.reportUserScrolling(false)
-                let distanceFromBottom = self.bottomOffset(for: sv) - sv.contentOffset.y
-                if distanceFromBottom <= 14 && !self.autoFollowOutput {
-                    self.autoFollowOutput = true
-                    self.onAutoFollowChanged(true)
-                }
-                self.refreshJumpButtonState(for: sv)
-            }
-            settleCheckWorkItem = item
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: item)
-        }
-
-        @objc private func handlePan(_ recognizer: UIPanGestureRecognizer) {
-            guard let sv = attachedScrollView else { return }
-            switch recognizer.state {
-            case .began:
-                settleCheckWorkItem?.cancel()
-                isUserPanning = true
-                isAnimatingToBottom = false
-                initialPositioningDeadline = 0
-                reportUserScrolling(true)
-            case .changed:
-                let velocityY = recognizer.velocity(in: sv).y
-                let distanceFromBottom = bottomOffset(for: sv) - sv.contentOffset.y
-                if (velocityY > 40 || distanceFromBottom > 18) && autoFollowOutput {
-                    autoFollowOutput = false
-                    DispatchQueue.main.async { [weak self] in
-                        self?.onAutoFollowChanged(false)
-                    }
-                }
-            case .ended, .cancelled, .failed:
-                isUserPanning = false
-                scheduleSettleCheck()
-            default:
-                break
-            }
         }
     }
 }
