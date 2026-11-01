@@ -431,6 +431,7 @@ final class ChatMessagesTableViewController: UIViewController, UITableViewDataSo
     private var isAnimatingToBottom: Bool = false
     private var isPerformingHeightPass: Bool = false
     private var preservesViewportOnNextHeightPass: Bool = false
+    private var pendingViewportAnchor: (rowId: String, viewportMinY: CGFloat, fallbackOffsetY: CGFloat)?
     private var hasScheduledHeightPass: Bool = false
     private var lastScrollingHeightSyncTime: CFAbsoluteTime = 0
     private var deferredScrollingSyncItem: DispatchWorkItem?
@@ -602,6 +603,10 @@ final class ChatMessagesTableViewController: UIViewController, UITableViewDataSo
         previousSelectedTurnId: String?
     ) {
         guard oldRows != newRows else { return }
+        let selectionChanged = selectedTurnId != previousSelectedTurnId
+        if selectionChanged, let selectedTurnId = selectedTurnId {
+            captureViewportAnchor(rowId: "turn_\(selectedTurnId)")
+        }
         self.rows = newRows
 
         guard didPerformInitialBottomPlacement, tableView.window != nil else {
@@ -615,20 +620,16 @@ final class ChatMessagesTableViewController: UIViewController, UITableViewDataSo
         // 1. 行 ID 完全一致（例如点击选中弹出胶囊菜单、工具状态刷新、流式切换静态）：原地更新可见 Cell，保留内部展开态
         if oldIds == newIds {
             var anyVisibleChanged = false
-            let selectionChanged = selectedTurnId != previousSelectedTurnId
             for i in newRows.indices where oldRows[i] != newRows[i] {
                 let ip = IndexPath(row: i, section: 0)
                 if let cell = tableView.cellForRow(at: ip) as? ChatHostingTableViewCell {
                     configureCell(cell, with: newRows[i])
-                    if selectionChanged && newRows[i].turnId == selectedTurnId {
-                        cell.refreshHostedContentImmediately()
-                    }
                     anyVisibleChanged = true
                 }
             }
             if anyVisibleChanged {
                 if selectionChanged {
-                    performSeamlessCellHeightBatchUpdate(forceRevealLastRow: false, preserveViewport: true)
+                    scheduleCellHeightPass(forceImmediate: true, preserveViewport: true, refreshHostedContent: true)
                 } else {
                     performSeamlessCellHeightBatchUpdate(forceRevealLastRow: false)
                 }
@@ -777,7 +778,24 @@ final class ChatMessagesTableViewController: UIViewController, UITableViewDataSo
 
     private var hasPendingDeferredHeightRefresh: Bool = false
 
-    private func scheduleCellHeightPass(forceImmediate: Bool = false, preserveViewport: Bool = false) {
+    private func captureViewportAnchor(rowId: String) {
+        guard let scrollView = Optional(tableView),
+              let rowIndex = rows.firstIndex(where: { $0.id == rowId }) else { return }
+        let indexPath = IndexPath(row: rowIndex, section: 0)
+        guard let visiblePaths = scrollView.indexPathsForVisibleRows, visiblePaths.contains(indexPath) else { return }
+        let rowRect = scrollView.rectForRow(at: indexPath)
+        pendingViewportAnchor = (
+            rowId: rowId,
+            viewportMinY: rowRect.minY - scrollView.contentOffset.y,
+            fallbackOffsetY: scrollView.contentOffset.y
+        )
+    }
+
+    private func scheduleCellHeightPass(
+        forceImmediate: Bool = false,
+        preserveViewport: Bool = false,
+        refreshHostedContent: Bool = false
+    ) {
         guard didPerformInitialBottomPlacement, tableView.window != nil else { return }
         preservesViewportOnNextHeightPass = preservesViewportOnNextHeightPass || preserveViewport
 
@@ -799,6 +817,11 @@ final class ChatMessagesTableViewController: UIViewController, UITableViewDataSo
             self.hasPendingDeferredHeightRefresh = false
             let preserveViewport = self.preservesViewportOnNextHeightPass
             self.preservesViewportOnNextHeightPass = false
+            if refreshHostedContent {
+                for cell in self.tableView.visibleCells.compactMap({ $0 as? ChatHostingTableViewCell }) {
+                    cell.refreshHostedContentImmediately()
+                }
+            }
             self.tableView.layoutIfNeeded()
             self.performSeamlessCellHeightBatchUpdate(
                 forceRevealLastRow: false,
@@ -814,11 +837,14 @@ final class ChatMessagesTableViewController: UIViewController, UITableViewDataSo
         guard didPerformInitialBottomPlacement, tableView.window != nil, !rows.isEmpty else { return }
 
         let shouldPinBottom = !preserveViewport && ((autoFollowOutput && !isUserInteracting && !isAnimatingToBottom) || forceRevealLastRow)
-        let firstVisiblePath = preserveViewport
-            ? tableView.indexPathsForVisibleRows?.sorted().first
-            : nil
-        let anchorMinY = firstVisiblePath.map { tableView.rectForRow(at: $0).minY }
-        let anchorOffsetY = tableView.contentOffset.y
+        let firstVisiblePath: IndexPath? = {
+            guard preserveViewport, let anchor = pendingViewportAnchor,
+                  let rowIndex = rows.firstIndex(where: { $0.id == anchor.rowId }) else { return nil }
+            let indexPath = IndexPath(row: rowIndex, section: 0)
+            return tableView.indexPathsForVisibleRows?.contains(indexPath) == true ? indexPath : nil
+        }()
+        let anchor = pendingViewportAnchor
+        let fallbackOffsetY = anchor?.fallbackOffsetY ?? tableView.contentOffset.y
 
         isPerformingHeightPass = true
         CATransaction.begin()
@@ -830,10 +856,14 @@ final class ChatMessagesTableViewController: UIViewController, UITableViewDataSo
             tableView.layoutIfNeeded()
 
             if let firstVisiblePath = firstVisiblePath,
-               firstVisiblePath.row < rows.count,
-               let anchorMinY = anchorMinY {
+               let anchor = anchor,
+               firstVisiblePath.row < rows.count {
                 let newMinY = tableView.rectForRow(at: firstVisiblePath).minY
-                setContentOffsetProgrammatically(anchorOffsetY + newMinY - anchorMinY)
+                setContentOffsetProgrammatically(newMinY - anchor.viewportMinY)
+                pendingViewportAnchor = nil
+            } else if preserveViewport {
+                setContentOffsetProgrammatically(min(fallbackOffsetY, exactBottomOffset()))
+                pendingViewportAnchor = nil
             } else if shouldPinBottom {
                 scrollToBottomImmediate()
             }
@@ -870,8 +900,10 @@ final class ChatMessagesTableViewController: UIViewController, UITableViewDataSo
             onRetryTurn: { [weak self] turn in self?.onRetryTurn?(turn) },
             onDeleteTurn: { [weak self] turn in self?.onDeleteTurn?(turn) },
             onRetryLastFromError: { [weak self] in self?.onRetryLastFromError?() },
-            onIntrinsicLayoutInvalidated: { [weak self] in
-                self?.scheduleCellHeightPass(forceImmediate: true, preserveViewport: true)
+            onIntrinsicLayoutInvalidated: { [weak self, weak cell] in
+                guard let self, let cell else { return }
+                self.captureViewportAnchor(rowId: cell.currentRowId)
+                self.scheduleCellHeightPass(forceImmediate: true, preserveViewport: true)
             }
         )
 
