@@ -782,6 +782,7 @@ class AgentCoordinator: ObservableObject {
                 } else {
                     if finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && stepIndex > 1 {
                         statusText = "生成总结中"
+                        streamingState.prepareForContinuation()
                         var recoveryMessages = contextMessages
                         recoveryMessages.append(
                             ChatMessage(
