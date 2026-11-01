@@ -78,7 +78,9 @@ struct ToolCallSummaryGroupView: View, Equatable {
                     isShowingAllCalls = false
                 }
                 isGroupExpanded.toggle()
-                invalidateCellLayout()
+                DispatchQueue.main.async {
+                    invalidateCellLayout()
+                }
             } label: {
                 HStack(spacing: 7) {
                     if latestCall?.isExecuting == true {
@@ -107,6 +109,7 @@ struct ToolCallSummaryGroupView: View, Equatable {
                             .frame(height: 14, alignment: .leading)
                     }
                     .frame(height: 32, alignment: .center)
+                    .fixedSize(horizontal: false, vertical: true)
 
                     Spacer(minLength: 4)
 
@@ -120,7 +123,7 @@ struct ToolCallSummaryGroupView: View, Equatable {
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundColor(theme.mutedText)
                 }
-                .frame(minHeight: 42)
+                .frame(height: 42)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -132,7 +135,9 @@ struct ToolCallSummaryGroupView: View, Equatable {
                     if isShowingAllCalls && toolCalls.count > 4 {
                         Button {
                             isShowingAllCalls = false
-                            invalidateCellLayout()
+                            DispatchQueue.main.async {
+                                invalidateCellLayout()
+                            }
                         } label: {
                             Label("收起至最近 4 次工具调用", systemImage: "arrow.down")
                                 .font(.system(size: 10.5, weight: .semibold))
@@ -150,7 +155,9 @@ struct ToolCallSummaryGroupView: View, Equatable {
                     if !isShowingAllCalls && firstDisplayedIndex > 0 {
                         Button {
                             isShowingAllCalls = true
-                            invalidateCellLayout()
+                            DispatchQueue.main.async {
+                                invalidateCellLayout()
+                            }
                         } label: {
                             Label("显示全部 \(toolCalls.count) 次工具调用", systemImage: "arrow.up")
                                 .font(.system(size: 10.5, weight: .semibold))
@@ -181,7 +188,9 @@ struct ToolCallCardView: View {
         VStack(alignment: .leading, spacing: 5) {
             Button {
                 isExpanded.toggle()
-                invalidateCellLayout()
+                DispatchQueue.main.async {
+                    invalidateCellLayout()
+                }
             } label: {
                 HStack(spacing: 7) {
                     if let step = stepNumber {
