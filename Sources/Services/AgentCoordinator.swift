@@ -176,6 +176,10 @@ final class StreamingTurnState: ObservableObject {
         }
     }
 
+    func prepareForContinuation() {
+        isStreamComplete = false
+    }
+
     func finishImmediate(with finalText: String, finalReasoning: String? = nil) {
         stopDrainTimer()
         targetText = finalText
