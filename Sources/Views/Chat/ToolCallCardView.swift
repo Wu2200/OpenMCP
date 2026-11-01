@@ -98,23 +98,29 @@ struct ToolCallSummaryGroupView: View, Equatable {
                             .font(.system(size: 12.5, weight: .semibold))
                             .foregroundColor(theme.primaryText)
                             .lineLimit(1)
+                            .frame(height: 17, alignment: .leading)
 
                         Text(summarySubtext)
                             .font(.system(size: 10.5))
                             .foregroundColor(theme.secondaryText)
                             .lineLimit(1)
+                            .frame(height: 14, alignment: .leading)
                     }
+                    .frame(height: 32, alignment: .center)
 
                     Spacer(minLength: 4)
 
                     Text("\(completedCount)/\(toolCalls.count)")
                         .font(.system(size: 10.5, weight: .semibold, design: .rounded).monospacedDigit())
                         .foregroundColor(summaryStatusColor)
+                        .frame(width: 42, alignment: .trailing)
 
                     Image(systemName: isGroupExpanded ? "chevron.up" : "chevron.down")
+                        .frame(width: 14)
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundColor(theme.mutedText)
                 }
+                .frame(minHeight: 42)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -201,7 +207,7 @@ struct ToolCallCardView: View {
                         .foregroundColor(theme.mutedText)
                 }
                 .contentShape(Rectangle())
-                .frame(minHeight: 28)
+                .frame(minHeight: 32)
                 .padding(.vertical, 2)
             }
             .buttonStyle(.plain)
