@@ -252,6 +252,7 @@ private struct ChatRowHostedView: View {
                 .frame(width: rowAvailableWidth, alignment: .leading)
             }
         }
+        .id(item.id)
         .environment(\.chatCellLayoutInvalidator, onIntrinsicLayoutInvalidated)
     }
 }
@@ -286,6 +287,7 @@ private final class ChatHostingTableViewCell: UITableViewCell {
     static let reuseIdentifier = "ChatHostingTableViewCell"
 
     private var hostingController: SizingHostingController<ChatRowHostedView>?
+    var hostedView: UIView? { hostingController?.view }
     private(set) var currentRowId: String = ""
     var onCellIdealHeightChanged: ((ChatHostingTableViewCell, CGFloat) -> Void)?
 
@@ -303,6 +305,18 @@ private final class ChatHostingTableViewCell: UITableViewCell {
     override func prepareForReuse() {
         super.prepareForReuse()
         hostingController?.resetMeasuredHeight()
+    }
+
+    func refreshHostedContentImmediately() {
+        guard let hostedView = hostingController?.view else { return }
+        contentView.setNeedsLayout()
+        contentView.layoutIfNeeded()
+        hostedView.invalidateIntrinsicContentSize()
+        hostedView.setNeedsUpdateConstraints()
+        hostedView.setNeedsLayout()
+        hostedView.layoutIfNeeded()
+        hostedView.layer.setNeedsDisplay()
+        hostedView.layer.displayIfNeeded()
     }
 
     func configure(
@@ -415,6 +429,9 @@ final class ChatMessagesTableViewController: UIViewController, UITableViewDataSo
     private var lastKnownBoundsSize: CGSize = .zero
     private var isProgrammaticOffsetChange: Bool = false
     private var isAnimatingToBottom: Bool = false
+    private var isPerformingHeightPass: Bool = false
+    private var preservesViewportOnNextHeightPass: Bool = false
+    private var pendingViewportAnchor: (rowId: String, viewportMinY: CGFloat, fallbackOffsetY: CGFloat)?
     private var hasScheduledHeightPass: Bool = false
     private var lastScrollingHeightSyncTime: CFAbsoluteTime = 0
     private var deferredScrollingSyncItem: DispatchWorkItem?
@@ -586,6 +603,10 @@ final class ChatMessagesTableViewController: UIViewController, UITableViewDataSo
         previousSelectedTurnId: String?
     ) {
         guard oldRows != newRows else { return }
+        let selectionChanged = selectedTurnId != previousSelectedTurnId
+        if selectionChanged, let selectedTurnId = selectedTurnId {
+            captureViewportAnchor(rowId: "turn_\(selectedTurnId)")
+        }
         self.rows = newRows
 
         guard didPerformInitialBottomPlacement, tableView.window != nil else {
@@ -603,12 +624,21 @@ final class ChatMessagesTableViewController: UIViewController, UITableViewDataSo
                 let ip = IndexPath(row: i, section: 0)
                 if let cell = tableView.cellForRow(at: ip) as? ChatHostingTableViewCell {
                     configureCell(cell, with: newRows[i])
+                    if selectionChanged {
+                        cell.refreshHostedContentImmediately()
+                    }
                     anyVisibleChanged = true
                 }
             }
             if anyVisibleChanged {
-                let newlySelectedLastRow = (selectedTurnId != nil && selectedTurnId != previousSelectedTurnId && selectedTurnId == newRows.last?.turnId)
-                performSeamlessCellHeightBatchUpdate(forceRevealLastRow: newlySelectedLastRow)
+                if selectionChanged {
+                    for cell in tableView.visibleCells.compactMap({ $0 as? ChatHostingTableViewCell }) {
+                        cell.refreshHostedContentImmediately()
+                    }
+                    scheduleCellHeightPass(forceImmediate: true, preserveViewport: true, refreshHostedContent: true)
+                }
+                    performSeamlessCellHeightBatchUpdate(forceRevealLastRow: false)
+                }
             }
             return
         }
@@ -754,10 +784,26 @@ final class ChatMessagesTableViewController: UIViewController, UITableViewDataSo
 
     private var hasPendingDeferredHeightRefresh: Bool = false
 
-    private func scheduleCellHeightPass(forceImmediate: Bool = false) {
-        guard didPerformInitialBottomPlacement, tableView.window != nil else { return }
+    private func captureViewportAnchor(rowId: String) {
+        guard let rowIndex = rows.firstIndex(where: { $0.id == rowId }) else { return }
+        let indexPath = IndexPath(row: rowIndex, section: 0)
+        guard let visiblePaths = tableView.indexPathsForVisibleRows, visiblePaths.contains(indexPath) else { return }
+        let rowRect = tableView.rectForRow(at: indexPath)
+        pendingViewportAnchor = (
+            rowId: rowId,
+            viewportMinY: rowRect.minY - tableView.contentOffset.y,
+            fallbackOffsetY: tableView.contentOffset.y
+        )
+    }
 
-        // 手指正在拖动或惯性滑行时，推迟非用户主动点击触发的自动行高同步，确保滚动期间 100% 满帧零卡顿
+    private func scheduleCellHeightPass(
+        forceImmediate: Bool = false,
+        preserveViewport: Bool = false,
+        refreshHostedContent: Bool = false
+    ) {
+        guard didPerformInitialBottomPlacement, tableView.window != nil else { return }
+        preservesViewportOnNextHeightPass = preservesViewportOnNextHeightPass || preserveViewport
+
         if !forceImmediate && (tableView.isDragging || tableView.isDecelerating) {
             hasPendingDeferredHeightRefresh = true
             return
@@ -774,20 +820,60 @@ final class ChatMessagesTableViewController: UIViewController, UITableViewDataSo
                 return
             }
             self.hasPendingDeferredHeightRefresh = false
-            self.performSeamlessCellHeightBatchUpdate(forceRevealLastRow: false)
+            let preserveViewport = self.preservesViewportOnNextHeightPass
+            self.preservesViewportOnNextHeightPass = false
+            if refreshHostedContent {
+                if let anchor = self.pendingViewportAnchor,
+                   let rowIndex = self.rows.firstIndex(where: { $0.id == anchor.rowId }),
+                   let cell = self.tableView.cellForRow(at: IndexPath(row: rowIndex, section: 0)) as? ChatHostingTableViewCell {
+                    cell.refreshHostedContentImmediately()
+                }
+            }
+            self.tableView.layoutIfNeeded()
+            self.performSeamlessCellHeightBatchUpdate(
+                forceRevealLastRow: false,
+                preserveViewport: preserveViewport
+            )
         }
     }
 
-    private func performSeamlessCellHeightBatchUpdate(forceRevealLastRow: Bool) {
+    private func performSeamlessCellHeightBatchUpdate(
+        forceRevealLastRow: Bool,
+        preserveViewport: Bool = false
+    ) {
         guard didPerformInitialBottomPlacement, tableView.window != nil, !rows.isEmpty else { return }
 
-        let shouldPinBottom = (autoFollowOutput && !isUserInteracting && !isAnimatingToBottom) || forceRevealLastRow
+        let shouldPinBottom = !preserveViewport && ((autoFollowOutput && !isUserInteracting && !isAnimatingToBottom) || forceRevealLastRow)
+        let firstVisiblePath: IndexPath? = {
+            guard preserveViewport, let anchor = pendingViewportAnchor,
+                  let rowIndex = rows.firstIndex(where: { $0.id == anchor.rowId }) else { return nil }
+            let indexPath = IndexPath(row: rowIndex, section: 0)
+            return tableView.indexPathsForVisibleRows?.contains(indexPath) == true ? indexPath : nil
+        }()
+        let anchor = pendingViewportAnchor
+        let fallbackOffsetY = anchor?.fallbackOffsetY ?? tableView.contentOffset.y
 
+        isPerformingHeightPass = true
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         UIView.performWithoutAnimation {
+            tableView.layoutIfNeeded()
             tableView.beginUpdates()
             tableView.endUpdates()
+            tableView.layoutIfNeeded()
+
+            if let firstVisiblePath = firstVisiblePath,
+               let anchor = anchor,
+               firstVisiblePath.row < rows.count {
+                let newMinY = tableView.rectForRow(at: firstVisiblePath).minY
+                setContentOffsetProgrammatically(newMinY - anchor.viewportMinY)
+                pendingViewportAnchor = nil
+            } else if preserveViewport {
+                setContentOffsetProgrammatically(min(fallbackOffsetY, exactBottomOffset()))
+                pendingViewportAnchor = nil
+            } else if shouldPinBottom {
+                scrollToBottomImmediate()
+            }
 
             for cell in tableView.visibleCells {
                 if let chatCell = cell as? ChatHostingTableViewCell {
@@ -799,13 +885,9 @@ final class ChatMessagesTableViewController: UIViewController, UITableViewDataSo
                     )
                 }
             }
-
-            if shouldPinBottom {
-                tableView.layoutIfNeeded()
-                scrollToBottomImmediate()
-            }
         }
         CATransaction.commit()
+        isPerformingHeightPass = false
     }
 
     private func configureCell(_ cell: ChatHostingTableViewCell, with item: ChatListRowItem) {
@@ -825,8 +907,10 @@ final class ChatMessagesTableViewController: UIViewController, UITableViewDataSo
             onRetryTurn: { [weak self] turn in self?.onRetryTurn?(turn) },
             onDeleteTurn: { [weak self] turn in self?.onDeleteTurn?(turn) },
             onRetryLastFromError: { [weak self] in self?.onRetryLastFromError?() },
-            onIntrinsicLayoutInvalidated: { [weak self] in
-                self?.scheduleCellHeightPass(forceImmediate: true)
+            onIntrinsicLayoutInvalidated: { [weak self, weak cell] in
+                guard let self, let cell else { return }
+                self.captureViewportAnchor(rowId: cell.currentRowId)
+                self.scheduleCellHeightPass(forceImmediate: true, preserveViewport: true)
             }
         )
 
@@ -838,12 +922,17 @@ final class ChatMessagesTableViewController: UIViewController, UITableViewDataSo
                 rowId: targetCell.currentRowId,
                 width: self.rowAvailableWidth
             )
+            guard !self.isPerformingHeightPass else { return }
             if abs(targetCell.bounds.height - idealCellHeight) > 0.5 {
                 self.scheduleCellHeightPass()
             }
         }
 
         cell.configure(rootView: rootView, rowId: item.id, parentController: self)
+        cell.contentView.setNeedsLayout()
+        cell.contentView.layoutIfNeeded()
+        cell.hostedView?.setNeedsLayout()
+        cell.hostedView?.layoutIfNeeded()
     }
 
     // MARK: - UITableViewDataSource & UITableViewDelegate

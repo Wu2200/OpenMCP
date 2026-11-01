@@ -496,7 +496,8 @@ struct MessageBubbleView: View, Equatable {
                                     contentWidth: innerContentWidth,
                                     isStreaming: false
                                 )
-                                .frame(width: innerContentWidth, alignment: .leading)
+                                    .frame(width: innerContentWidth, alignment: .leading)
+                                    .modifier(ChatLayoutProbe(identifier: "markdown|\(turn.id)"))
                             }
                         }
                         .padding(.horizontal, 12)
