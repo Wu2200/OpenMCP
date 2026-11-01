@@ -54,6 +54,17 @@ final class MarkdownRenderCache {
     private let blockCache = NSCache<NSString, BlockBox>()
     private let attrCache = NSCache<NSString, AttrBox>()
 
+    private struct StreamingCheckpoint {
+        let stablePrefix: String
+        let stableUTF8Count: Int
+        let stableBlocks: [MarkdownBlock]
+        let nextBlockId: Int
+    }
+
+    private var streamingCheckpoint: StreamingCheckpoint?
+    private var lastStreamingFullInput: String = ""
+    private var lastStreamingFullBlocks: [MarkdownBlock] = []
+
     final class BlockBox {
         let blocks: [MarkdownBlock]
         init(_ blocks: [MarkdownBlock]) { self.blocks = blocks }
@@ -65,12 +76,15 @@ final class MarkdownRenderCache {
     }
 
     private init() {
-        blockCache.countLimit = 80
-        attrCache.countLimit = 400
+        blockCache.countLimit = 100
+        attrCache.countLimit = 500
     }
 
     func blocks(for content: String, isStreaming: Bool = false) -> [MarkdownBlock] {
-        if isStreaming || content.utf8.count > 12_000 {
+        if isStreaming {
+            return streamingBlocks(for: content)
+        }
+        if content.utf8.count > 24_000 {
             return MarkdownParser.parse(content)
         }
         let key = content as NSString
@@ -82,6 +96,52 @@ final class MarkdownRenderCache {
         return parsed
     }
 
+    private func streamingBlocks(for raw: String) -> [MarkdownBlock] {
+        let normalized = raw.contains("\r") ? raw.replacingOccurrences(of: "\r\n", with: "\n") : raw
+        if normalized == lastStreamingFullInput {
+            return lastStreamingFullBlocks
+        }
+
+        if let cp = streamingCheckpoint,
+           normalized.utf8.count >= cp.stableUTF8Count,
+           normalized.hasPrefix(cp.stablePrefix),
+           let tailStart = normalized.utf8.index(normalized.utf8.startIndex, offsetBy: cp.stableUTF8Count).samePosition(in: normalized) {
+            let tail = String(normalized[tailStart...])
+            let tailResult = MarkdownParser.parseIncremental(tail, startingId: cp.nextBlockId)
+            let combined = cp.stableBlocks + tailResult.blocks
+            if let localSafeUTF8 = tailResult.safePrefixUTF8Count, localSafeUTF8 > 0,
+               let newSafeEnd = tail.utf8.index(tail.utf8.startIndex, offsetBy: localSafeUTF8).samePosition(in: tail) {
+                let newPrefix = cp.stablePrefix + String(tail[..<newSafeEnd])
+                streamingCheckpoint = StreamingCheckpoint(
+                    stablePrefix: newPrefix,
+                    stableUTF8Count: newPrefix.utf8.count,
+                    stableBlocks: cp.stableBlocks + tailResult.safeBlocks,
+                    nextBlockId: tailResult.safeNextBlockId
+                )
+            }
+            lastStreamingFullInput = normalized
+            lastStreamingFullBlocks = combined
+            return combined
+        }
+
+        let fullResult = MarkdownParser.parseIncremental(normalized, startingId: 1)
+        if let safeUTF8 = fullResult.safePrefixUTF8Count, safeUTF8 > 0,
+           let safeEnd = normalized.utf8.index(normalized.utf8.startIndex, offsetBy: safeUTF8).samePosition(in: normalized) {
+            let prefix = String(normalized[..<safeEnd])
+            streamingCheckpoint = StreamingCheckpoint(
+                stablePrefix: prefix,
+                stableUTF8Count: prefix.utf8.count,
+                stableBlocks: fullResult.safeBlocks,
+                nextBlockId: fullResult.safeNextBlockId
+            )
+        } else {
+            streamingCheckpoint = nil
+        }
+        lastStreamingFullInput = normalized
+        lastStreamingFullBlocks = fullResult.blocks
+        return fullResult.blocks
+    }
+
     func attributedString(
         for text: String,
         fontSize: CGFloat,
@@ -90,7 +150,7 @@ final class MarkdownRenderCache {
     ) -> AttributedString {
         let normalizedInput = isStreaming ? MarkdownParser.stabilizeStreamingInline(text) : text
         let cacheKey = "\(theme.backgroundHex)-\(theme.accentHex)-\(Int(fontSize * 10))-\(normalizedInput)" as NSString
-        if !isStreaming, normalizedInput.utf8.count < 4000, let cached = attrCache.object(forKey: cacheKey) {
+        if normalizedInput.utf8.count < 4000, let cached = attrCache.object(forKey: cacheKey) {
             return cached.attr
         }
 
@@ -123,7 +183,7 @@ final class MarkdownRenderCache {
             }
         }
 
-        if !isStreaming, normalizedInput.utf8.count < 4000 {
+        if normalizedInput.utf8.count < 4000 {
             attrCache.setObject(AttrBox(attr), forKey: cacheKey)
         }
         return attr
@@ -173,14 +233,16 @@ struct MarkdownDocumentView: View {
 
     var body: some View {
         let blocks = MarkdownRenderCache.shared.blocks(for: content, isStreaming: isStreaming)
+        let lastBlockId = blocks.last?.id
         VStack(alignment: .leading, spacing: 8) {
             ForEach(blocks) { block in
                 MarkdownBlockItemView(
                     block: block,
                     theme: theme,
                     contentWidth: contentWidth,
-                    isStreaming: isStreaming && (block.id == blocks.last?.id)
+                    isStreaming: isStreaming && (block.id == lastBlockId)
                 )
+                .equatable()
                 .modifier(ChatLayoutProbe(identifier: diagnosticIDPrefix.map { "markdownBlock|\($0)|\(block.id)|\(block.diagnosticType)" }))
             }
             .modifier(ChatLayoutProbe(identifier: diagnosticIDPrefix.map { "markdownBlocksGroup|\($0)" }))
@@ -210,19 +272,21 @@ struct MarkdownBlockItemView: View, Equatable {
 
         case .paragraph(_, let text):
             MarkdownInlineText(text: text, fontSize: 15, weight: .regular, theme: theme, isStreaming: isStreaming)
+                .equatable()
                 .lineSpacing(3.5)
 
         case .list(_, let items):
             let minIndent = items.map(\.indent).min() ?? 0
             VStack(alignment: .leading, spacing: 5) {
                 ForEach(items) { item in
-                    listItemView(item, baseIndent: minIndent)
+                    listItemView(item, baseIndent: minIndent, isLastItem: isStreaming && item.id == items.last?.id)
                 }
             }
             .padding(.vertical, 1)
 
         case .blockquote(_, let text):
             MarkdownInlineText(text: text, fontSize: 14, weight: .regular, theme: theme, isSecondary: true, isStreaming: isStreaming)
+                .equatable()
                 .lineSpacing(3.5)
                 .padding(.leading, 12)
                 .padding(.trailing, 10)
@@ -269,6 +333,7 @@ struct MarkdownBlockItemView: View, Equatable {
 
         VStack(alignment: .leading, spacing: 4) {
             MarkdownInlineText(text: text, fontSize: size, weight: .bold, theme: theme, isStreaming: isStreaming)
+                .equatable()
                 .lineSpacing(2.5)
 
             if level == 1 {
@@ -281,7 +346,7 @@ struct MarkdownBlockItemView: View, Equatable {
     }
 
     @ViewBuilder
-    private func listItemView(_ item: MarkdownListItem, baseIndent: Int) -> some View {
+    private func listItemView(_ item: MarkdownListItem, baseIndent: Int, isLastItem: Bool) -> some View {
         let normalizedIndent = max(0, min(item.indent - baseIndent, 4))
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             switch item.marker {
@@ -304,7 +369,8 @@ struct MarkdownBlockItemView: View, Equatable {
                     .frame(width: 15, alignment: .center)
             }
 
-            MarkdownInlineText(text: item.text, fontSize: 15, weight: .regular, theme: theme, isStreaming: isStreaming)
+            MarkdownInlineText(text: item.text, fontSize: 15, weight: .regular, theme: theme, isStreaming: isLastItem)
+                .equatable()
                 .lineSpacing(3.5)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -312,105 +378,7 @@ struct MarkdownBlockItemView: View, Equatable {
     }
 }
 
-final class StreamingRevealTracker {
-    struct Segment {
-        let start: Int
-        let date: Date
-    }
-
-    static let fadeDuration: TimeInterval = 0.45
-
-    private(set) var segments: [Segment] = []
-    private var lastLength: Int = 0
-
-    func register(length: Int, now: Date, isStreaming: Bool) -> [Segment] {
-        if length < lastLength {
-            segments.removeAll { $0.start >= length }
-        } else if length > lastLength && isStreaming {
-            segments.append(Segment(start: lastLength, date: now))
-        }
-        lastLength = length
-        segments.removeAll { now.timeIntervalSince($0.date) >= Self.fadeDuration }
-        return segments
-    }
-
-    struct RevealRun {
-        let range: Range<AttributedString.Index>
-        let color: Color
-        let date: Date
-    }
-
-    static func opacity(since start: Date, at date: Date) -> Double {
-        let progress = min(1, max(0, date.timeIntervalSince(start) / fadeDuration))
-        let eased = 1 - pow(1 - progress, 3)
-        return 0.06 + 0.94 * eased
-    }
-
-    static func revealRuns(
-        in attr: AttributedString,
-        segments: [Segment],
-        baseColor: Color,
-        linkColor: Color
-    ) -> [RevealRun] {
-        guard !segments.isEmpty else { return [] }
-        let characters = attr.characters
-        let total = characters.count
-        var cursor = characters.startIndex
-        var cursorOffset = 0
-        var result: [RevealRun] = []
-        for (offset, segment) in segments.enumerated() {
-            let start = min(segment.start, total)
-            let end = offset + 1 < segments.count ? min(segments[offset + 1].start, total) : total
-            guard end > start, start >= cursorOffset else { continue }
-            let lower = characters.index(cursor, offsetBy: start - cursorOffset)
-            let upper = characters.index(lower, offsetBy: end - start)
-            cursor = upper
-            cursorOffset = end
-            for run in attr[lower..<upper].runs {
-                let color: Color = run.link != nil ? linkColor : baseColor
-                result.append(RevealRun(range: run.range, color: color, date: segment.date))
-            }
-        }
-        return result
-    }
-
-    static func render(_ attr: AttributedString, runs: [RevealRun], at date: Date) -> AttributedString {
-        var result = attr
-        for run in runs {
-            let alpha = opacity(since: run.date, at: date)
-            guard alpha < 0.995 else { continue }
-            result[run.range].foregroundColor = run.color.opacity(alpha)
-        }
-        return result
-    }
-}
-
-struct StreamingRevealSchedule: TimelineSchedule {
-    let end: Date
-
-    func entries(from startDate: Date, mode: TimelineScheduleMode) -> Entries {
-        Entries(current: startDate, end: end)
-    }
-
-    struct Entries: Sequence, IteratorProtocol {
-        var current: Date
-        let end: Date
-        var finished = false
-
-        mutating func next() -> Date? {
-            guard !finished else { return nil }
-            if current >= end {
-                finished = true
-                return end
-            }
-            let value = current
-            current = current.addingTimeInterval(1.0 / 60.0)
-            return value
-        }
-    }
-}
-
-struct MarkdownInlineText: View {
+struct MarkdownInlineText: View, Equatable {
     let text: String
     var fontSize: CGFloat = 15
     var weight: Font.Weight = .regular
@@ -418,7 +386,14 @@ struct MarkdownInlineText: View {
     var isSecondary: Bool = false
     var isStreaming: Bool = false
 
-    @State private var revealTracker = StreamingRevealTracker()
+    static func == (lhs: MarkdownInlineText, rhs: MarkdownInlineText) -> Bool {
+        lhs.text == rhs.text &&
+        lhs.fontSize == rhs.fontSize &&
+        lhs.weight == rhs.weight &&
+        lhs.theme == rhs.theme &&
+        lhs.isSecondary == rhs.isSecondary &&
+        lhs.isStreaming == rhs.isStreaming
+    }
 
     var body: some View {
         let attr = MarkdownRenderCache.shared.attributedString(
@@ -428,31 +403,12 @@ struct MarkdownInlineText: View {
             isStreaming: isStreaming
         )
         let baseColor: Color = isSecondary ? theme.secondaryText : theme.primaryText
-        let activeSegments = revealTracker.register(length: attr.characters.count, now: Date(), isStreaming: isStreaming)
-        if let lastSegment = activeSegments.last {
-            let runs = StreamingRevealTracker.revealRuns(
-                in: attr,
-                segments: activeSegments,
-                baseColor: baseColor,
-                linkColor: theme.accent
-            )
-            TimelineView(StreamingRevealSchedule(end: lastSegment.date.addingTimeInterval(StreamingRevealTracker.fadeDuration))) { context in
-                styledText(StreamingRevealTracker.render(attr, runs: runs, at: context.date), baseColor: baseColor)
-            }
-            .id(lastSegment.date)
-        } else {
-            styledText(attr, baseColor: baseColor)
-        }
-    }
-
-    @ViewBuilder
-    private func styledText(_ value: AttributedString, baseColor: Color) -> some View {
-        Text(value)
+        Text(attr)
             .font(.system(size: fontSize, weight: weight))
             .foregroundColor(baseColor)
             .tint(theme.accent)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .modifier(MarkdownLinkCopyContextMenu(urls: MarkdownLinkCopyContextMenu.urls(in: value)))
+            .modifier(MarkdownLinkCopyContextMenu(urls: MarkdownLinkCopyContextMenu.urls(in: attr)))
     }
 }
 
@@ -526,7 +482,7 @@ struct MarkdownTableView: View {
                     .stroke(theme.border, lineWidth: 1)
             )
         }
-        .frame(width: tableMaxWidth, alignment: .leading)
+        .frame(maxWidth: tableMaxWidth ?? .infinity, alignment: .leading)
     }
 
     @ViewBuilder
@@ -594,11 +550,35 @@ struct MarkdownTableView: View {
 }
 
 enum MarkdownParser {
+    struct IncrementalResult {
+        let blocks: [MarkdownBlock]
+        let safePrefixUTF8Count: Int?
+        let safeBlocks: [MarkdownBlock]
+        let safeNextBlockId: Int
+    }
+
     static func parse(_ raw: String) -> [MarkdownBlock] {
-        let normalized = raw.replacingOccurrences(of: "\r\n", with: "\n")
+        let normalized = raw.contains("\r") ? raw.replacingOccurrences(of: "\r\n", with: "\n") : raw
+        return parseIncremental(normalized, startingId: 1).blocks
+    }
+
+    static func parseIncremental(_ normalized: String, startingId: Int) -> IncrementalResult {
         let lines = normalized.components(separatedBy: "\n")
+        var lineStartUTF8Offsets: [Int] = []
+        lineStartUTF8Offsets.reserveCapacity(lines.count + 1)
+        var runningOffset = 0
+        for (idx, l) in lines.enumerated() {
+            lineStartUTF8Offsets.append(runningOffset)
+            runningOffset += l.utf8.count + (idx < lines.count - 1 ? 1 : 0)
+        }
+        lineStartUTF8Offsets.append(normalized.utf8.count)
+
         var blocks: [MarkdownBlock] = []
-        var nextId = 1
+        var nextId = startingId
+
+        var safePrefixUTF8Count: Int? = nil
+        var safeBlocks: [MarkdownBlock] = []
+        var safeNextBlockId = startingId
 
         var i = 0
         var paragraphBuffer: [String] = []
@@ -613,13 +593,26 @@ enum MarkdownParser {
             paragraphBuffer.removeAll()
         }
 
+        func recordCheckpointIfHasRemaining(atLineIndex lineIdx: Int) {
+            // 仅当当前行之前至少已有闭合块，且后续仍有非空内容时，记录安全检查点
+            guard !blocks.isEmpty, lineIdx < lines.count else { return }
+            safePrefixUTF8Count = lineStartUTF8Offsets[lineIdx]
+            safeBlocks = blocks
+            safeNextBlockId = nextId
+        }
+
         while i < lines.count {
             let line = lines[i]
             let trimmed = line.trimmingCharacters(in: .whitespaces)
 
             if trimmed.isEmpty {
                 flushParagraph()
-                i += 1
+                while i < lines.count && lines[i].trimmingCharacters(in: .whitespaces).isEmpty {
+                    i += 1
+                }
+                if i < lines.count {
+                    recordCheckpointIfHasRemaining(atLineIndex: i)
+                }
                 continue
             }
 
@@ -630,9 +623,11 @@ enum MarkdownParser {
                 let lang = langRaw.isEmpty ? "code" : langRaw
                 i += 1
                 var codeLines: [String] = []
+                var didCloseFence = false
                 while i < lines.count {
                     let candidate = lines[i].trimmingCharacters(in: .whitespaces)
                     if candidate.hasPrefix(fence) {
+                        didCloseFence = true
                         i += 1
                         break
                     }
@@ -641,6 +636,9 @@ enum MarkdownParser {
                 }
                 blocks.append(.codeBlock(id: nextId, language: lang, code: codeLines.joined(separator: "\n")))
                 nextId += 1
+                if didCloseFence && i < lines.count {
+                    recordCheckpointIfHasRemaining(atLineIndex: i)
+                }
                 continue
             }
 
@@ -679,6 +677,9 @@ enum MarkdownParser {
                 blocks.append(.divider(id: nextId))
                 nextId += 1
                 i += 1
+                if i < lines.count {
+                    recordCheckpointIfHasRemaining(atLineIndex: i)
+                }
                 continue
             }
 
@@ -687,6 +688,9 @@ enum MarkdownParser {
                 blocks.append(.heading(id: nextId, level: heading.level, text: heading.text))
                 nextId += 1
                 i += 1
+                if i < lines.count {
+                    recordCheckpointIfHasRemaining(atLineIndex: i)
+                }
                 continue
             }
 
@@ -747,7 +751,12 @@ enum MarkdownParser {
         }
 
         flushParagraph()
-        return blocks
+        return IncrementalResult(
+            blocks: blocks,
+            safePrefixUTF8Count: safePrefixUTF8Count,
+            safeBlocks: safeBlocks,
+            safeNextBlockId: safeNextBlockId
+        )
     }
 
     private static func parseHeading(_ trimmed: String) -> (level: Int, text: String)? {
@@ -887,6 +896,29 @@ enum MarkdownParser {
         guard let lastIdx = lines.indices.last else { return input }
         var lastLine = lines[lastIdx]
 
+        let backtickCount = lastLine.filter { $0 == "`" }.count
+        if backtickCount % 2 == 1 {
+            if lastLine.hasSuffix("`") {
+                lastLine.removeLast()
+            } else {
+                lastLine += "`"
+            }
+            lines[lastIdx] = lastLine
+            return lines.joined(separator: "\n")
+        }
+
+        // 稳定流式末尾尚未闭合的 Markdown 链接 [label](url... 避免长 URL 突然撑高再塌缩
+        if let linkSplit = lastLine.range(of: "](", options: .backwards) {
+            let afterParen = lastLine[linkSplit.upperBound...]
+            if !afterParen.contains(")") && !afterParen.contains(" ") {
+                let beforeLinkSplit = lastLine[..<linkSplit.lowerBound]
+                if let openBracket = beforeLinkSplit.lastIndex(of: "[") {
+                    let label = lastLine[lastLine.index(after: openBracket)..<linkSplit.lowerBound]
+                    lastLine = String(lastLine[..<openBracket]) + label
+                }
+            }
+        }
+
         if lastLine.hasSuffix("**") {
             let withoutTrailing = String(lastLine.dropLast(2))
             let previousPairs = withoutTrailing.components(separatedBy: "**").count - 1
@@ -900,15 +932,6 @@ enum MarkdownParser {
         let boldCount = lastLine.components(separatedBy: "**").count - 1
         if boldCount % 2 == 1 {
             lastLine += "**"
-        }
-
-        let backtickCount = lastLine.filter { $0 == "`" }.count
-        if backtickCount % 2 == 1 {
-            if lastLine.hasSuffix("`") {
-                lastLine.removeLast()
-            } else {
-                lastLine += "`"
-            }
         }
 
         lines[lastIdx] = lastLine

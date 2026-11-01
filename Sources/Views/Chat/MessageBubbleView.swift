@@ -1,31 +1,49 @@
 import SwiftUI
 import UIKit
 
-struct MessageDisplayTurn: Identifiable, Equatable {
-    var id: String
-    var role: MessageRole
-    var primaryMessageId: String
-    var content: String
-    var reasoningContent: String
-    var attachments: [ChatAttachment]
-    var toolCalls: [ToolCallItem]
-    var createdAt: Date
-    var underlyingMessageIds: [String]
-}
-
-struct ReasoningFoldCardView: View {
-    let reasoningText: String
-    let isStreamingReasoning: Bool
-    let isScrollInteracting: Bool
+private struct ReasoningElapsedBadge: View {
     let startDate: Date
     let theme: AppThemePalette
-    var width: CGFloat
-    @State private var isExpanded: Bool = false
 
-    private var previewLine: String {
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 0.2)) { context in
+            let elapsed = max(0, context.date.timeIntervalSince(startDate))
+            Text(ThinkingStatusView.formatElapsed(elapsed))
+                .font(.system(size: 11.5, weight: .medium, design: .rounded).monospacedDigit())
+                .foregroundColor(theme.secondaryText)
+        }
+    }
+}
+
+struct ReasoningFoldCardView: View, Equatable {
+    let reasoningText: String
+    let isStreamingReasoning: Bool
+    let startDate: Date
+    let theme: AppThemePalette
+    var width: CGFloat? = nil
+
+    @State private var userExpandedOverride: Bool? = nil
+    @State private var showingFullReasoningSheet: Bool = false
+
+    static func == (lhs: ReasoningFoldCardView, rhs: ReasoningFoldCardView) -> Bool {
+        lhs.reasoningText == rhs.reasoningText &&
+        lhs.isStreamingReasoning == rhs.isStreamingReasoning &&
+        lhs.startDate == rhs.startDate &&
+        lhs.theme == rhs.theme &&
+        lhs.width == rhs.width
+    }
+
+    private var isShowingBody: Bool {
+        if let override = userExpandedOverride {
+            return override
+        }
+        return isStreamingReasoning
+    }
+
+    private var collapsedSummaryLine: String {
         let trimmed = reasoningText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "正在深度思考..." }
-        let suffixSlice = trimmed.suffix(220)
+        let suffixSlice = trimmed.suffix(200)
         let lines = suffixSlice
             .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespaces) }
@@ -33,105 +51,259 @@ struct ReasoningFoldCardView: View {
         return lines.last ?? "正在深度思考..."
     }
 
+    private var streamingLivePreview: String {
+        let trimmed = reasoningText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "正在梳理思路..." }
+        let tail = String(trimmed.suffix(420))
+        let lines = tail
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        let recentLines = Array(lines.suffix(5))
+        return recentLines.isEmpty ? tail : recentLines.joined(separator: "\n")
+    }
+
+    private static let inlineMaxCharacters = 3_000
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 7) {
-                Image(systemName: "brain.head.profile")
-                    .font(.system(size: 11.5, weight: .semibold))
-                    .foregroundColor(theme.accent)
+            Button {
+                let nextState = !isShowingBody
+                withAnimation(.easeInOut(duration: 0.16)) {
+                    userExpandedOverride = nextState
+                }
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: "brain.head.profile")
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundColor(theme.accent)
 
-                if isStreamingReasoning {
-                    if isScrollInteracting {
-                        let elapsed = max(0, Date().timeIntervalSince(startDate))
+                    if isStreamingReasoning {
                         HStack(spacing: 5) {
                             Text("深度思考中")
                                 .font(.system(size: 12, weight: .semibold))
                                 .foregroundColor(theme.primaryText)
-                            Text(ThinkingStatusView.formatElapsed(elapsed))
-                                .font(.system(size: 11.5, weight: .medium, design: .rounded).monospacedDigit())
-                                .foregroundColor(theme.secondaryText)
+                            ReasoningElapsedBadge(startDate: startDate, theme: theme)
                         }
                     } else {
-                        TimelineView(.periodic(from: .now, by: 0.1)) { context in
-                            let elapsed = max(0, context.date.timeIntervalSince(startDate))
-                            HStack(spacing: 5) {
-                                Text("深度思考中")
-                                    .font(.system(size: 12, weight: .semibold))
-                                    .foregroundColor(theme.primaryText)
-                                Text(ThinkingStatusView.formatElapsed(elapsed))
-                                    .font(.system(size: 11.5, weight: .medium, design: .rounded).monospacedDigit())
-                                    .foregroundColor(theme.secondaryText)
-                            }
-                        }
+                        Text("已深度思考")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(theme.secondaryText)
                     }
-                } else {
-                    Text("已深度思考")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(theme.secondaryText)
-                }
 
-                if !isExpanded {
-                    Text(previewLine)
-                        .font(.system(size: 11.5))
+                    if !isShowingBody {
+                        Text(collapsedSummaryLine)
+                            .font(.system(size: 11.5))
+                            .foregroundColor(theme.mutedText)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+
+                    Spacer(minLength: 4)
+
+                    Image(systemName: isShowingBody ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 10.5, weight: .semibold))
                         .foregroundColor(theme.mutedText)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
                 }
-
-                Spacer(minLength: 4)
-
-                Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                    .font(.system(size: 10.5, weight: .semibold))
-                    .foregroundColor(theme.mutedText)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7.5)
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                withAnimation(.easeInOut(duration: 0.16)) {
-                    isExpanded.toggle()
-                }
-            }
+            .buttonStyle(.plain)
 
-            if isExpanded {
+            if isShowingBody {
                 Rectangle()
                     .fill(theme.border.opacity(0.75))
                     .frame(height: 1)
 
-                let displayReasoning = reasoningText.count > 12000
-                    ? "...(仅显示末尾思考内容)\n" + String(reasoningText.suffix(12000))
-                    : reasoningText
-                let maxWindowHeight = min(250, max(150, UIScreen.main.bounds.height * 0.3))
+                if isStreamingReasoning && userExpandedOverride != true {
+                    // 流式思考阶段展示紧凑的最近 5 行实时思路窗，无嵌套 ScrollView，外层滚动零手势抢夺
+                    Text(streamingLivePreview)
+                        .font(.system(size: 12.5))
+                        .foregroundColor(theme.secondaryText)
+                        .lineSpacing(3)
+                        .lineLimit(5)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                } else {
+                    let trimmed = reasoningText.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let isTruncated = trimmed.count > Self.inlineMaxCharacters
+                    let inlineText = isTruncated
+                        ? String(trimmed.prefix(Self.inlineMaxCharacters)) + "\n…"
+                        : trimmed
 
-                ScrollView(.vertical, showsIndicators: true) {
-                    reasoningBodyText(displayReasoning)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(inlineText)
+                            .font(.system(size: 12.5))
+                            .foregroundColor(theme.secondaryText)
+                            .lineSpacing(3)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                        if isTruncated {
+                            Button {
+                                showingFullReasoningSheet = true
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                                        .font(.system(size: 10, weight: .semibold))
+                                    Text("查看完整思考全文 (\(trimmed.count.formatted()) 字)")
+                                        .font(.system(size: 11.5, weight: .semibold))
+                                }
+                                .foregroundColor(theme.accent)
+                                .padding(.top, 2)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
                 }
-                .frame(height: maxWindowHeight)
             }
         }
-        .frame(width: width, alignment: .leading)
-        .background(theme.elevatedBackground.opacity(0.65))
+        .frame(maxWidth: width ?? .infinity, alignment: .leading)
+        .background(theme.elevatedBackground.opacity(0.58))
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(theme.border, lineWidth: 1)
         )
-    }
-
-    @ViewBuilder
-    private func reasoningBodyText(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 12.5))
-            .foregroundColor(theme.secondaryText)
-            .lineSpacing(3)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
+        .onChange(of: isStreamingReasoning) { streaming in
+            // 思考流结束转入正文输出时，若用户未主动点开过全文，自动平滑收起为单行摘要
+            if !streaming && userExpandedOverride == nil {
+                userExpandedOverride = false
+            }
+        }
+        .sheet(isPresented: $showingFullReasoningSheet) {
+            AttachmentFilePreviewSheet(
+                attachment: ChatAttachment(
+                    kind: .file,
+                    fileName: "深度思考过程.txt",
+                    mimeType: "text/plain",
+                    fileSize: reasoningText.utf8.count,
+                    textContent: reasoningText
+                ),
+                theme: theme
+            )
+        }
     }
 }
 
-struct MessageBubbleView: View {
+private struct ActiveStreamingAssistantCardView: View {
+    let turn: MessageDisplayTurn
+    let theme: AppThemePalette
+    let bubbleColumnWidth: CGFloat
+    let innerContentWidth: CGFloat
+    let statusText: String
+    let thinkingStartTime: Date?
+    let isSelected: Bool
+    @ObservedObject var streamingState: StreamingTurnState
+
+    var body: some View {
+        let activeMsgId = streamingState.activeMessageId
+        let liveText = streamingState.displayedText
+        let liveReasoning = streamingState.displayedReasoning
+        let liveTrimmedText = liveText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let liveTrimmedReasoning = liveReasoning.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let steps = turn.steps
+        let hasPriorVisibleContent = steps.contains { step in
+            guard step.id != activeMsgId else { return false }
+            return !step.isEmptyPlaceholder
+        }
+        let currentStepCalls = steps.last(where: { $0.id == activeMsgId })?.toolCalls ?? []
+        let isWaitingInitialOutput = !hasPriorVisibleContent
+            && liveTrimmedText.isEmpty
+            && liveTrimmedReasoning.isEmpty
+            && currentStepCalls.isEmpty
+            && turn.toolCalls.isEmpty
+
+        if isWaitingInitialOutput {
+            ThinkingStatusView(
+                statusText: statusText,
+                startDate: thinkingStartTime ?? turn.createdAt,
+                theme: theme,
+                isPaused: false
+            )
+            .padding(.horizontal, 13)
+            .padding(.vertical, 9)
+            .background(theme.cardBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(isSelected ? theme.accent.opacity(0.45) : theme.border, lineWidth: 1)
+            )
+            .modifier(ChatLayoutProbe(identifier: "assistantCard|\(turn.id)"))
+        } else {
+            VStack(alignment: .leading, spacing: 9) {
+                ForEach(Array(steps.enumerated()), id: \.element.id) { idx, step in
+                    let isLiveStep = (step.id == activeMsgId) || (activeMsgId == nil && idx == steps.count - 1)
+                    let stepReasoning = isLiveStep && !liveTrimmedReasoning.isEmpty ? liveReasoning : step.reasoningContent
+                    let stepText = isLiveStep && !liveTrimmedText.isEmpty ? liveText : step.content
+                    let trimmedStepReasoning = stepReasoning.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let trimmedStepText = stepText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+                    if !trimmedStepReasoning.isEmpty {
+                        ReasoningFoldCardView(
+                            reasoningText: stepReasoning,
+                            isStreamingReasoning: isLiveStep && trimmedStepText.isEmpty && step.toolCalls.isEmpty,
+                            startDate: thinkingStartTime ?? turn.createdAt,
+                            theme: theme,
+                            width: innerContentWidth
+                        )
+                        .equatable()
+                        .modifier(ChatLayoutProbe(identifier: idx == 0 ? "reasoning|\(turn.id)" : nil))
+                    }
+
+                    if !trimmedStepText.isEmpty {
+                        MarkdownDocumentView(
+                            content: stepText,
+                            theme: theme,
+                            contentWidth: innerContentWidth,
+                            isStreaming: isLiveStep,
+                            diagnosticIDPrefix: idx == steps.count - 1 ? turn.id : nil
+                        )
+                        .frame(maxWidth: innerContentWidth, alignment: .leading)
+                        .modifier(ChatLayoutProbe(identifier: idx == steps.count - 1 ? "markdown|\(turn.id)" : nil))
+                    }
+
+                    if !step.toolCalls.isEmpty {
+                        ToolCallSummaryGroupView(toolCalls: step.toolCalls, theme: theme)
+                            .equatable()
+                            .frame(maxWidth: innerContentWidth, alignment: .leading)
+                            .modifier(ChatLayoutProbe(identifier: idx == 0 ? "toolSummary|\(turn.id)" : nil))
+                    }
+
+                    if isLiveStep && trimmedStepText.isEmpty && trimmedStepReasoning.isEmpty {
+                        let anyExecutingTool = step.toolCalls.contains(where: { $0.isExecuting })
+                        if !anyExecutingTool {
+                            ThinkingStatusView(
+                                statusText: statusText,
+                                startDate: thinkingStartTime ?? turn.createdAt,
+                                theme: theme,
+                                isPaused: false
+                            )
+                            .padding(.vertical, 2)
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(maxWidth: bubbleColumnWidth, alignment: .leading)
+            .background(theme.cardBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(isSelected ? theme.accent.opacity(0.45) : theme.border, lineWidth: 1)
+            )
+            .modifier(ChatLayoutProbe(identifier: "assistantCard|\(turn.id)"))
+        }
+    }
+}
+
+struct MessageBubbleView: View, Equatable {
     let turn: MessageDisplayTurn
     let theme: AppThemePalette
     var availableWidth: CGFloat = UIScreen.main.bounds.width - 20
@@ -140,7 +312,7 @@ struct MessageBubbleView: View {
     var isActiveGeneratingTurn: Bool = false
     var statusText: String = ""
     var thinkingStartTime: Date? = nil
-    @ObservedObject var streamingState: StreamingTurnState
+    var streamingState: StreamingTurnState
     var isSelected: Bool = false
     var onSelectToggle: (() -> Void)? = nil
     var onEditBegin: (() -> Void)? = nil
@@ -151,6 +323,18 @@ struct MessageBubbleView: View {
     var onRetry: (() -> Void)? = nil
     var onDelete: (() -> Void)? = nil
 
+    static func == (lhs: MessageBubbleView, rhs: MessageBubbleView) -> Bool {
+        lhs.turn == rhs.turn &&
+        lhs.theme == rhs.theme &&
+        abs(lhs.availableWidth - rhs.availableWidth) < 0.5 &&
+        lhs.modelName == rhs.modelName &&
+        lhs.isGenerating == rhs.isGenerating &&
+        lhs.isActiveGeneratingTurn == rhs.isActiveGeneratingTurn &&
+        lhs.statusText == rhs.statusText &&
+        lhs.thinkingStartTime == rhs.thinkingStartTime &&
+        lhs.isSelected == rhs.isSelected
+    }
+
     @State private var isCopied: Bool = false
     @State private var isEditing: Bool = false
     @State private var draftText: String = ""
@@ -159,11 +343,16 @@ struct MessageBubbleView: View {
     @FocusState private var isEditFieldFocused: Bool
 
     private var bubbleColumnWidth: CGFloat {
-        max(220, availableWidth - 30)
+        max(220, availableWidth - 34)
+    }
+
+    private var userBubbleMaxWidth: CGFloat {
+        max(200, min(bubbleColumnWidth, floor(availableWidth * 0.82)))
     }
 
     private var editableRawText: String {
-        if !turn.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        let trimmed = turn.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
             return turn.content
         }
         if let longAtt = turn.attachments.first(where: { $0.kind == .longText }),
@@ -181,7 +370,7 @@ struct MessageBubbleView: View {
                 assistantTurnView
             }
         }
-        .frame(width: availableWidth)
+        .frame(maxWidth: availableWidth, alignment: turn.role == .user ? .trailing : .leading)
         .modifier(ChatLayoutProbe(identifier: "row|\(turn.role.rawValue)|\(turn.id)"))
         .sheet(item: $previewingFileAttachment) { fileAtt in
             AttachmentFilePreviewSheet(attachment: fileAtt, theme: theme)
@@ -199,16 +388,12 @@ struct MessageBubbleView: View {
             ? ChatAttachment.makeLongTextAttachment(from: trimmed)
             : nil
 
-        return HStack(alignment: .top, spacing: 6) {
-            Spacer(minLength: 24)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    onDismissSelection?()
-                }
+        return HStack(alignment: .top, spacing: 8) {
+            Spacer(minLength: 20)
 
             if isEditing {
                 editEditorBox(allowResend: true)
-                    .frame(width: bubbleColumnWidth)
+                    .frame(maxWidth: bubbleColumnWidth)
                     .id("message-editor-\(turn.id)")
             } else {
                 VStack(alignment: .trailing, spacing: 6) {
@@ -257,18 +442,22 @@ struct MessageBubbleView: View {
                             .font(.system(size: 15, weight: .regular))
                             .foregroundColor(theme.primaryText)
                             .lineSpacing(3.5)
-                            .padding(.horizontal, 12)
+                            .multilineTextAlignment(.leading)
+                            .padding(.horizontal, 13)
                             .padding(.vertical, 9)
                             .background(theme.userMessageBackground)
-                            .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                             .overlay(
-                                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
                                     .stroke(isSelected ? theme.accent.opacity(0.55) : theme.accent.opacity(0.18), lineWidth: 1)
                             )
                             .modifier(ChatLayoutProbe(identifier: "userText|\(turn.id)"))
-                            .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                             .onTapGesture {
                                 onSelectToggle?()
+                            }
+                            .contextMenu {
+                                userContextMenuItems
                             }
                     }
 
@@ -276,7 +465,7 @@ struct MessageBubbleView: View {
                         floatingActionPill
                     }
                 }
-                .frame(maxWidth: bubbleColumnWidth, alignment: .trailing)
+                .frame(maxWidth: userBubbleMaxWidth, alignment: .trailing)
             }
 
             compactAvatar(isUser: true)
@@ -284,170 +473,271 @@ struct MessageBubbleView: View {
                     onSelectToggle?()
                 }
         }
-        .frame(width: availableWidth, alignment: .trailing)
+        .frame(maxWidth: .infinity, alignment: .trailing)
     }
 
-    private var effectiveAssistantText: String {
-        let base = turn.content.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard isActiveGeneratingTurn else {
-            return base
-        }
-        let live = streamingState.displayedText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !live.isEmpty {
-            if base.isEmpty || (turn.underlyingMessageIds.contains(streamingState.activeMessageId ?? "") && base == live) {
-                return live
+    @ViewBuilder
+    private var userContextMenuItems: some View {
+        let copyTarget = editableRawText
+        if !copyTarget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            Button {
+                UIPasteboard.general.string = copyTarget
+            } label: {
+                Label("复制内容", systemImage: "doc.on.doc")
             }
-            if !base.isEmpty && live != base && !base.hasSuffix(live) {
-                return base + "\n\n" + live
-            }
-            return live
         }
-        return base
+        if !isGenerating {
+            Button {
+                beginInlineEdit()
+            } label: {
+                Label("编辑消息", systemImage: "pencil")
+            }
+            Button {
+                onRetry?()
+            } label: {
+                Label("重新发送", systemImage: "arrow.clockwise")
+            }
+            Button(role: .destructive) {
+                onDelete?()
+            } label: {
+                Label("删除消息", systemImage: "trash")
+            }
+        }
     }
 
-    private var effectiveReasoningText: String {
-        let base = turn.reasoningContent.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard isActiveGeneratingTurn else {
-            return base
+    private static func isCompactSingleLineCandidate(_ turn: MessageDisplayTurn) -> Bool {
+        guard turn.steps.count <= 1,
+              turn.toolCalls.isEmpty,
+              turn.reasoningContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return false
         }
-        let live = streamingState.displayedReasoning.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !live.isEmpty {
-            if base.isEmpty || base == live {
-                return live
-            }
-            if !base.hasSuffix(live) {
-                return base + "\n\n" + live
-            }
-            return live
+        let trimmed = turn.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count <= 72, !trimmed.contains("\n") else {
+            return false
         }
-        return base
+        if trimmed.hasPrefix("#") || trimmed.hasPrefix("```") || trimmed.hasPrefix(">") || trimmed.hasPrefix("-") || trimmed.hasPrefix("*") || trimmed.contains("|") {
+            return false
+        }
+        return true
     }
 
     private var assistantTurnView: some View {
-        let currentText = effectiveAssistantText
-        let currentReasoning = effectiveReasoningText
-        let isPureThinking = isActiveGeneratingTurn && currentText.isEmpty && currentReasoning.isEmpty && turn.toolCalls.isEmpty
         let innerContentWidth = max(180, bubbleColumnWidth - 24)
-        let scrollInteracting = streamingState.isScrollInteracting
 
-        return VStack(alignment: .leading, spacing: 6) {
-                if isEditing {
-                    editEditorBox(allowResend: false)
-                        .frame(width: bubbleColumnWidth)
-                        .id("message-editor-\(turn.id)")
-                } else {
-                    if isPureThinking {
-                        HStack(spacing: 0) {
-                            ThinkingStatusView(
-                                statusText: statusText,
-                                startDate: thinkingStartTime ?? turn.createdAt,
-                                theme: theme,
-                                isPaused: scrollInteracting
-                            )
-                            .padding(.horizontal, 13)
-                            .padding(.vertical, 9)
-                            .background(theme.cardBackground)
-                            .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 15, style: .continuous)
-                                    .stroke(isSelected ? theme.accent.opacity(0.45) : theme.border, lineWidth: 1)
-                            )
-                            .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-                            .onTapGesture {
-                                onSelectToggle?()
-                            }
-
-                            Spacer(minLength: 16)
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    onDismissSelection?()
-                                }
-                        }
-                    } else {
-                        VStack(alignment: .leading, spacing: 8) {
-                            if !turn.toolCalls.isEmpty {
-                                ToolCallSummaryGroupView(toolCalls: turn.toolCalls, theme: theme)
-                                    .frame(width: innerContentWidth)
-                                    .modifier(ChatLayoutProbe(identifier: "toolSummary|\(turn.id)"))
-                            }
-
-                            if !currentReasoning.isEmpty {
-                                ReasoningFoldCardView(
-                                    reasoningText: currentReasoning,
-                                    isStreamingReasoning: isActiveGeneratingTurn && currentText.isEmpty,
-                                    isScrollInteracting: scrollInteracting,
-                                    startDate: thinkingStartTime ?? turn.createdAt,
-                                    theme: theme,
-                                    width: innerContentWidth
-                                )
-                                .modifier(ChatLayoutProbe(identifier: "reasoning|\(turn.id)"))
-                            }
-
-                            if !currentText.isEmpty {
-                                MarkdownDocumentView(
-                                    content: currentText,
-                                    theme: theme,
-                                    contentWidth: innerContentWidth,
-                                    isStreaming: isActiveGeneratingTurn,
-                                    diagnosticIDPrefix: turn.id
-                                )
-                                .frame(width: innerContentWidth, alignment: .leading)
-                                .modifier(ChatLayoutProbe(identifier: "markdown|\(turn.id)"))
-                            } else if isActiveGeneratingTurn && currentReasoning.isEmpty {
-                                ThinkingStatusView(
-                                    statusText: statusText,
-                                    startDate: thinkingStartTime ?? turn.createdAt,
-                                    theme: theme,
-                                    isPaused: scrollInteracting
-                                )
-                                .padding(.top, 2)
-                            }
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                        .frame(width: bubbleColumnWidth, alignment: .leading)
-                        .background(theme.cardBackground)
-                        .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 15, style: .continuous)
-                                .stroke(isSelected ? theme.accent.opacity(0.45) : theme.border, lineWidth: 1)
-                        )
-                        .modifier(ChatLayoutProbe(identifier: "assistantCard|\(turn.id)"))
-                        .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-                        .onTapGesture {
-                            onSelectToggle?()
-                        }
-                    }
-
-                    if isSelected {
-                        floatingActionPill
-                    }
-                }
-            }
-        .frame(width: bubbleColumnWidth, alignment: .leading)
-        .modifier(ChatLayoutProbe(identifier: "assistantColumn|\(turn.id)"))
-        .padding(.leading, 30)
-        .modifier(ChatLayoutProbe(identifier: "assistantRowContent|\(turn.id)"))
-        .frame(width: availableWidth, alignment: .leading)
-        .fixedSize(horizontal: false, vertical: true)
-        .overlay(alignment: .topLeading) {
+        return HStack(alignment: .top, spacing: 8) {
             compactAvatar(isUser: false)
-                .frame(width: 24, height: 26, alignment: .topLeading)
                 .onTapGesture {
                     onSelectToggle?()
                 }
+
+            VStack(alignment: .leading, spacing: 5) {
+                if isEditing {
+                    editEditorBox(allowResend: false)
+                        .frame(maxWidth: bubbleColumnWidth)
+                        .id("message-editor-\(turn.id)")
+                } else if isActiveGeneratingTurn {
+                    ActiveStreamingAssistantCardView(
+                        turn: turn,
+                        theme: theme,
+                        bubbleColumnWidth: bubbleColumnWidth,
+                        innerContentWidth: innerContentWidth,
+                        statusText: statusText,
+                        thinkingStartTime: thinkingStartTime,
+                        isSelected: isSelected,
+                        streamingState: streamingState
+                    )
+                } else {
+                    staticAssistantCard(innerContentWidth: innerContentWidth)
+
+                    assistantFooterBar
+                }
+            }
+            .frame(maxWidth: bubbleColumnWidth, alignment: .leading)
+            .modifier(ChatLayoutProbe(identifier: "assistantColumn|\(turn.id)"))
+
+            Spacer(minLength: 0)
         }
-        .modifier(ChatLayoutProbe(identifier: "assistantRow|\(turn.id)"))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .modifier(ChatLayoutProbe(identifier: "assistantHStack|\(turn.id)"))
+    }
+
+    @ViewBuilder
+    private func staticAssistantCard(innerContentWidth: CGFloat) -> some View {
+        let isCompact = Self.isCompactSingleLineCandidate(turn)
+
+        if isCompact {
+            let attr = MarkdownRenderCache.shared.attributedString(
+                for: turn.content.trimmingCharacters(in: .whitespacesAndNewlines),
+                fontSize: 15,
+                theme: theme,
+                isStreaming: false
+            )
+            Text(attr)
+                .font(.system(size: 15, weight: .regular))
+                .foregroundColor(theme.primaryText)
+                .tint(theme.accent)
+                .lineSpacing(3.5)
+                .textSelection(.enabled)
+                .padding(.horizontal, 13)
+                .padding(.vertical, 9.5)
+                .background(theme.cardBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(isSelected ? theme.accent.opacity(0.45) : theme.border, lineWidth: 1)
+                )
+                .modifier(ChatLayoutProbe(identifier: "assistantCard|\(turn.id)"))
+        } else {
+            let stepsToRender: [AssistantTurnStep] = turn.steps.isEmpty
+                ? [AssistantTurnStep(id: turn.id, content: turn.content, reasoningContent: turn.reasoningContent, toolCalls: turn.toolCalls)]
+                : turn.steps
+
+            VStack(alignment: .leading, spacing: 9) {
+                ForEach(Array(stepsToRender.enumerated()), id: \.element.id) { idx, step in
+                    let trimmedReasoning = step.trimmedReasoning
+                    let trimmedText = step.trimmedContent
+
+                    if !trimmedReasoning.isEmpty {
+                        ReasoningFoldCardView(
+                            reasoningText: step.reasoningContent,
+                            isStreamingReasoning: false,
+                            startDate: turn.createdAt,
+                            theme: theme,
+                            width: innerContentWidth
+                        )
+                        .equatable()
+                        .modifier(ChatLayoutProbe(identifier: idx == 0 ? "reasoning|\(turn.id)" : nil))
+                    }
+
+                    if !trimmedText.isEmpty {
+                        MarkdownDocumentView(
+                            content: step.content,
+                            theme: theme,
+                            contentWidth: innerContentWidth,
+                            isStreaming: false,
+                            diagnosticIDPrefix: idx == stepsToRender.count - 1 ? turn.id : nil
+                        )
+                        .frame(maxWidth: innerContentWidth, alignment: .leading)
+                        .modifier(ChatLayoutProbe(identifier: idx == stepsToRender.count - 1 ? "markdown|\(turn.id)" : nil))
+                    }
+
+                    if !step.toolCalls.isEmpty {
+                        ToolCallSummaryGroupView(toolCalls: step.toolCalls, theme: theme)
+                            .equatable()
+                            .frame(maxWidth: innerContentWidth, alignment: .leading)
+                            .modifier(ChatLayoutProbe(identifier: idx == 0 ? "toolSummary|\(turn.id)" : nil))
+                    }
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(maxWidth: bubbleColumnWidth, alignment: .leading)
+            .background(theme.cardBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(isSelected ? theme.accent.opacity(0.45) : theme.border, lineWidth: 1)
+            )
+            .modifier(ChatLayoutProbe(identifier: "assistantCard|\(turn.id)"))
+        }
+    }
+
+    private var assistantFooterBar: some View {
+        let copyTarget = editableRawText
+        let hasCopyableText = !copyTarget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+
+        return HStack(spacing: 12) {
+            if hasCopyableText {
+                Button {
+                    UIPasteboard.general.string = copyTarget
+                    withAnimation(.easeInOut(duration: 0.15)) { isCopied = true }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                        withAnimation(.easeInOut(duration: 0.15)) { isCopied = false }
+                    }
+                } label: {
+                    HStack(spacing: 3.5) {
+                        Image(systemName: isCopied ? "checkmark" : "doc.on.doc")
+                            .font(.system(size: 11, weight: .medium))
+                        if isCopied {
+                            Text("已复制")
+                                .font(.system(size: 11, weight: .medium))
+                        }
+                    }
+                    .foregroundColor(isCopied ? theme.accent : theme.mutedText)
+                    .padding(.vertical, 2)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+
+            Button {
+                guard !isGenerating else { return }
+                onRetry?()
+            } label: {
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(isGenerating ? theme.mutedText.opacity(0.45) : theme.mutedText)
+                    .padding(.vertical, 2)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(isGenerating)
+
+            if hasCopyableText {
+                Button {
+                    guard !isGenerating else { return }
+                    beginInlineEdit()
+                } label: {
+                    Image(systemName: "pencil")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(isGenerating ? theme.mutedText.opacity(0.45) : theme.mutedText)
+                        .padding(.vertical, 2)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(isGenerating)
+            }
+
+            Button {
+                guard !isGenerating else { return }
+                onDelete?()
+            } label: {
+                Image(systemName: "trash")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(isGenerating ? theme.mutedText.opacity(0.45) : theme.mutedText)
+                    .padding(.vertical, 2)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(isGenerating)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.leading, 4)
+        .modifier(ChatLayoutProbe(identifier: "actionBar|\(turn.id)"))
+    }
+
+    private func beginInlineEdit() {
+        guard !isGenerating else { return }
+        draftText = editableRawText
+        withAnimation(.easeInOut(duration: 0.15)) {
+            isEditing = true
+        }
+        onEditBegin?()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            guard isEditing else { return }
+            isEditFieldFocused = true
+        }
     }
 
     private func compactAvatar(isUser: Bool) -> some View {
         ZStack {
             Circle()
                 .fill(isUser ? theme.accent : theme.accent.opacity(0.14))
-                .frame(width: 24, height: 24)
+                .frame(width: 26, height: 26)
 
             Image(systemName: isUser ? "person.fill" : "sparkles")
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: 11.5, weight: .semibold))
                 .foregroundColor(isUser ? .white : theme.accent)
         }
         .padding(.top, 2)
@@ -459,90 +749,92 @@ struct MessageBubbleView: View {
         let copyTarget = editableRawText
 
         return HStack(spacing: 4) {
-            HStack(spacing: 4) {
-                Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 11, weight: .semibold))
-                Text("重试")
-                    .font(.system(size: 11.5, weight: .medium))
-            }
-            .foregroundColor(isGenerating ? theme.mutedText : theme.secondaryText)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .contentShape(Capsule())
-            .onTapGesture {
+            Button {
                 guard !isGenerating else { return }
                 onRetry?()
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text("重试")
+                        .font(.system(size: 11.5, weight: .medium))
+                }
+                .foregroundColor(isGenerating ? theme.mutedText : theme.secondaryText)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .contentShape(Capsule())
             }
+            .buttonStyle(.plain)
+            .disabled(isGenerating)
 
             Divider()
                 .frame(height: 12)
                 .overlay(theme.border)
 
-            HStack(spacing: 4) {
-                Image(systemName: "pencil")
-                    .font(.system(size: 11, weight: .semibold))
-                Text("编辑")
-                    .font(.system(size: 11.5, weight: .medium))
-            }
-            .foregroundColor(isGenerating ? theme.mutedText : theme.secondaryText)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .contentShape(Capsule())
-            .onTapGesture {
-                guard !isGenerating else { return }
-                draftText = editableRawText
-                withAnimation(.easeInOut(duration: 0.15)) {
-                    isEditing = true
+            Button {
+                beginInlineEdit()
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "pencil")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text("编辑")
+                        .font(.system(size: 11.5, weight: .medium))
                 }
-                onEditBegin?()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                    guard isEditing else { return }
-                    isEditFieldFocused = true
-                }
+                .foregroundColor(isGenerating ? theme.mutedText : theme.secondaryText)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .contentShape(Capsule())
             }
+            .buttonStyle(.plain)
+            .disabled(isGenerating)
 
             if !copyTarget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Divider()
                     .frame(height: 12)
                     .overlay(theme.border)
 
-                HStack(spacing: 4) {
-                    Image(systemName: isCopied ? "checkmark" : "doc.on.doc")
-                        .font(.system(size: 11, weight: .semibold))
-                    Text(isCopied ? "已复制" : "复制")
-                        .font(.system(size: 11.5, weight: .medium))
-                }
-                .foregroundColor(isCopied ? theme.accent : theme.secondaryText)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
-                .contentShape(Capsule())
-                .onTapGesture {
+                Button {
                     UIPasteboard.general.string = copyTarget
                     withAnimation { isCopied = true }
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                         withAnimation { isCopied = false }
                     }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: isCopied ? "checkmark" : "doc.on.doc")
+                            .font(.system(size: 11, weight: .semibold))
+                        Text(isCopied ? "已复制" : "复制")
+                            .font(.system(size: 11.5, weight: .medium))
+                    }
+                    .foregroundColor(isCopied ? theme.accent : theme.secondaryText)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .contentShape(Capsule())
                 }
+                .buttonStyle(.plain)
             }
 
             Divider()
                 .frame(height: 12)
                 .overlay(theme.border)
 
-            HStack(spacing: 4) {
-                Image(systemName: "trash")
-                    .font(.system(size: 11, weight: .semibold))
-                Text("删除")
-                    .font(.system(size: 11.5, weight: .medium))
-            }
-            .foregroundColor(isGenerating ? theme.mutedText : Color.red)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .contentShape(Capsule())
-            .onTapGesture {
+            Button {
                 guard !isGenerating else { return }
                 onDelete?()
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text("删除")
+                        .font(.system(size: 11.5, weight: .medium))
+                }
+                .foregroundColor(isGenerating ? theme.mutedText : Color.red)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .contentShape(Capsule())
             }
+            .buttonStyle(.plain)
+            .disabled(isGenerating)
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 3)
@@ -572,58 +864,48 @@ struct MessageBubbleView: View {
                 )
 
             HStack(spacing: 8) {
-                Text("取消")
-                    .font(.system(size: 12.5, weight: .semibold))
-                    .foregroundColor(theme.secondaryText)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(theme.cardBackground)
-                    .clipShape(Capsule())
-                    .overlay(Capsule().stroke(theme.border, lineWidth: 1))
-                    .contentShape(Capsule())
-                    .onTapGesture {
-                        isEditFieldFocused = false
-                        withAnimation(.easeInOut(duration: 0.15)) {
-                            isEditing = false
-                        }
-                        onEditEnd?()
+                Button {
+                    isEditFieldFocused = false
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        isEditing = false
                     }
+                    onEditEnd?()
+                } label: {
+                    Text("取消")
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundColor(theme.secondaryText)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(theme.cardBackground)
+                        .clipShape(Capsule())
+                        .overlay(Capsule().stroke(theme.border, lineWidth: 1))
+                }
+                .buttonStyle(.plain)
 
                 Spacer()
 
-                Text("仅保存")
-                    .font(.system(size: 12.5, weight: .semibold))
-                    .foregroundColor(theme.accent)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(theme.accent.opacity(0.14))
-                    .clipShape(Capsule())
-                    .contentShape(Capsule())
-                    .onTapGesture {
-                        let trimmed = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !trimmed.isEmpty else { return }
-                        isEditFieldFocused = false
-                        withAnimation(.easeInOut(duration: 0.15)) {
-                            isEditing = false
-                        }
-                        onEditEnd?()
-                        onEditSave?(trimmed)
+                Button {
+                    let trimmed = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !trimmed.isEmpty else { return }
+                    isEditFieldFocused = false
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        isEditing = false
                     }
+                    onEditEnd?()
+                    onEditSave?(trimmed)
+                } label: {
+                    Text("仅保存")
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundColor(theme.accent)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(theme.accent.opacity(0.14))
+                        .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
 
                 if allowResend {
-                    HStack(spacing: 4) {
-                        Image(systemName: "paperplane.fill")
-                            .font(.system(size: 10.5))
-                        Text("保存并重发")
-                            .font(.system(size: 12.5, weight: .semibold))
-                    }
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(theme.accent)
-                    .clipShape(Capsule())
-                    .contentShape(Capsule())
-                    .onTapGesture {
+                    Button {
                         let trimmed = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
                         guard !trimmed.isEmpty else { return }
                         isEditFieldFocused = false
@@ -632,7 +914,20 @@ struct MessageBubbleView: View {
                         }
                         onEditEnd?()
                         onEditAndResend?(trimmed)
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "paperplane.fill")
+                                .font(.system(size: 10.5))
+                            Text("保存并重发")
+                                .font(.system(size: 12.5, weight: .semibold))
+                        }
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(theme.accent)
+                        .clipShape(Capsule())
                     }
+                    .buttonStyle(.plain)
                 }
             }
         }
@@ -647,9 +942,10 @@ struct CodeBlockCard: View {
     var cardWidth: CGFloat? = nil
     var isStreaming: Bool = false
     @State private var copied: Bool = false
+    @State private var isInlineExpanded: Bool = false
     @State private var showingFullViewer: Bool = false
 
-    private let previewLineThreshold = 8
+    private let previewLineThreshold = 12
 
     private var totalLines: Int {
         var count = 1
@@ -660,21 +956,21 @@ struct CodeBlockCard: View {
     }
 
     private var isCollapsible: Bool {
-        totalLines > previewLineThreshold || code.count > 360
+        totalLines > previewLineThreshold + 2 || code.count > 640
     }
 
     private var displayedCode: String {
-        if !isCollapsible {
+        if !isCollapsible || (isInlineExpanded && !isStreaming && totalLines <= 120) {
             return code
         }
         if isStreaming {
-            return Self.extractLastLinesStable(from: code, exactLines: previewLineThreshold, maxChars: 1400)
+            return Self.extractLastLinesStable(from: code, exactLines: previewLineThreshold, maxChars: 1800)
         }
-        return Self.extractFirstLines(from: code, maxLines: previewLineThreshold, maxChars: 1400)
+        return Self.extractFirstLinesExact(from: code, exactLines: previewLineThreshold, maxChars: 1800)
     }
 
-    private static func extractFirstLines(from text: String, maxLines: Int, maxChars: Int) -> String {
-        guard !text.isEmpty, maxLines > 0 else { return "" }
+    private static func extractFirstLinesExact(from text: String, exactLines: Int, maxChars: Int) -> String {
+        guard !text.isEmpty, exactLines > 0 else { return "" }
         var idx = text.startIndex
         let end = text.endIndex
         var lines = 1
@@ -682,7 +978,7 @@ struct CodeBlockCard: View {
 
         while idx < end {
             if text[idx] == "\n" {
-                if lines >= maxLines {
+                if lines >= exactLines {
                     break
                 }
                 lines += 1
@@ -725,8 +1021,7 @@ struct CodeBlockCard: View {
             lines = Array(lines.suffix(exactLines))
         }
         let cleaned = lines.map { line -> String in
-            let safeLine = line.isEmpty ? " " : (line.count > 160 ? String(line.prefix(160)) : line)
-            return safeLine
+            line.isEmpty ? " " : (line.count > 160 ? String(line.prefix(160)) : line)
         }
         if cleaned.count < exactLines {
             let pad = Array(repeating: " ", count: exactLines - cleaned.count)
@@ -736,7 +1031,7 @@ struct CodeBlockCard: View {
     }
 
     var body: some View {
-        let isStreamingCollapsedWindow = isStreaming && isCollapsible
+        let isClippedPreview = isCollapsible && !(isInlineExpanded && !isStreaming && totalLines <= 120)
 
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
@@ -747,11 +1042,11 @@ struct CodeBlockCard: View {
                         .lineLimit(1)
                         .truncationMode(.tail)
 
-                    Text(isStreamingCollapsedWindow ? "实时跟随 · \(totalLines) 行" : "\(totalLines) 行")
+                    Text(isStreaming && isClippedPreview ? "实时输出 · \(totalLines) 行" : "\(totalLines) 行")
                         .font(.system(size: 10, weight: .medium, design: .monospaced))
                         .foregroundColor(isStreaming ? theme.accent : theme.mutedText)
                         .lineLimit(1)
-                        .padding(.horizontal, 5)
+                        .padding(.horizontal, 5.5)
                         .padding(.vertical, 1.5)
                         .background(isStreaming ? theme.accent.opacity(0.12) : theme.cardBackground.opacity(0.7))
                         .clipShape(Capsule())
@@ -760,42 +1055,42 @@ struct CodeBlockCard: View {
 
                 Spacer(minLength: 4)
 
-                HStack(spacing: 4) {
+                HStack(spacing: 8) {
                     if isCollapsible {
-                        HStack(spacing: 2.5) {
-                            Image(systemName: "doc.text.magnifyingglass")
-                                .font(.system(size: 10.5, weight: .semibold))
-                            Text("全文")
-                                .font(.system(size: 11, weight: .medium))
-                                .lineLimit(1)
-                        }
-                        .foregroundColor(theme.secondaryText)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 3)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
+                        Button {
                             showingFullViewer = true
+                        } label: {
+                            HStack(spacing: 2.5) {
+                                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                                    .font(.system(size: 10, weight: .semibold))
+                                Text("全屏")
+                                    .font(.system(size: 11, weight: .medium))
+                            }
+                            .foregroundColor(theme.secondaryText)
+                            .padding(.vertical, 2)
+                            .contentShape(Rectangle())
                         }
+                        .buttonStyle(.plain)
                     }
 
-                    HStack(spacing: 2.5) {
-                        Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                            .font(.system(size: 10.5, weight: .semibold))
-                        Text(copied ? "已复制" : "复制")
-                            .font(.system(size: 11, weight: .medium))
-                            .lineLimit(1)
-                    }
-                    .foregroundColor(copied ? theme.accent : theme.secondaryText)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 3)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
+                    Button {
                         UIPasteboard.general.string = code
                         withAnimation { copied = true }
                         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                             withAnimation { copied = false }
                         }
+                    } label: {
+                        HStack(spacing: 2.5) {
+                            Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                                .font(.system(size: 10.5, weight: .semibold))
+                            Text(copied ? "已复制" : "复制")
+                                .font(.system(size: 11, weight: .medium))
+                        }
+                        .foregroundColor(copied ? theme.accent : theme.secondaryText)
+                        .padding(.vertical, 2)
+                        .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
                 }
                 .layoutPriority(2)
             }
@@ -807,35 +1102,19 @@ struct CodeBlockCard: View {
                 .fill(theme.border)
                 .frame(height: 1)
 
+            // 流式与静态统一采用相同排版结构，避免流式结束瞬间容器切换导致高度跳变
             ZStack(alignment: .bottom) {
-                if isStreaming {
+                ScrollView(.horizontal, showsIndicators: !isStreaming) {
                     Text(displayedCode)
                         .font(.system(size: 12.5, design: .monospaced))
                         .foregroundColor(theme.primaryText)
                         .lineSpacing(3)
-                        .lineLimit(isStreamingCollapsedWindow ? previewLineThreshold : nil)
-                        .truncationMode(.tail)
+                        .fixedSize(horizontal: true, vertical: true)
                         .padding(10)
-                        .frame(
-                            maxWidth: .infinity,
-                            minHeight: isStreamingCollapsedWindow ? 164 : nil,
-                            maxHeight: isStreamingCollapsedWindow ? 164 : nil,
-                            alignment: .topLeading
-                        )
-                        .clipped()
-                } else {
-                    ScrollView(.horizontal, showsIndicators: true) {
-                        Text(displayedCode)
-                            .font(.system(size: 12.5, design: .monospaced))
-                            .foregroundColor(theme.primaryText)
-                            .lineSpacing(3)
-                            .fixedSize(horizontal: true, vertical: true)
-                            .padding(10)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-                if isCollapsible && !isStreaming {
+                if isClippedPreview && !isStreaming {
                     LinearGradient(
                         stops: [
                             .init(color: theme.cardBackground.opacity(0), location: 0),
@@ -844,7 +1123,7 @@ struct CodeBlockCard: View {
                         startPoint: .top,
                         endPoint: .bottom
                     )
-                    .frame(height: 24)
+                    .frame(height: 22)
                     .allowsHitTesting(false)
                 }
             }
@@ -854,24 +1133,36 @@ struct CodeBlockCard: View {
                     .fill(theme.border)
                     .frame(height: 1)
 
-                HStack(spacing: 5) {
-                    Image(systemName: "arrow.up.left.and.arrow.down.right")
-                        .font(.system(size: 10.5, weight: .semibold))
-                    Text("查看全部 \(totalLines.formatted()) 行完整代码")
-                        .font(.system(size: 11.5, weight: .semibold))
-                        .lineLimit(1)
+                Button {
+                    if !isStreaming && totalLines <= 120 {
+                        withAnimation(.easeInOut(duration: 0.16)) {
+                            isInlineExpanded.toggle()
+                        }
+                    } else {
+                        showingFullViewer = true
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: (!isStreaming && totalLines <= 120)
+                              ? (isInlineExpanded ? "chevron.up" : "chevron.down")
+                              : "doc.text.magnifyingglass")
+                            .font(.system(size: 10.5, weight: .semibold))
+                        Text((!isStreaming && totalLines <= 120)
+                             ? (isInlineExpanded ? "收起代码" : "展开全部 \(totalLines.formatted()) 行代码")
+                             : "全屏查看全部 \(totalLines.formatted()) 行代码")
+                            .font(.system(size: 11.5, weight: .semibold))
+                            .lineLimit(1)
+                    }
+                    .foregroundColor(theme.accent)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 7.5)
+                    .background(theme.elevatedBackground.opacity(0.55))
+                    .contentShape(Rectangle())
                 }
-                .foregroundColor(theme.accent)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
-                .background(theme.elevatedBackground.opacity(0.65))
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    showingFullViewer = true
-                }
+                .buttonStyle(.plain)
             }
         }
-        .frame(width: cardWidth)
+        .frame(maxWidth: cardWidth ?? .infinity, alignment: .leading)
         .background(theme.cardBackground)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(

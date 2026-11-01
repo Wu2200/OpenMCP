@@ -7,68 +7,70 @@ final class StreamingTurnState: ObservableObject {
     @Published var activeMessageId: String? = nil
     @Published var displayedText: String = ""
     @Published var displayedReasoning: String = ""
-    @Published var isScrollInteracting: Bool = false
+    @Published var isStreamingReasoning: Bool = false
+
+    var isScrollInteracting: Bool { false }
 
     private var targetText: String = ""
     private var targetReasoning: String = ""
+    private var displayedTextUTF8Count: Int = 0
+    private var displayedReasoningUTF8Count: Int = 0
     private var isStreamComplete: Bool = false
-    private var isDisplayPaused: Bool = false
     private var drainTimer: Timer? = nil
+
+    private static let tickInterval: TimeInterval = 0.032
 
     func begin(messageId: String) {
         stopDrainTimer()
         targetText = ""
         targetReasoning = ""
+        displayedTextUTF8Count = 0
+        displayedReasoningUTF8Count = 0
         isStreamComplete = false
-        isDisplayPaused = false
-        isScrollInteracting = false
-        activeMessageId = messageId
-        displayedText = ""
-        displayedReasoning = ""
+
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            activeMessageId = messageId
+            displayedText = ""
+            displayedReasoning = ""
+            isStreamingReasoning = false
+        }
     }
 
     func setDisplayPaused(_ paused: Bool) {
-        if isScrollInteracting != paused {
-            var transaction = Transaction()
-            transaction.disablesAnimations = true
-            withTransaction(transaction) {
-                isScrollInteracting = paused
-            }
-        }
-        guard isDisplayPaused != paused else { return }
-        isDisplayPaused = paused
-        if paused {
-            stopDrainTimer()
-        } else {
-            flushImmediatelyToTarget()
-        }
+        // 不再在用户触摸滚动时冻结文本输出，避免松手瞬间大量积压文本一次性暴涨导致高度跳变
     }
 
     func pushPartialText(_ newText: String) {
-        guard targetText != newText else { return }
+        guard targetText.utf8.count != newText.utf8.count || targetText != newText else { return }
         targetText = newText
-        guard !isDisplayPaused else { return }
 
-        if displayedText.isEmpty {
-            let initialEnd = advanceIndex(in: targetText, from: targetText.startIndex, maxChars: min(28, targetText.count))
-            commitDisplayed(text: String(targetText[..<initialEnd]), reasoning: nil)
+        if displayedTextUTF8Count == 0 && !newText.isEmpty {
+            let (initialSlice, byteCount) = Self.safeUTF8Prefix(of: newText, targetBytes: 54)
+            displayedTextUTF8Count = byteCount
+            commitDisplayed(text: initialSlice, reasoning: nil, streamingReasoning: false)
+        } else if isStreamingReasoning {
+            commitDisplayed(text: nil, reasoning: nil, streamingReasoning: false)
         }
         ensureDrainTimer()
     }
 
     func pushPartialReasoning(_ newReasoning: String) {
-        guard targetReasoning != newReasoning else { return }
+        guard targetReasoning.utf8.count != newReasoning.utf8.count || targetReasoning != newReasoning else { return }
         targetReasoning = newReasoning
-        guard !isDisplayPaused else { return }
 
-        if displayedReasoning != targetReasoning {
-            commitDisplayed(text: nil, reasoning: targetReasoning)
+        let stillOnlyReasoning = targetText.isEmpty && !newReasoning.isEmpty
+        if displayedReasoningUTF8Count == 0 && !newReasoning.isEmpty {
+            displayedReasoningUTF8Count = newReasoning.utf8.count
+            commitDisplayed(text: nil, reasoning: newReasoning, streamingReasoning: stillOnlyReasoning)
         }
+        ensureDrainTimer()
     }
 
     private func ensureDrainTimer() {
-        guard drainTimer == nil, !isDisplayPaused else { return }
-        let timer = Timer(timeInterval: 0.055, repeats: true) { [weak self] _ in
+        guard drainTimer == nil else { return }
+        let timer = Timer(timeInterval: Self.tickInterval, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.tickDrain()
             }
@@ -83,74 +85,82 @@ final class StreamingTurnState: ObservableObject {
     }
 
     private func tickDrain() {
-        guard !isDisplayPaused else {
-            stopDrainTimer()
-            return
-        }
-
-        var didChange = false
         var nextText: String? = nil
         var nextReasoning: String? = nil
 
-        if displayedReasoning != targetReasoning {
+        let targetReasoningBytes = targetReasoning.utf8.count
+        if displayedReasoningUTF8Count != targetReasoningBytes {
+            displayedReasoningUTF8Count = targetReasoningBytes
             nextReasoning = targetReasoning
-            didChange = true
         }
 
-        if displayedText != targetText {
-            if !targetText.hasPrefix(displayedText) {
+        let targetTextBytes = targetText.utf8.count
+        if displayedTextUTF8Count != targetTextBytes {
+            if targetTextBytes < displayedTextUTF8Count {
+                displayedTextUTF8Count = targetTextBytes
                 nextText = targetText
             } else {
-                let currentEnd = displayedText.endIndex
-                let remainingCount = targetText.distance(from: currentEnd, to: targetText.endIndex)
-                if remainingCount > 0 {
-                    let stepChars: Int
-                    if isStreamComplete {
-                        stepChars = max(36, (remainingCount + 1) / 2)
-                    } else if remainingCount > 300 {
-                        stepChars = max(60, remainingCount / 3)
-                    } else if remainingCount > 120 {
-                        stepChars = max(32, remainingCount / 3)
-                    } else if remainingCount > 40 {
-                        stepChars = max(16, remainingCount / 3)
-                    } else if remainingCount > 12 {
-                        stepChars = 10
-                    } else {
-                        stepChars = remainingCount
-                    }
-                    let nextIdx = advanceIndex(in: targetText, from: currentEnd, maxChars: min(remainingCount, stepChars))
-                    nextText = String(targetText[..<nextIdx])
+                let remainingBytes = targetTextBytes - displayedTextUTF8Count
+                let stepBytes: Int
+                if isStreamComplete {
+                    stepBytes = max(96, (remainingBytes + 1) / 2)
+                } else if remainingBytes > 600 {
+                    stepBytes = max(140, remainingBytes / 3)
+                } else if remainingBytes > 240 {
+                    stepBytes = max(72, remainingBytes / 3)
+                } else if remainingBytes > 90 {
+                    stepBytes = max(36, remainingBytes / 3)
+                } else if remainingBytes > 24 {
+                    stepBytes = 20
+                } else {
+                    stepBytes = remainingBytes
                 }
-            }
-            if nextText != nil {
-                didChange = true
+                let desiredBytes = min(targetTextBytes, displayedTextUTF8Count + stepBytes)
+                let (slice, actualBytes) = Self.safeUTF8Prefix(of: targetText, targetBytes: desiredBytes)
+                displayedTextUTF8Count = actualBytes
+                nextText = slice
             }
         }
 
-        if didChange {
-            commitDisplayed(text: nextText, reasoning: nextReasoning)
+        let nextStreamingReasoning = (targetTextBytes == 0 && targetReasoningBytes > 0 && !isStreamComplete)
+        if nextText != nil || nextReasoning != nil || isStreamingReasoning != nextStreamingReasoning {
+            commitDisplayed(text: nextText, reasoning: nextReasoning, streamingReasoning: nextStreamingReasoning)
         }
 
-        if displayedText == targetText && displayedReasoning == targetReasoning {
+        if displayedTextUTF8Count == targetTextBytes && displayedReasoningUTF8Count == targetReasoningBytes {
             stopDrainTimer()
         }
     }
 
-    private func advanceIndex(in text: String, from start: String.Index, maxChars: Int) -> String.Index {
-        guard maxChars > 0, start < text.endIndex else { return start }
-        return text.index(start, offsetBy: maxChars, limitedBy: text.endIndex) ?? text.endIndex
-    }
-
-    private func flushImmediatelyToTarget() {
-        stopDrainTimer()
-        let nextText = (displayedText != targetText) ? targetText : nil
-        let nextReasoning = (displayedReasoning != targetReasoning) ? targetReasoning : nil
-        if nextText != nil || nextReasoning != nil {
-            commitDisplayed(text: nextText, reasoning: nextReasoning)
+    private static func safeUTF8Prefix(of text: String, targetBytes: Int) -> (String, Int) {
+        let utf8 = text.utf8
+        let total = utf8.count
+        guard targetBytes < total else {
+            return (text, total)
         }
+        guard targetBytes > 0 else {
+            return ("", 0)
+        }
+
+        var utf8Index = utf8.index(utf8.startIndex, offsetBy: targetBytes)
+        while utf8Index < utf8.endIndex && (utf8[utf8Index] & 0xC0) == 0x80 {
+            utf8Index = utf8.index(after: utf8Index)
+        }
+
+        guard let scalarIndex = utf8Index.samePosition(in: text), scalarIndex < text.endIndex else {
+            return (text, total)
+        }
+
+        let composedRange = text.rangeOfComposedCharacterSequence(at: scalarIndex)
+        let alignedIndex = composedRange.lowerBound < scalarIndex ? composedRange.upperBound : scalarIndex
+        if alignedIndex >= text.endIndex {
+            return (text, total)
+        }
+        let slice = String(text[..<alignedIndex])
+        return (slice, slice.utf8.count)
     }
 
-    private func commitDisplayed(text: String?, reasoning: String?) {
+    private func commitDisplayed(text: String?, reasoning: String?, streamingReasoning: Bool?) {
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) {
@@ -160,33 +170,43 @@ final class StreamingTurnState: ObservableObject {
             if let reasoning = reasoning, displayedReasoning != reasoning {
                 displayedReasoning = reasoning
             }
+            if let streamingReasoning = streamingReasoning, isStreamingReasoning != streamingReasoning {
+                isStreamingReasoning = streamingReasoning
+            }
         }
+    }
+
+    func prepareForContinuation() {
+        isStreamComplete = false
     }
 
     func finishImmediate(with finalText: String, finalReasoning: String? = nil) {
         stopDrainTimer()
         targetText = finalText
+        displayedTextUTF8Count = finalText.utf8.count
         if let finalReasoning = finalReasoning {
             targetReasoning = finalReasoning
+            displayedReasoningUTF8Count = finalReasoning.utf8.count
         }
         isStreamComplete = true
-        commitDisplayed(text: finalText, reasoning: finalReasoning)
+        commitDisplayed(text: finalText, reasoning: finalReasoning, streamingReasoning: false)
     }
 
     func reset() {
         stopDrainTimer()
         targetText = ""
         targetReasoning = ""
+        displayedTextUTF8Count = 0
+        displayedReasoningUTF8Count = 0
         isStreamComplete = false
-        isDisplayPaused = false
 
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) {
-            isScrollInteracting = false
             activeMessageId = nil
             displayedText = ""
             displayedReasoning = ""
+            isStreamingReasoning = false
         }
     }
 }
@@ -277,6 +297,14 @@ class AgentCoordinator: ObservableObject {
 
     static func coordinator(for conversationId: String) -> AgentCoordinator {
         activeCoordinators[conversationId] ?? AgentCoordinator()
+    }
+
+    private static func readableToolName(_ rawName: String) -> String {
+        let parts = rawName.split(separator: "_", maxSplits: 1, omittingEmptySubsequences: false)
+        if parts.count == 2, parts[0].count == 6, parts[0].allSatisfy({ $0.isHexDigit }) {
+            return String(parts[1])
+        }
+        return rawName
     }
 
     private func publishActivity(_ label: String?) {
@@ -379,7 +407,9 @@ class AgentCoordinator: ObservableObject {
             turnPrompt: currentTurnPrompt
         )
 
-        withAnimation(.spring(response: 0.26, dampingFraction: 0.86)) {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
             if let convId = convId, !idsToDelete.isEmpty {
                 DataStorage.shared.deleteMessageTurn(conversationId: convId, messageIds: Array(idsToDelete))
             }
@@ -544,9 +574,7 @@ class AgentCoordinator: ObservableObject {
 
             conversation.messages.append(placeholderMsg)
             let msgIndex = conversation.messages.count - 1
-            DataStorage.shared.beginConversationUpdateBatch()
             DataStorage.shared.updateConversation(conversation, persistImmediately: false)
-            DataStorage.shared.endConversationUpdateBatch()
 
             do {
                 let (content, reasoning, toolCalls) = try await OpenAIService.shared.streamChatCompletion(
@@ -586,9 +614,7 @@ class AgentCoordinator: ObservableObject {
 
                 conversation.messages[msgIndex].content = finalText
                 conversation.messages[msgIndex].reasoningContent = reasoning
-                DataStorage.shared.beginConversationUpdateBatch()
                 DataStorage.shared.updateConversation(conversation, persistImmediately: false)
-                DataStorage.shared.endConversationUpdateBatch()
 
                 if let calls = toolCalls, !calls.isEmpty {
                     let requestAssistantMessage = ChatMessage(
@@ -605,6 +631,7 @@ class AgentCoordinator: ObservableObject {
                     var requestResultsByCallId: [String: ChatMessage] = [:]
 
                     if let discoveryCall = discoveryCalls.first {
+                        statusText = "检索相关工具中"
                         discoveryAttempts = min(
                             MCPToolDiscovery.maximumSearchRounds,
                             discoveryAttempts + discoveryCalls.count
@@ -638,9 +665,7 @@ class AgentCoordinator: ObservableObject {
                     }
                     conversation.messages[msgIndex].toolCalls = executingCalls.isEmpty ? nil : executingCalls
                     if !executingCalls.isEmpty {
-                        DataStorage.shared.beginConversationUpdateBatch()
                         DataStorage.shared.updateConversation(conversation, persistImmediately: false)
-                        DataStorage.shared.endConversationUpdateBatch()
                     }
 
                     for i in executingCalls.indices {
@@ -648,7 +673,7 @@ class AgentCoordinator: ObservableObject {
                             return
                         }
                         let call = executingCalls[i]
-                        statusText = "调用工具中"
+                        statusText = "调用工具: \(Self.readableToolName(call.name))"
 
                         var toolOutput = ""
                         if previouslyExposedToolNames.contains(call.name),
@@ -735,9 +760,7 @@ class AgentCoordinator: ObservableObject {
                         currentRunGeneratedMessageIds.insert(toolMsg.id)
                         conversation.messages.append(toolMsg)
                         requestResultsByCallId[call.id] = toolMsg
-                        DataStorage.shared.beginConversationUpdateBatch()
                         DataStorage.shared.updateConversation(conversation, persistImmediately: false)
-                        DataStorage.shared.endConversationUpdateBatch()
                     }
 
                     requestMessages.append(requestAssistantMessage)
@@ -754,14 +777,12 @@ class AgentCoordinator: ObservableObject {
                         conversation.messages.remove(at: msgIndex)
                         currentRunGeneratedMessageIds.remove(placeholderMsg.id)
                     }
-                    DataStorage.shared.beginConversationUpdateBatch()
-                    DataStorage.shared.updateConversation(conversation, persistImmediately: false)
-                    DataStorage.shared.endConversationUpdateBatch()
-                    DataStorage.shared.saveConversations()
+                    DataStorage.shared.updateConversation(conversation, persistImmediately: true)
                     statusText = "思考中"
                 } else {
                     if finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && stepIndex > 1 {
                         statusText = "生成总结中"
+                        streamingState.prepareForContinuation()
                         var recoveryMessages = contextMessages
                         recoveryMessages.append(
                             ChatMessage(
@@ -817,10 +838,14 @@ class AgentCoordinator: ObservableObject {
         }
 
         if !isCancelledByUser && !Task.isCancelled {
-            streamingState.reset()
-            isGenerating = false
-            thinkingStartTime = nil
-            statusText = ""
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                isGenerating = false
+                streamingState.reset()
+                thinkingStartTime = nil
+                statusText = ""
+            }
             currentRunGeneratedMessageIds.removeAll()
             releaseAfterGeneration(activeConversationId)
             activeConversationId = nil

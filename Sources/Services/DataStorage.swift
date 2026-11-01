@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import Security
+import UIKit
 
 class DataStorage: ObservableObject {
     static let shared = DataStorage()
@@ -55,20 +56,15 @@ class DataStorage: ObservableObject {
     @Published var servers: [MCPServer] {
         didSet { saveServers() }
     }
-    @Published var conversations: [Conversation] = [] {
-        didSet {
-            scheduleConversationPublication()
-        }
-    }
-
-    private var isBatchingConversationUpdates = false
-    private var pendingConversationPublication: DispatchWorkItem?
+    @Published var conversations: [Conversation] = []
 
     private let settingsKey = "OpenMCP_OpenAISettings"
     private let serversKey = "OpenMCP_MCPServers"
     private let conversationsKey = "OpenMCP_Conversations"
     private let persistenceQueue = DispatchQueue(label: "OpenMCP.DataStorage.persistence", qos: .utility)
     private var pendingServersSave: DispatchWorkItem?
+    private var pendingConversationsSave: DispatchWorkItem?
+    private var lifecycleObservers: [NSObjectProtocol] = []
 
     private init() {
         let loadedSettings: OpenAISettings
@@ -126,6 +122,29 @@ class DataStorage: ObservableObject {
                 )
             ]
         }
+
+        let center = NotificationCenter.default
+        let resignObserver = center.addObserver(
+            forName: UIApplication.willResignActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.flushPendingSavesSynchronously()
+        }
+        let terminateObserver = center.addObserver(
+            forName: UIApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.flushPendingSavesSynchronously()
+        }
+        lifecycleObservers = [resignObserver, terminateObserver]
+    }
+
+    deinit {
+        for observer in lifecycleObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
     }
 
     func saveSettings() {
@@ -140,11 +159,14 @@ class DataStorage: ObservableObject {
         pendingServersSave?.cancel()
         let snapshot = servers
         let key = serversKey
-        let item = DispatchWorkItem {
+        let item = DispatchWorkItem { [weak self] in
             var persistedServers = snapshot
             DataStorage.saveServerCredentials(&persistedServers)
             if let data = try? JSONEncoder().encode(persistedServers) {
                 UserDefaults.standard.set(data, forKey: key)
+            }
+            DispatchQueue.main.async {
+                self?.pendingServersSave = nil
             }
         }
         pendingServersSave = item
@@ -201,35 +223,51 @@ class DataStorage: ObservableObject {
     }
 
     func saveConversations() {
-        if let data = try? JSONEncoder().encode(conversations) {
-            UserDefaults.standard.set(data, forKey: conversationsKey)
-        }
-    }
-
-    private func scheduleConversationPublication() {
-        guard !isBatchingConversationUpdates else { return }
-        pendingConversationPublication?.cancel()
+        pendingConversationsSave?.cancel()
+        let snapshot = conversations
+        let key = conversationsKey
         let item = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            self.objectWillChange.send()
+            if let data = try? JSONEncoder().encode(snapshot) {
+                UserDefaults.standard.set(data, forKey: key)
+            }
+            DispatchQueue.main.async {
+                self?.pendingConversationsSave = nil
+            }
         }
-        pendingConversationPublication = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08, execute: item)
+        pendingConversationsSave = item
+        persistenceQueue.asyncAfter(deadline: .now() + 0.2, execute: item)
     }
 
-    func beginConversationUpdateBatch() {
-        isBatchingConversationUpdates = true
-        pendingConversationPublication?.cancel()
-        pendingConversationPublication = nil
+    private func flushPendingSavesSynchronously() {
+        if pendingConversationsSave != nil {
+            pendingConversationsSave?.cancel()
+            pendingConversationsSave = nil
+            let snapshot = conversations
+            let key = conversationsKey
+            persistenceQueue.sync {
+                if let data = try? JSONEncoder().encode(snapshot) {
+                    UserDefaults.standard.set(data, forKey: key)
+                }
+            }
+        }
+        if pendingServersSave != nil {
+            pendingServersSave?.cancel()
+            pendingServersSave = nil
+            let snapshot = servers
+            let key = serversKey
+            persistenceQueue.sync {
+                var persistedServers = snapshot
+                DataStorage.saveServerCredentials(&persistedServers)
+                if let data = try? JSONEncoder().encode(persistedServers) {
+                    UserDefaults.standard.set(data, forKey: key)
+                }
+            }
+        }
     }
 
-    func endConversationUpdateBatch() {
-        guard isBatchingConversationUpdates else { return }
-        isBatchingConversationUpdates = false
-        pendingConversationPublication?.cancel()
-        pendingConversationPublication = nil
-        objectWillChange.send()
-    }
+    func beginConversationUpdateBatch() {}
+
+    func endConversationUpdateBatch() {}
 
     func updateConversation(_ conv: Conversation, persistImmediately: Bool = true) {
         if let idx = conversations.firstIndex(where: { $0.id == conv.id }) {
