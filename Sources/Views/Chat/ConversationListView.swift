@@ -37,6 +37,27 @@ struct ConversationListView: View {
         }
     }
 
+    private func resolveDisplayModelName(for conv: Conversation) -> String {
+        if let m = conv.selectedModelName?.trimmingCharacters(in: .whitespacesAndNewlines), !m.isEmpty {
+            if let pid = conv.selectedProfileId,
+               let profile = storage.settings.providerProfiles.first(where: { $0.id == pid }) {
+                if profile.enabledModels.isEmpty || profile.enabledModels.contains(m) || profile.availableModels.contains(m) {
+                    return m
+                }
+                if let first = profile.enabledModels.first {
+                    return first
+                }
+            }
+            return m
+        }
+        if let pid = conv.selectedProfileId,
+           let profile = storage.settings.providerProfiles.first(where: { $0.id == pid }),
+           let first = profile.enabledModels.first {
+            return first
+        }
+        return storage.settings.modelName
+    }
+
     var body: some View {
         NavigationStack(path: $navigationPath) {
             ZStack {
@@ -65,21 +86,45 @@ struct ConversationListView: View {
                             .listRowBackground(Color.clear)
                     } else {
                         ForEach(filteredConversations) { conv in
-                            conversationCard(for: conv)
-                                .swipeActions(edge: .leading, allowsFullSwipe: false) {
-                                    Button {
-                                        withTransaction(Transaction(animation: nil)) {
-                                            deletingConversation = conv
-                                        }
-                                    } label: {
-                                        Label("删除", systemImage: "trash.fill")
+                            ConversationRowCardView(
+                                conv: conv,
+                                modelName: resolveDisplayModelName(for: conv),
+                                activityLabel: activity.labels[conv.id],
+                                theme: theme,
+                                onOpen: {
+                                    if isSearchFocused {
+                                        isSearchFocused = false
                                     }
-                                    .tint(theme.isDark ? Color(red: 0.78, green: 0.24, blue: 0.29) : Color(red: 0.76, green: 0.12, blue: 0.16))
-                                    .accessibilityLabel("删除对话")
+                                    navigationPath.append(conv.id)
+                                },
+                                onRename: {
+                                    renameText = conv.title
+                                    renamingConversation = conv
+                                },
+                                onClear: {
+                                    clearingConversation = conv
+                                },
+                                onDelete: {
+                                    withTransaction(Transaction(animation: nil)) {
+                                        deletingConversation = conv
+                                    }
                                 }
-                                .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
-                                .listRowSeparator(.hidden)
-                                .listRowBackground(Color.clear)
+                            )
+                            .equatable()
+                            .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                                Button {
+                                    withTransaction(Transaction(animation: nil)) {
+                                        deletingConversation = conv
+                                    }
+                                } label: {
+                                    Label("删除", systemImage: "trash.fill")
+                                }
+                                .tint(theme.isDark ? Color(red: 0.78, green: 0.24, blue: 0.29) : Color(red: 0.76, green: 0.12, blue: 0.16))
+                                .accessibilityLabel("删除对话")
+                            }
+                            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
                         }
                     }
                 }
@@ -136,11 +181,10 @@ struct ConversationListView: View {
                     renamingConversation = nil
                 }
                 Button("确定") {
-                    if var target = renamingConversation {
+                    if let target = renamingConversation {
                         let trimmed = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
                         if !trimmed.isEmpty {
-                            target.title = trimmed
-                            storage.updateConversation(target)
+                            storage.renameConversation(id: target.id, newTitle: trimmed)
                         }
                     }
                     renamingConversation = nil
@@ -309,38 +353,83 @@ struct ConversationListView: View {
         )
     }
 
-    private func conversationCard(for conv: Conversation) -> some View {
-        let lastMessage = conv.messages.last(where: { $0.role != .tool && (!$0.content.isEmpty || ($0.attachments?.isEmpty == false)) })
-        let hasTools = conv.messages.contains(where: { ($0.toolCalls?.isEmpty == false) })
-        let convModel = storage.settings.resolvedSettings(for: conv).modelName
-        let previewText: String? = {
-            guard let msg = lastMessage else { return nil }
-            let trimmed = msg.content.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty { return trimmed }
-            if let firstAtt = msg.attachments?.first {
-                if let snippet = firstAtt.textContent?.trimmingCharacters(in: .whitespacesAndNewlines), !snippet.isEmpty {
-                    return "[\(firstAtt.fileName)] \(snippet)"
-                }
-                return "[附件] \(firstAtt.fileName)"
-            }
-            return nil
-        }()
+    private func createAndOpenConversation() {
+        isSearchFocused = false
+        let newConv = storage.addConversation()
+        navigationPath.append(newConv.id)
+    }
+}
 
-        return ZStack(alignment: .topTrailing) {
-            Button(action: {
-                isSearchFocused = false
-                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-                navigationPath.append(conv.id)
-            }) {
+private struct ConversationRowCardView: View, Equatable {
+    let conv: Conversation
+    let modelName: String
+    let activityLabel: String?
+    let theme: AppThemePalette
+    let onOpen: () -> Void
+    let onRename: () -> Void
+    let onClear: () -> Void
+    let onDelete: () -> Void
+
+    static func == (lhs: ConversationRowCardView, rhs: ConversationRowCardView) -> Bool {
+        lhs.conv.id == rhs.conv.id &&
+        lhs.conv.title == rhs.conv.title &&
+        lhs.conv.updatedAt == rhs.conv.updatedAt &&
+        lhs.conv.selectedProfileId == rhs.conv.selectedProfileId &&
+        lhs.conv.selectedModelName == rhs.conv.selectedModelName &&
+        lhs.conv.messages.count == rhs.conv.messages.count &&
+        lhs.conv.messages.last?.id == rhs.conv.messages.last?.id &&
+        lhs.conv.messages.last?.content.utf8.count == rhs.conv.messages.last?.content.utf8.count &&
+        lhs.modelName == rhs.modelName &&
+        lhs.activityLabel == rhs.activityLabel &&
+        lhs.theme == rhs.theme
+    }
+
+    private var rowSummary: (nonToolCount: Int, hasTools: Bool, previewText: String?) {
+        var nonToolCount = 0
+        var hasTools = false
+        for m in conv.messages {
+            if m.role != .tool {
+                nonToolCount += 1
+            }
+            if !hasTools, let tc = m.toolCalls, !tc.isEmpty {
+                hasTools = true
+            }
+        }
+
+        var preview: String? = nil
+        for m in conv.messages.reversed() where m.role != .tool {
+            let trimmed = m.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                preview = trimmed.count > 120 ? String(trimmed.prefix(120)) : trimmed
+                break
+            }
+            if let firstAtt = m.attachments?.first {
+                if let snippet = firstAtt.textContent?.trimmingCharacters(in: .whitespacesAndNewlines), !snippet.isEmpty {
+                    let shortSnippet = snippet.count > 90 ? String(snippet.prefix(90)) : snippet
+                    preview = "[\(firstAtt.fileName)] \(shortSnippet)"
+                } else {
+                    preview = "[附件] \(firstAtt.fileName)"
+                }
+                break
+            }
+        }
+        return (nonToolCount, hasTools, preview)
+    }
+
+    var body: some View {
+        let info = rowSummary
+
+        ZStack(alignment: .topTrailing) {
+            Button(action: onOpen) {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(alignment: .center, spacing: 10) {
                         ZStack {
                             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .fill(hasTools ? theme.accent.opacity(0.14) : theme.elevatedBackground)
+                                .fill(info.hasTools ? theme.accent.opacity(0.14) : theme.elevatedBackground)
                                 .frame(width: 34, height: 34)
-                            Image(systemName: hasTools ? "wrench.and.screwdriver.fill" : "text.bubble.fill")
+                            Image(systemName: info.hasTools ? "wrench.and.screwdriver.fill" : "text.bubble.fill")
                                 .font(.system(size: 14, weight: .semibold))
-                                .foregroundColor(hasTools ? theme.accent : theme.secondaryText)
+                                .foregroundColor(info.hasTools ? theme.accent : theme.secondaryText)
                         }
 
                         VStack(alignment: .leading, spacing: 2) {
@@ -354,7 +443,7 @@ struct ConversationListView: View {
                                     .font(.system(size: 11))
                                     .foregroundColor(theme.mutedText)
 
-                                if let label = activity.labels[conv.id] {
+                                if let label = activityLabel {
                                     HStack(spacing: 4) {
                                         ConversationActivityIndicator(color: theme.accent)
                                         Text(label)
@@ -375,7 +464,7 @@ struct ConversationListView: View {
                             .frame(width: 34, height: 32)
                     }
 
-                    if let preview = previewText {
+                    if let preview = info.previewText {
                         Text(preview)
                             .font(.system(size: 13))
                             .foregroundColor(theme.secondaryText)
@@ -392,7 +481,7 @@ struct ConversationListView: View {
                         HStack(spacing: 4) {
                             Image(systemName: "atom")
                                 .font(.system(size: 10, weight: .semibold))
-                            Text(convModel)
+                            Text(modelName)
                                 .lineLimit(1)
                         }
                         .font(.system(size: 11, weight: .medium))
@@ -402,7 +491,7 @@ struct ConversationListView: View {
                         .background(theme.accent.opacity(0.12))
                         .clipShape(Capsule())
 
-                        Text("\(conv.messages.filter { $0.role != .tool }.count) 条对话")
+                        Text("\(info.nonToolCount) 条对话")
                             .font(.system(size: 11, weight: .medium))
                             .foregroundColor(theme.secondaryText)
                             .padding(.horizontal, 8)
@@ -410,7 +499,7 @@ struct ConversationListView: View {
                             .background(theme.elevatedBackground)
                             .clipShape(Capsule())
 
-                        if hasTools {
+                        if info.hasTools {
                             Text("含工具调用")
                                 .font(.system(size: 11, weight: .medium))
                                 .foregroundColor(theme.accent)
@@ -439,24 +528,15 @@ struct ConversationListView: View {
             .buttonStyle(.plain)
 
             Menu {
-                Button(action: {
-                    renameText = conv.title
-                    renamingConversation = conv
-                }) {
+                Button(action: onRename) {
                     Label("重命名", systemImage: "pencil")
                 }
 
-                Button(action: {
-                    clearingConversation = conv
-                }) {
+                Button(action: onClear) {
                     Label("清空消息", systemImage: "eraser")
                 }
 
-                Button(role: .destructive, action: {
-                    withTransaction(Transaction(animation: nil)) {
-                        deletingConversation = conv
-                    }
-                }) {
+                Button(role: .destructive, action: onDelete) {
                     Label("删除对话", systemImage: "trash")
                 }
             } label: {
@@ -471,13 +551,6 @@ struct ConversationListView: View {
             .padding(.top, 14)
             .padding(.trailing, 14)
         }
-    }
-
-    private func createAndOpenConversation() {
-        isSearchFocused = false
-        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-        let newConv = storage.addConversation()
-        navigationPath.append(newConv.id)
     }
 }
 
@@ -500,85 +573,5 @@ private struct ConversationActivityIndicator: View {
             .onDisappear {
                 isVisible = false
             }
-    }
-}
-
-private struct SwipeableConversationRow<Content: View>: View {
-    let conversationId: String
-    @Binding var revealedConversationId: String?
-    let theme: AppThemePalette
-    let onDelete: () -> Void
-    let content: Content
-    @GestureState private var dragTranslation: CGFloat = 0
-
-    private let actionWidth: CGFloat = 68
-
-    init(
-        conversationId: String,
-        revealedConversationId: Binding<String?>,
-        theme: AppThemePalette,
-        onDelete: @escaping () -> Void,
-        @ViewBuilder content: () -> Content
-    ) {
-        self.conversationId = conversationId
-        self._revealedConversationId = revealedConversationId
-        self.theme = theme
-        self.onDelete = onDelete
-        self.content = content()
-    }
-
-    private var isRevealed: Bool {
-        revealedConversationId == conversationId
-    }
-
-    private var horizontalOffset: CGFloat {
-        min(actionWidth, max(0, (isRevealed ? actionWidth : 0) + dragTranslation))
-    }
-
-    private var deleteColor: Color {
-        theme.isDark
-            ? Color(red: 0.78, green: 0.24, blue: 0.29)
-            : Color(red: 0.76, green: 0.12, blue: 0.16)
-    }
-
-    var body: some View {
-        ZStack(alignment: .leading) {
-            Button(action: onDelete) {
-                Label("删除", systemImage: "trash.fill")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(.white)
-                    .frame(width: actionWidth)
-                    .frame(maxHeight: .infinity)
-                    .background(deleteColor)
-                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            }
-            .buttonStyle(.plain)
-            .opacity(horizontalOffset > 1 ? 1 : 0)
-            .allowsHitTesting(horizontalOffset > 1)
-            .accessibilityLabel("删除对话")
-
-            content
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .offset(x: horizontalOffset)
-                .contentShape(Rectangle())
-                .simultaneousGesture(
-                    DragGesture(minimumDistance: 12)
-                        .updating($dragTranslation) { value, state, _ in
-                            guard abs(value.translation.width) > abs(value.translation.height) else { return }
-                            state = value.translation.width
-                        }
-                        .onEnded { value in
-                            let horizontal = value.translation.width
-                            guard abs(horizontal) > abs(value.translation.height) else { return }
-                            let shouldReveal = isRevealed
-                                ? horizontal > -actionWidth * 0.45
-                                : horizontal > actionWidth * 0.45
-                            withAnimation(.easeOut(duration: 0.18)) {
-                                revealedConversationId = shouldReveal ? conversationId : nil
-                            }
-                        }
-                )
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

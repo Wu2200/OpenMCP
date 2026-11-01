@@ -46,39 +46,57 @@ final class ChatTurnProjectionStore: ObservableObject {
     @Published private(set) var selectedModelName: String?
     @Published private(set) var rawMessageCount: Int
 
+    /// 零堆内存分配的 64 位轻量级会话指纹，不拷贝任何长文本、图片或工具返回结果
     private struct QuickStamp: Equatable {
-        struct MessageDigest: Equatable {
-            let id: String
-            let role: MessageRole
-            let contentBytes: Int
-            let contentTail: Substring
-            let reasoningBytes: Int
-            let attachmentCount: Int
-            let toolCalls: [ToolCallItem]
-        }
-
         let title: String
         let selectedProfileId: String?
         let selectedModelName: String?
-        let digests: [MessageDigest]
+        let messageCount: Int
+        let firstMessageId: String?
+        let lastMessageId: String?
+        let contentChecksum: UInt64
 
         init(_ conversation: Conversation) {
             self.title = conversation.title
             self.selectedProfileId = conversation.selectedProfileId
             self.selectedModelName = conversation.selectedModelName
-            self.digests = conversation.messages.map { msg in
-                MessageDigest(
-                    id: msg.id,
-                    role: msg.role,
-                    contentBytes: msg.content.utf8.count,
-                    contentTail: msg.content.suffix(24),
-                    reasoningBytes: msg.reasoningContent?.utf8.count ?? 0,
-                    attachmentCount: msg.attachments?.count ?? 0,
-                    toolCalls: msg.toolCalls ?? []
-                )
+            self.messageCount = conversation.messages.count
+            self.firstMessageId = conversation.messages.first?.id
+            self.lastMessageId = conversation.messages.last?.id
+
+            var hash: UInt64 = 14695981039346656037
+            func mix(_ value: UInt64) {
+                hash ^= value
+                hash &*= 1099511628211
             }
+
+            for msg in conversation.messages {
+                mix(UInt64(bitPattern: Int64(msg.id.hashValue)))
+                mix(UInt64(msg.content.utf8.count))
+                if let lastByte = msg.content.utf8.last {
+                    mix(UInt64(lastByte))
+                }
+                mix(UInt64(msg.reasoningContent?.utf8.count ?? 0))
+                mix(UInt64(msg.attachments?.count ?? 0))
+                if let calls = msg.toolCalls {
+                    mix(UInt64(calls.count))
+                    for c in calls {
+                        mix(c.isExecuting ? 1 : 0)
+                        mix(UInt64(c.result?.utf8.count ?? 0))
+                        mix(c.error != nil ? 2 : 0)
+                    }
+                }
+            }
+            self.contentChecksum = hash
         }
     }
+
+    private struct CachedEntry {
+        let stamp: QuickStamp
+        let turns: [MessageDisplayTurn]
+    }
+
+    private static var projectionCache: [String: CachedEntry] = [:]
 
     private let conversationId: String
     private var lastStamp: QuickStamp?
@@ -91,13 +109,24 @@ final class ChatTurnProjectionStore: ObservableObject {
         self.selectedProfileId = initialConv?.selectedProfileId
         self.selectedModelName = initialConv?.selectedModelName
         self.rawMessageCount = initialConv?.messages.count ?? 0
-        self.turns = Self.project(initialConv?.messages ?? [])
+
         if let initialConv {
-            self.lastStamp = QuickStamp(initialConv)
+            let stamp = QuickStamp(initialConv)
+            self.lastStamp = stamp
+            if let cached = Self.projectionCache[conversationId], cached.stamp == stamp {
+                self.turns = cached.turns
+            } else {
+                let projected = Self.project(initialConv.messages)
+                self.turns = projected
+                Self.storeCache(conversationId: conversationId, stamp: stamp, turns: projected)
+            }
+        } else {
+            self.turns = []
         }
 
-        // 在主线程同步处理会话更新，消除 .receive(on: DispatchQueue.main) 推迟一帧导致的流式结束瞬间气泡闪烁空窗
+        // 使用 dropFirst() 避免订阅瞬间重复执行初始化已完成的全量投影计算
         conversationsCancellable = DataStorage.shared.$conversations
+            .dropFirst()
             .sink { [weak self] conversations in
                 let applyUpdate = { [weak self] in
                     guard let self else { return }
@@ -111,8 +140,16 @@ final class ChatTurnProjectionStore: ObservableObject {
             }
     }
 
+    private static func storeCache(conversationId: String, stamp: QuickStamp, turns: [MessageDisplayTurn]) {
+        if projectionCache.count > 24 && projectionCache[conversationId] == nil {
+            projectionCache.removeAll(keepingCapacity: true)
+        }
+        projectionCache[conversationId] = CachedEntry(stamp: stamp, turns: turns)
+    }
+
     private func ingest(_ conversations: [Conversation]) {
         guard let conv = conversations.first(where: { $0.id == conversationId }) else {
+            Self.projectionCache.removeValue(forKey: conversationId)
             if !turns.isEmpty || rawMessageCount != 0 {
                 lastStamp = nil
                 rawMessageCount = 0
@@ -124,6 +161,14 @@ final class ChatTurnProjectionStore: ObservableObject {
         let stamp = QuickStamp(conv)
         guard stamp != lastStamp else { return }
         lastStamp = stamp
+
+        let projectedTurns: [MessageDisplayTurn]
+        if let cached = Self.projectionCache[conversationId], cached.stamp == stamp {
+            projectedTurns = cached.turns
+        } else {
+            projectedTurns = Self.project(conv.messages)
+            Self.storeCache(conversationId: conversationId, stamp: stamp, turns: projectedTurns)
+        }
 
         var transaction = Transaction()
         transaction.disablesAnimations = true
@@ -140,7 +185,6 @@ final class ChatTurnProjectionStore: ObservableObject {
             if rawMessageCount != conv.messages.count {
                 rawMessageCount = conv.messages.count
             }
-            let projectedTurns = Self.project(conv.messages)
             if turns != projectedTurns {
                 turns = projectedTurns
             }

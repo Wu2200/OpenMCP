@@ -66,33 +66,41 @@ final class MarkdownRenderCache {
     private var lastStreamingFullBlocks: [MarkdownBlock] = []
 
     final class BlockBox {
+        let source: String
         let blocks: [MarkdownBlock]
-        init(_ blocks: [MarkdownBlock]) { self.blocks = blocks }
+        init(source: String, blocks: [MarkdownBlock]) {
+            self.source = source
+            self.blocks = blocks
+        }
     }
 
     final class AttrBox {
         let attr: AttributedString
-        init(_ attr: AttributedString) { self.attr = attr }
+        let urls: [URL]
+        init(attr: AttributedString, urls: [URL]) {
+            self.attr = attr
+            self.urls = urls
+        }
     }
 
     private init() {
-        blockCache.countLimit = 100
-        attrCache.countLimit = 500
+        blockCache.countLimit = 140
+        attrCache.countLimit = 800
     }
 
     func blocks(for content: String, isStreaming: Bool = false) -> [MarkdownBlock] {
         if isStreaming {
             return streamingBlocks(for: content)
         }
-        if content.utf8.count > 24_000 {
+        if content.utf8.count > 32_000 {
             return MarkdownParser.parse(content)
         }
-        let key = content as NSString
-        if let cached = blockCache.object(forKey: key) {
+        let key = "\(content.utf8.count)|\(content.hashValue)" as NSString
+        if let cached = blockCache.object(forKey: key), cached.source == content {
             return cached.blocks
         }
         let parsed = MarkdownParser.parse(content)
-        blockCache.setObject(BlockBox(parsed), forKey: key)
+        blockCache.setObject(BlockBox(source: content, blocks: parsed), forKey: key)
         return parsed
     }
 
@@ -142,16 +150,14 @@ final class MarkdownRenderCache {
         return fullResult.blocks
     }
 
-    func attributedString(
-        for text: String,
+    func richInline(
+        for normalizedInput: String,
         fontSize: CGFloat,
-        theme: AppThemePalette,
-        isStreaming: Bool = false
-    ) -> AttributedString {
-        let normalizedInput = isStreaming ? MarkdownParser.stabilizeStreamingInline(text) : text
+        theme: AppThemePalette
+    ) -> (attr: AttributedString, urls: [URL]) {
         let cacheKey = "\(theme.backgroundHex)-\(theme.accentHex)-\(Int(fontSize * 10))-\(normalizedInput)" as NSString
         if normalizedInput.utf8.count < 4000, let cached = attrCache.object(forKey: cacheKey) {
-            return cached.attr
+            return (cached.attr, cached.urls)
         }
 
         let prepared = MarkdownParser.enrichAutoLinksAndSpaces(normalizedInput)
@@ -160,15 +166,17 @@ final class MarkdownRenderCache {
             options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         ) else {
             let fallback = AttributedString(normalizedInput)
-            if !isStreaming, normalizedInput.utf8.count < 4000 {
-                attrCache.setObject(AttrBox(fallback), forKey: cacheKey)
+            if normalizedInput.utf8.count < 4000 {
+                attrCache.setObject(AttrBox(attr: fallback, urls: []), forKey: cacheKey)
             }
-            return fallback
+            return (fallback, [])
         }
 
         let codeBg = UIColor(theme.elevatedBackground)
         let codeFg = UIColor(theme.primaryText)
         let linkFg = UIColor(theme.accent)
+        var seenURLs = Set<String>()
+        var extractedURLs: [URL] = []
 
         for run in attr.runs {
             let range = run.range
@@ -177,29 +185,37 @@ final class MarkdownRenderCache {
                 attr[range].backgroundColor = codeBg
                 attr[range].foregroundColor = codeFg
             }
-            if run.link != nil {
+            if let url = run.link {
                 attr[range].foregroundColor = linkFg
                 attr[range].underlineStyle = .single
+                if seenURLs.insert(url.absoluteString).inserted {
+                    extractedURLs.append(url)
+                }
             }
         }
 
         if normalizedInput.utf8.count < 4000 {
-            attrCache.setObject(AttrBox(attr), forKey: cacheKey)
+            attrCache.setObject(AttrBox(attr: attr, urls: extractedURLs), forKey: cacheKey)
         }
-        return attr
+        return (attr, extractedURLs)
+    }
+
+    func attributedString(
+        for text: String,
+        fontSize: CGFloat,
+        theme: AppThemePalette,
+        isStreaming: Bool = false
+    ) -> AttributedString {
+        let normalizedInput = isStreaming ? MarkdownParser.stabilizeStreamingInline(text) : text
+        if !MarkdownParser.mayNeedRichInlineParsing(normalizedInput) {
+            return AttributedString(normalizedInput)
+        }
+        return richInline(for: normalizedInput, fontSize: fontSize, theme: theme).attr
     }
 }
 
 private struct MarkdownLinkCopyContextMenu: ViewModifier {
     let urls: [URL]
-
-    static func urls(in value: AttributedString) -> [URL] {
-        var seen = Set<String>()
-        return value.runs.compactMap { run in
-            guard let url = run.link, seen.insert(url.absoluteString).inserted else { return nil }
-            return url
-        }
-    }
 
     func body(content: Content) -> some View {
         if urls.isEmpty {
@@ -396,19 +412,28 @@ struct MarkdownInlineText: View, Equatable {
     }
 
     var body: some View {
-        let attr = MarkdownRenderCache.shared.attributedString(
-            for: text,
-            fontSize: fontSize,
-            theme: theme,
-            isStreaming: isStreaming
-        )
+        let normalizedInput = isStreaming ? MarkdownParser.stabilizeStreamingInline(text) : text
         let baseColor: Color = isSecondary ? theme.secondaryText : theme.primaryText
-        Text(attr)
-            .font(.system(size: fontSize, weight: weight))
-            .foregroundColor(baseColor)
-            .tint(theme.accent)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .modifier(MarkdownLinkCopyContextMenu(urls: MarkdownLinkCopyContextMenu.urls(in: attr)))
+
+        if !MarkdownParser.mayNeedRichInlineParsing(normalizedInput) {
+            // 纯文本快速通道：跳过 CommonMark 解析器与 AttributedString 转换，进入长对话速度提升数倍
+            Text(normalizedInput)
+                .font(.system(size: fontSize, weight: weight))
+                .foregroundColor(baseColor)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            let rich = MarkdownRenderCache.shared.richInline(
+                for: normalizedInput,
+                fontSize: fontSize,
+                theme: theme
+            )
+            Text(rich.attr)
+                .font(.system(size: fontSize, weight: weight))
+                .foregroundColor(baseColor)
+                .tint(theme.accent)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .modifier(MarkdownLinkCopyContextMenu(urls: rich.urls))
+        }
     }
 }
 
@@ -521,15 +546,24 @@ struct MarkdownTableView: View {
     @ViewBuilder
     private func cellContent(text: String, isHeader: Bool, alignment: HorizontalAlignment) -> some View {
         let fontSize: CGFloat = isHeader ? 13 : 13.5
-        let attributedText = MarkdownRenderCache.shared.attributedString(for: text, fontSize: fontSize, theme: theme)
-        Text(attributedText)
-            .font(.system(size: fontSize, weight: isHeader ? .semibold : .regular))
-            .foregroundColor(theme.primaryText)
-            .tint(theme.accent)
-            .multilineTextAlignment(textAlignment(for: alignment))
-            .lineSpacing(2.5)
-            .fixedSize(horizontal: false, vertical: true)
-            .modifier(MarkdownLinkCopyContextMenu(urls: MarkdownLinkCopyContextMenu.urls(in: attributedText)))
+        if !MarkdownParser.mayNeedRichInlineParsing(text) {
+            Text(text)
+                .font(.system(size: fontSize, weight: isHeader ? .semibold : .regular))
+                .foregroundColor(theme.primaryText)
+                .multilineTextAlignment(textAlignment(for: alignment))
+                .lineSpacing(2.5)
+                .fixedSize(horizontal: false, vertical: true)
+        } else {
+            let rich = MarkdownRenderCache.shared.richInline(for: text, fontSize: fontSize, theme: theme)
+            Text(rich.attr)
+                .font(.system(size: fontSize, weight: isHeader ? .semibold : .regular))
+                .foregroundColor(theme.primaryText)
+                .tint(theme.accent)
+                .multilineTextAlignment(textAlignment(for: alignment))
+                .lineSpacing(2.5)
+                .fixedSize(horizontal: false, vertical: true)
+                .modifier(MarkdownLinkCopyContextMenu(urls: rich.urls))
+        }
     }
 
     private func frameAlignment(for align: HorizontalAlignment) -> Alignment {
@@ -555,6 +589,36 @@ enum MarkdownParser {
         let safePrefixUTF8Count: Int?
         let safeBlocks: [MarkdownBlock]
         let safeNextBlockId: Int
+    }
+
+    /// 零分配 UTF-8 扫描：判断字符串是否可能包含任何 Markdown 内联标记或缩进/自动链接
+    static func mayNeedRichInlineParsing(_ text: String) -> Bool {
+        let utf8 = text.utf8
+        guard let first = utf8.first else { return false }
+        if first == 0x20 || first == 0x09 {
+            return true
+        }
+        var prevWasNewline = false
+        var hasSlash = false
+        for byte in utf8 {
+            if prevWasNewline && (byte == 0x20 || byte == 0x09) {
+                return true
+            }
+            prevWasNewline = (byte == 0x0A)
+            switch byte {
+            case 0x2A, 0x5F, 0x60, 0x5B, 0x7E, 0x5C, 0x3C:
+                // * _ ` [ ~ \ <
+                return true
+            case 0x2F:
+                hasSlash = true
+            default:
+                break
+            }
+        }
+        if hasSlash && (text.contains("http://") || text.contains("https://") || text.contains("github.com/")) {
+            return true
+        }
+        return false
     }
 
     static func parse(_ raw: String) -> [MarkdownBlock] {
@@ -594,7 +658,6 @@ enum MarkdownParser {
         }
 
         func recordCheckpointIfHasRemaining(atLineIndex lineIdx: Int) {
-            // 仅当当前行之前至少已有闭合块，且后续仍有非空内容时，记录安全检查点
             guard !blocks.isEmpty, lineIdx < lines.count else { return }
             safePrefixUTF8Count = lineStartUTF8Offsets[lineIdx]
             safeBlocks = blocks
@@ -907,7 +970,6 @@ enum MarkdownParser {
             return lines.joined(separator: "\n")
         }
 
-        // 稳定流式末尾尚未闭合的 Markdown 链接 [label](url... 避免长 URL 突然撑高再塌缩
         if let linkSplit = lastLine.range(of: "](", options: .backwards) {
             let afterParen = lastLine[linkSplit.upperBound...]
             if !afterParen.contains(")") && !afterParen.contains(" ") {

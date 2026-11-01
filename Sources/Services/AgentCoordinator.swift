@@ -16,9 +16,12 @@ final class StreamingTurnState: ObservableObject {
     private var displayedTextUTF8Count: Int = 0
     private var displayedReasoningUTF8Count: Int = 0
     private var isStreamComplete: Bool = false
+    private var isUserScrolling: Bool = false
     private var drainTimer: Timer? = nil
+    private var currentTimerInterval: TimeInterval = 0
 
-    private static let tickInterval: TimeInterval = 0.032
+    private static let normalTickInterval: TimeInterval = 0.036
+    private static let scrollingTickInterval: TimeInterval = 0.085
 
     func begin(messageId: String) {
         stopDrainTimer()
@@ -38,8 +41,16 @@ final class StreamingTurnState: ObservableObject {
         }
     }
 
-    func setDisplayPaused(_ paused: Bool) {
-        // 不再在用户触摸滚动时冻结文本输出，避免松手瞬间大量积压文本一次性暴涨导致高度跳变
+    func setDisplayPaused(_ paused: Bool) {}
+
+    /// 手指拖动或惯性滑行时自适应降低 UI 文本刷新频率（不断流、松手不跳变），把主线程优先让给 UIScrollView 60/120fps 滑动
+    func setUserScrolling(_ scrolling: Bool) {
+        guard isUserScrolling != scrolling else { return }
+        isUserScrolling = scrolling
+        if drainTimer != nil {
+            stopDrainTimer()
+            ensureDrainTimer()
+        }
     }
 
     func pushPartialText(_ newText: String) {
@@ -69,8 +80,13 @@ final class StreamingTurnState: ObservableObject {
     }
 
     private func ensureDrainTimer() {
-        guard drainTimer == nil else { return }
-        let timer = Timer(timeInterval: Self.tickInterval, repeats: true) { [weak self] _ in
+        let desiredInterval = isUserScrolling ? Self.scrollingTickInterval : Self.normalTickInterval
+        if drainTimer != nil && abs(currentTimerInterval - desiredInterval) < 0.005 {
+            return
+        }
+        stopDrainTimer()
+        currentTimerInterval = desiredInterval
+        let timer = Timer(timeInterval: desiredInterval, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.tickDrain()
             }
@@ -82,6 +98,7 @@ final class StreamingTurnState: ObservableObject {
     private func stopDrainTimer() {
         drainTimer?.invalidate()
         drainTimer = nil
+        currentTimerInterval = 0
     }
 
     private func tickDrain() {
@@ -199,6 +216,7 @@ final class StreamingTurnState: ObservableObject {
         displayedTextUTF8Count = 0
         displayedReasoningUTF8Count = 0
         isStreamComplete = false
+        isUserScrolling = false
 
         var transaction = Transaction()
         transaction.disablesAnimations = true

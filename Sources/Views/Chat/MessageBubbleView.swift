@@ -22,7 +22,7 @@ struct ReasoningFoldCardView: View, Equatable {
     let theme: AppThemePalette
     var width: CGFloat? = nil
 
-    @State private var userExpandedOverride: Bool? = nil
+    @State private var isExpanded: Bool = false
     @State private var showingFullReasoningSheet: Bool = false
 
     static func == (lhs: ReasoningFoldCardView, rhs: ReasoningFoldCardView) -> Bool {
@@ -33,17 +33,10 @@ struct ReasoningFoldCardView: View, Equatable {
         lhs.width == rhs.width
     }
 
-    private var isShowingBody: Bool {
-        if let override = userExpandedOverride {
-            return override
-        }
-        return isStreamingReasoning
-    }
-
-    private var collapsedSummaryLine: String {
+    private var previewLine: String {
         let trimmed = reasoningText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "正在深度思考..." }
-        let suffixSlice = trimmed.suffix(200)
+        let suffixSlice = trimmed.suffix(220)
         let lines = suffixSlice
             .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespaces) }
@@ -51,26 +44,13 @@ struct ReasoningFoldCardView: View, Equatable {
         return lines.last ?? "正在深度思考..."
     }
 
-    private var streamingLivePreview: String {
-        let trimmed = reasoningText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return "正在梳理思路..." }
-        let tail = String(trimmed.suffix(420))
-        let lines = tail
-            .components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-        let recentLines = Array(lines.suffix(5))
-        return recentLines.isEmpty ? tail : recentLines.joined(separator: "\n")
-    }
-
     private static let inlineMaxCharacters = 3_000
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
-                let nextState = !isShowingBody
                 withAnimation(.easeInOut(duration: 0.16)) {
-                    userExpandedOverride = nextState
+                    isExpanded.toggle()
                 }
             } label: {
                 HStack(spacing: 7) {
@@ -91,8 +71,8 @@ struct ReasoningFoldCardView: View, Equatable {
                             .foregroundColor(theme.secondaryText)
                     }
 
-                    if !isShowingBody {
-                        Text(collapsedSummaryLine)
+                    if !isExpanded {
+                        Text(previewLine)
                             .font(.system(size: 11.5))
                             .foregroundColor(theme.mutedText)
                             .lineLimit(1)
@@ -101,80 +81,61 @@ struct ReasoningFoldCardView: View, Equatable {
 
                     Spacer(minLength: 4)
 
-                    Image(systemName: isShowingBody ? "chevron.up" : "chevron.down")
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
                         .font(.system(size: 10.5, weight: .semibold))
                         .foregroundColor(theme.mutedText)
                 }
                 .padding(.horizontal, 10)
-                .padding(.vertical, 7.5)
+                .padding(.vertical, 7)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
-            if isShowingBody {
+            if isExpanded {
                 Rectangle()
                     .fill(theme.border.opacity(0.75))
                     .frame(height: 1)
 
-                if isStreamingReasoning && userExpandedOverride != true {
-                    // 流式思考阶段展示紧凑的最近 5 行实时思路窗，无嵌套 ScrollView，外层滚动零手势抢夺
-                    Text(streamingLivePreview)
+                let trimmed = reasoningText.trimmingCharacters(in: .whitespacesAndNewlines)
+                let isTruncated = trimmed.count > Self.inlineMaxCharacters
+                let inlineText = isTruncated
+                    ? String(trimmed.prefix(Self.inlineMaxCharacters)) + "\n…"
+                    : trimmed
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(inlineText)
                         .font(.system(size: 12.5))
                         .foregroundColor(theme.secondaryText)
                         .lineSpacing(3)
-                        .lineLimit(5)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
-                } else {
-                    let trimmed = reasoningText.trimmingCharacters(in: .whitespacesAndNewlines)
-                    let isTruncated = trimmed.count > Self.inlineMaxCharacters
-                    let inlineText = isTruncated
-                        ? String(trimmed.prefix(Self.inlineMaxCharacters)) + "\n…"
-                        : trimmed
 
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(inlineText)
-                            .font(.system(size: 12.5))
-                            .foregroundColor(theme.secondaryText)
-                            .lineSpacing(3)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-
-                        if isTruncated {
-                            Button {
-                                showingFullReasoningSheet = true
-                            } label: {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "arrow.up.left.and.arrow.down.right")
-                                        .font(.system(size: 10, weight: .semibold))
-                                    Text("查看完整思考全文 (\(trimmed.count.formatted()) 字)")
-                                        .font(.system(size: 11.5, weight: .semibold))
-                                }
-                                .foregroundColor(theme.accent)
-                                .padding(.top, 2)
+                    if isTruncated {
+                        Button {
+                            showingFullReasoningSheet = true
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                                    .font(.system(size: 10, weight: .semibold))
+                                Text("查看完整思考全文 (\(trimmed.count.formatted()) 字)")
+                                    .font(.system(size: 11.5, weight: .semibold))
                             }
-                            .buttonStyle(.plain)
+                            .foregroundColor(theme.accent)
+                            .padding(.top, 2)
                         }
+                        .buttonStyle(.plain)
                     }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
                 }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
             }
         }
-        .frame(maxWidth: width ?? .infinity, alignment: .leading)
-        .background(theme.elevatedBackground.opacity(0.58))
+        .frame(width: width, alignment: .leading)
+        .background(theme.elevatedBackground.opacity(0.65))
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(theme.border, lineWidth: 1)
         )
-        .onChange(of: isStreamingReasoning) { streaming in
-            // 思考流结束转入正文输出时，若用户未主动点开过全文，自动平滑收起为单行摘要
-            if !streaming && userExpandedOverride == nil {
-                userExpandedOverride = false
-            }
-        }
         .sheet(isPresented: $showingFullReasoningSheet) {
             AttachmentFilePreviewSheet(
                 attachment: ChatAttachment(
@@ -198,6 +159,8 @@ private struct ActiveStreamingAssistantCardView: View {
     let statusText: String
     let thinkingStartTime: Date?
     let isSelected: Bool
+    let onSelectToggle: (() -> Void)?
+    let onDismissSelection: (() -> Void)?
     @ObservedObject var streamingState: StreamingTurnState
 
     var body: some View {
@@ -220,23 +183,36 @@ private struct ActiveStreamingAssistantCardView: View {
             && turn.toolCalls.isEmpty
 
         if isWaitingInitialOutput {
-            ThinkingStatusView(
-                statusText: statusText,
-                startDate: thinkingStartTime ?? turn.createdAt,
-                theme: theme,
-                isPaused: false
-            )
-            .padding(.horizontal, 13)
-            .padding(.vertical, 9)
-            .background(theme.cardBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(isSelected ? theme.accent.opacity(0.45) : theme.border, lineWidth: 1)
-            )
+            HStack(spacing: 0) {
+                ThinkingStatusView(
+                    statusText: statusText,
+                    startDate: thinkingStartTime ?? turn.createdAt,
+                    theme: theme,
+                    isPaused: false
+                )
+                .padding(.horizontal, 13)
+                .padding(.vertical, 9)
+                .background(theme.cardBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 15, style: .continuous)
+                        .stroke(isSelected ? theme.accent.opacity(0.45) : theme.border, lineWidth: 1)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                .onTapGesture {
+                    onSelectToggle?()
+                }
+
+                Spacer(minLength: 16)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        onDismissSelection?()
+                    }
+            }
+            .frame(width: bubbleColumnWidth, alignment: .leading)
             .modifier(ChatLayoutProbe(identifier: "assistantCard|\(turn.id)"))
         } else {
-            VStack(alignment: .leading, spacing: 9) {
+            VStack(alignment: .leading, spacing: 8) {
                 ForEach(Array(steps.enumerated()), id: \.element.id) { idx, step in
                     let isLiveStep = (step.id == activeMsgId) || (activeMsgId == nil && idx == steps.count - 1)
                     let stepReasoning = isLiveStep && !liveTrimmedReasoning.isEmpty ? liveReasoning : step.reasoningContent
@@ -264,14 +240,14 @@ private struct ActiveStreamingAssistantCardView: View {
                             isStreaming: isLiveStep,
                             diagnosticIDPrefix: idx == steps.count - 1 ? turn.id : nil
                         )
-                        .frame(maxWidth: innerContentWidth, alignment: .leading)
+                        .frame(width: innerContentWidth, alignment: .leading)
                         .modifier(ChatLayoutProbe(identifier: idx == steps.count - 1 ? "markdown|\(turn.id)" : nil))
                     }
 
                     if !step.toolCalls.isEmpty {
                         ToolCallSummaryGroupView(toolCalls: step.toolCalls, theme: theme)
                             .equatable()
-                            .frame(maxWidth: innerContentWidth, alignment: .leading)
+                            .frame(width: innerContentWidth, alignment: .leading)
                             .modifier(ChatLayoutProbe(identifier: idx == 0 ? "toolSummary|\(turn.id)" : nil))
                     }
 
@@ -284,21 +260,25 @@ private struct ActiveStreamingAssistantCardView: View {
                                 theme: theme,
                                 isPaused: false
                             )
-                            .padding(.vertical, 2)
+                            .padding(.top, 2)
                         }
                     }
                 }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
-            .frame(maxWidth: bubbleColumnWidth, alignment: .leading)
+            .frame(width: bubbleColumnWidth, alignment: .leading)
             .background(theme.cardBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                RoundedRectangle(cornerRadius: 15, style: .continuous)
                     .stroke(isSelected ? theme.accent.opacity(0.45) : theme.border, lineWidth: 1)
             )
             .modifier(ChatLayoutProbe(identifier: "assistantCard|\(turn.id)"))
+            .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+            .onTapGesture {
+                onSelectToggle?()
+            }
         }
     }
 }
@@ -343,11 +323,7 @@ struct MessageBubbleView: View, Equatable {
     @FocusState private var isEditFieldFocused: Bool
 
     private var bubbleColumnWidth: CGFloat {
-        max(220, availableWidth - 34)
-    }
-
-    private var userBubbleMaxWidth: CGFloat {
-        max(200, min(bubbleColumnWidth, floor(availableWidth * 0.82)))
+        max(220, availableWidth - 30)
     }
 
     private var editableRawText: String {
@@ -370,7 +346,7 @@ struct MessageBubbleView: View, Equatable {
                 assistantTurnView
             }
         }
-        .frame(maxWidth: availableWidth, alignment: turn.role == .user ? .trailing : .leading)
+        .frame(width: availableWidth)
         .modifier(ChatLayoutProbe(identifier: "row|\(turn.role.rawValue)|\(turn.id)"))
         .sheet(item: $previewingFileAttachment) { fileAtt in
             AttachmentFilePreviewSheet(attachment: fileAtt, theme: theme)
@@ -388,12 +364,16 @@ struct MessageBubbleView: View, Equatable {
             ? ChatAttachment.makeLongTextAttachment(from: trimmed)
             : nil
 
-        return HStack(alignment: .top, spacing: 8) {
-            Spacer(minLength: 20)
+        return HStack(alignment: .top, spacing: 6) {
+            Spacer(minLength: 24)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    onDismissSelection?()
+                }
 
             if isEditing {
                 editEditorBox(allowResend: true)
-                    .frame(maxWidth: bubbleColumnWidth)
+                    .frame(width: bubbleColumnWidth)
                     .id("message-editor-\(turn.id)")
             } else {
                 VStack(alignment: .trailing, spacing: 6) {
@@ -443,21 +423,18 @@ struct MessageBubbleView: View, Equatable {
                             .foregroundColor(theme.primaryText)
                             .lineSpacing(3.5)
                             .multilineTextAlignment(.leading)
-                            .padding(.horizontal, 13)
+                            .padding(.horizontal, 12)
                             .padding(.vertical, 9)
                             .background(theme.userMessageBackground)
-                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
                             .overlay(
-                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                RoundedRectangle(cornerRadius: 15, style: .continuous)
                                     .stroke(isSelected ? theme.accent.opacity(0.55) : theme.accent.opacity(0.18), lineWidth: 1)
                             )
                             .modifier(ChatLayoutProbe(identifier: "userText|\(turn.id)"))
-                            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
                             .onTapGesture {
                                 onSelectToggle?()
-                            }
-                            .contextMenu {
-                                userContextMenuItems
                             }
                     }
 
@@ -465,7 +442,7 @@ struct MessageBubbleView: View, Equatable {
                         floatingActionPill
                     }
                 }
-                .frame(maxWidth: userBubbleMaxWidth, alignment: .trailing)
+                .frame(maxWidth: bubbleColumnWidth, alignment: .trailing)
             }
 
             compactAvatar(isUser: true)
@@ -473,248 +450,110 @@ struct MessageBubbleView: View, Equatable {
                     onSelectToggle?()
                 }
         }
-        .frame(maxWidth: .infinity, alignment: .trailing)
-    }
-
-    @ViewBuilder
-    private var userContextMenuItems: some View {
-        let copyTarget = editableRawText
-        if !copyTarget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            Button {
-                UIPasteboard.general.string = copyTarget
-            } label: {
-                Label("复制内容", systemImage: "doc.on.doc")
-            }
-        }
-        if !isGenerating {
-            Button {
-                beginInlineEdit()
-            } label: {
-                Label("编辑消息", systemImage: "pencil")
-            }
-            Button {
-                onRetry?()
-            } label: {
-                Label("重新发送", systemImage: "arrow.clockwise")
-            }
-            Button(role: .destructive) {
-                onDelete?()
-            } label: {
-                Label("删除消息", systemImage: "trash")
-            }
-        }
-    }
-
-    private static func isCompactSingleLineCandidate(_ turn: MessageDisplayTurn) -> Bool {
-        guard turn.steps.count <= 1,
-              turn.toolCalls.isEmpty,
-              turn.reasoningContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return false
-        }
-        let trimmed = turn.content.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, trimmed.count <= 72, !trimmed.contains("\n") else {
-            return false
-        }
-        if trimmed.hasPrefix("#") || trimmed.hasPrefix("```") || trimmed.hasPrefix(">") || trimmed.hasPrefix("-") || trimmed.hasPrefix("*") || trimmed.contains("|") {
-            return false
-        }
-        return true
+        .frame(width: availableWidth, alignment: .trailing)
     }
 
     private var assistantTurnView: some View {
         let innerContentWidth = max(180, bubbleColumnWidth - 24)
 
-        return HStack(alignment: .top, spacing: 8) {
+        return HStack(alignment: .top, spacing: 6) {
             compactAvatar(isUser: false)
                 .onTapGesture {
                     onSelectToggle?()
                 }
 
-            VStack(alignment: .leading, spacing: 5) {
+            VStack(alignment: .leading, spacing: 6) {
                 if isEditing {
                     editEditorBox(allowResend: false)
-                        .frame(maxWidth: bubbleColumnWidth)
+                        .frame(width: bubbleColumnWidth)
                         .id("message-editor-\(turn.id)")
-                } else if isActiveGeneratingTurn {
-                    ActiveStreamingAssistantCardView(
-                        turn: turn,
-                        theme: theme,
-                        bubbleColumnWidth: bubbleColumnWidth,
-                        innerContentWidth: innerContentWidth,
-                        statusText: statusText,
-                        thinkingStartTime: thinkingStartTime,
-                        isSelected: isSelected,
-                        streamingState: streamingState
-                    )
                 } else {
-                    staticAssistantCard(innerContentWidth: innerContentWidth)
+                    if isActiveGeneratingTurn {
+                        ActiveStreamingAssistantCardView(
+                            turn: turn,
+                            theme: theme,
+                            bubbleColumnWidth: bubbleColumnWidth,
+                            innerContentWidth: innerContentWidth,
+                            statusText: statusText,
+                            thinkingStartTime: thinkingStartTime,
+                            isSelected: isSelected,
+                            onSelectToggle: onSelectToggle,
+                            onDismissSelection: onDismissSelection,
+                            streamingState: streamingState
+                        )
+                    } else {
+                        staticAssistantCard(innerContentWidth: innerContentWidth)
+                    }
 
-                    assistantFooterBar
+                    if isSelected {
+                        floatingActionPill
+                    }
                 }
             }
-            .frame(maxWidth: bubbleColumnWidth, alignment: .leading)
+            .frame(width: bubbleColumnWidth, alignment: .leading)
             .modifier(ChatLayoutProbe(identifier: "assistantColumn|\(turn.id)"))
-
-            Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(width: availableWidth, alignment: .leading)
         .modifier(ChatLayoutProbe(identifier: "assistantHStack|\(turn.id)"))
     }
 
     @ViewBuilder
     private func staticAssistantCard(innerContentWidth: CGFloat) -> some View {
-        let isCompact = Self.isCompactSingleLineCandidate(turn)
+        let stepsToRender: [AssistantTurnStep] = turn.steps.isEmpty
+            ? [AssistantTurnStep(id: turn.id, content: turn.content, reasoningContent: turn.reasoningContent, toolCalls: turn.toolCalls)]
+            : turn.steps
 
-        if isCompact {
-            let attr = MarkdownRenderCache.shared.attributedString(
-                for: turn.content.trimmingCharacters(in: .whitespacesAndNewlines),
-                fontSize: 15,
-                theme: theme,
-                isStreaming: false
-            )
-            Text(attr)
-                .font(.system(size: 15, weight: .regular))
-                .foregroundColor(theme.primaryText)
-                .tint(theme.accent)
-                .lineSpacing(3.5)
-                .textSelection(.enabled)
-                .padding(.horizontal, 13)
-                .padding(.vertical, 9.5)
-                .background(theme.cardBackground)
-                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(isSelected ? theme.accent.opacity(0.45) : theme.border, lineWidth: 1)
-                )
-                .modifier(ChatLayoutProbe(identifier: "assistantCard|\(turn.id)"))
-        } else {
-            let stepsToRender: [AssistantTurnStep] = turn.steps.isEmpty
-                ? [AssistantTurnStep(id: turn.id, content: turn.content, reasoningContent: turn.reasoningContent, toolCalls: turn.toolCalls)]
-                : turn.steps
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(stepsToRender.enumerated()), id: \.element.id) { idx, step in
+                let trimmedReasoning = step.trimmedReasoning
+                let trimmedText = step.trimmedContent
 
-            VStack(alignment: .leading, spacing: 9) {
-                ForEach(Array(stepsToRender.enumerated()), id: \.element.id) { idx, step in
-                    let trimmedReasoning = step.trimmedReasoning
-                    let trimmedText = step.trimmedContent
+                if !trimmedReasoning.isEmpty {
+                    ReasoningFoldCardView(
+                        reasoningText: step.reasoningContent,
+                        isStreamingReasoning: false,
+                        startDate: turn.createdAt,
+                        theme: theme,
+                        width: innerContentWidth
+                    )
+                    .equatable()
+                    .modifier(ChatLayoutProbe(identifier: idx == 0 ? "reasoning|\(turn.id)" : nil))
+                }
 
-                    if !trimmedReasoning.isEmpty {
-                        ReasoningFoldCardView(
-                            reasoningText: step.reasoningContent,
-                            isStreamingReasoning: false,
-                            startDate: turn.createdAt,
-                            theme: theme,
-                            width: innerContentWidth
-                        )
+                if !trimmedText.isEmpty {
+                    MarkdownDocumentView(
+                        content: step.content,
+                        theme: theme,
+                        contentWidth: innerContentWidth,
+                        isStreaming: false,
+                        diagnosticIDPrefix: idx == stepsToRender.count - 1 ? turn.id : nil
+                    )
+                    .frame(width: innerContentWidth, alignment: .leading)
+                    .modifier(ChatLayoutProbe(identifier: idx == stepsToRender.count - 1 ? "markdown|\(turn.id)" : nil))
+                }
+
+                if !step.toolCalls.isEmpty {
+                    ToolCallSummaryGroupView(toolCalls: step.toolCalls, theme: theme)
                         .equatable()
-                        .modifier(ChatLayoutProbe(identifier: idx == 0 ? "reasoning|\(turn.id)" : nil))
-                    }
-
-                    if !trimmedText.isEmpty {
-                        MarkdownDocumentView(
-                            content: step.content,
-                            theme: theme,
-                            contentWidth: innerContentWidth,
-                            isStreaming: false,
-                            diagnosticIDPrefix: idx == stepsToRender.count - 1 ? turn.id : nil
-                        )
-                        .frame(maxWidth: innerContentWidth, alignment: .leading)
-                        .modifier(ChatLayoutProbe(identifier: idx == stepsToRender.count - 1 ? "markdown|\(turn.id)" : nil))
-                    }
-
-                    if !step.toolCalls.isEmpty {
-                        ToolCallSummaryGroupView(toolCalls: step.toolCalls, theme: theme)
-                            .equatable()
-                            .frame(maxWidth: innerContentWidth, alignment: .leading)
-                            .modifier(ChatLayoutProbe(identifier: idx == 0 ? "toolSummary|\(turn.id)" : nil))
-                    }
+                        .frame(width: innerContentWidth, alignment: .leading)
+                        .modifier(ChatLayoutProbe(identifier: idx == 0 ? "toolSummary|\(turn.id)" : nil))
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .frame(maxWidth: bubbleColumnWidth, alignment: .leading)
-            .background(theme.cardBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(isSelected ? theme.accent.opacity(0.45) : theme.border, lineWidth: 1)
-            )
-            .modifier(ChatLayoutProbe(identifier: "assistantCard|\(turn.id)"))
         }
-    }
-
-    private var assistantFooterBar: some View {
-        let copyTarget = editableRawText
-        let hasCopyableText = !copyTarget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-
-        return HStack(spacing: 12) {
-            if hasCopyableText {
-                Button {
-                    UIPasteboard.general.string = copyTarget
-                    withAnimation(.easeInOut(duration: 0.15)) { isCopied = true }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                        withAnimation(.easeInOut(duration: 0.15)) { isCopied = false }
-                    }
-                } label: {
-                    HStack(spacing: 3.5) {
-                        Image(systemName: isCopied ? "checkmark" : "doc.on.doc")
-                            .font(.system(size: 11, weight: .medium))
-                        if isCopied {
-                            Text("已复制")
-                                .font(.system(size: 11, weight: .medium))
-                        }
-                    }
-                    .foregroundColor(isCopied ? theme.accent : theme.mutedText)
-                    .padding(.vertical, 2)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-
-            Button {
-                guard !isGenerating else { return }
-                onRetry?()
-            } label: {
-                Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(isGenerating ? theme.mutedText.opacity(0.45) : theme.mutedText)
-                    .padding(.vertical, 2)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .disabled(isGenerating)
-
-            if hasCopyableText {
-                Button {
-                    guard !isGenerating else { return }
-                    beginInlineEdit()
-                } label: {
-                    Image(systemName: "pencil")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(isGenerating ? theme.mutedText.opacity(0.45) : theme.mutedText)
-                        .padding(.vertical, 2)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .disabled(isGenerating)
-            }
-
-            Button {
-                guard !isGenerating else { return }
-                onDelete?()
-            } label: {
-                Image(systemName: "trash")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(isGenerating ? theme.mutedText.opacity(0.45) : theme.mutedText)
-                    .padding(.vertical, 2)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .disabled(isGenerating)
-
-            Spacer(minLength: 0)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(width: bubbleColumnWidth, alignment: .leading)
+        .background(theme.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 15, style: .continuous)
+                .stroke(isSelected ? theme.accent.opacity(0.45) : theme.border, lineWidth: 1)
+        )
+        .modifier(ChatLayoutProbe(identifier: "assistantCard|\(turn.id)"))
+        .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+        .onTapGesture {
+            onSelectToggle?()
         }
-        .padding(.leading, 4)
-        .modifier(ChatLayoutProbe(identifier: "actionBar|\(turn.id)"))
     }
 
     private func beginInlineEdit() {
@@ -734,10 +573,10 @@ struct MessageBubbleView: View, Equatable {
         ZStack {
             Circle()
                 .fill(isUser ? theme.accent : theme.accent.opacity(0.14))
-                .frame(width: 26, height: 26)
+                .frame(width: 24, height: 24)
 
             Image(systemName: isUser ? "person.fill" : "sparkles")
-                .font(.system(size: 11.5, weight: .semibold))
+                .font(.system(size: 11, weight: .semibold))
                 .foregroundColor(isUser ? .white : theme.accent)
         }
         .padding(.top, 2)
@@ -745,6 +584,7 @@ struct MessageBubbleView: View, Equatable {
         .modifier(ChatLayoutProbe(identifier: "avatar|\(isUser ? "user" : "assistant")|\(turn.id)"))
     }
 
+    /// 用户消息与 AI 消息共用的唯一点击弹出胶囊菜单
     private var floatingActionPill: some View {
         let copyTarget = editableRawText
 
@@ -945,7 +785,7 @@ struct CodeBlockCard: View {
     @State private var isInlineExpanded: Bool = false
     @State private var showingFullViewer: Bool = false
 
-    private let previewLineThreshold = 12
+    private let previewLineThreshold = 10
 
     private var totalLines: Int {
         var count = 1
@@ -956,7 +796,7 @@ struct CodeBlockCard: View {
     }
 
     private var isCollapsible: Bool {
-        totalLines > previewLineThreshold + 2 || code.count > 640
+        totalLines > previewLineThreshold || code.count > 520
     }
 
     private var displayedCode: String {
@@ -964,9 +804,9 @@ struct CodeBlockCard: View {
             return code
         }
         if isStreaming {
-            return Self.extractLastLinesStable(from: code, exactLines: previewLineThreshold, maxChars: 1800)
+            return Self.extractLastLinesStable(from: code, exactLines: previewLineThreshold, maxChars: 1600)
         }
-        return Self.extractFirstLinesExact(from: code, exactLines: previewLineThreshold, maxChars: 1800)
+        return Self.extractFirstLinesExact(from: code, exactLines: previewLineThreshold, maxChars: 1600)
     }
 
     private static func extractFirstLinesExact(from text: String, exactLines: Int, maxChars: Int) -> String {
@@ -1042,11 +882,11 @@ struct CodeBlockCard: View {
                         .lineLimit(1)
                         .truncationMode(.tail)
 
-                    Text(isStreaming && isClippedPreview ? "实时输出 · \(totalLines) 行" : "\(totalLines) 行")
+                    Text(isStreaming && isClippedPreview ? "实时跟随 · \(totalLines) 行" : "\(totalLines) 行")
                         .font(.system(size: 10, weight: .medium, design: .monospaced))
                         .foregroundColor(isStreaming ? theme.accent : theme.mutedText)
                         .lineLimit(1)
-                        .padding(.horizontal, 5.5)
+                        .padding(.horizontal, 5)
                         .padding(.vertical, 1.5)
                         .background(isStreaming ? theme.accent.opacity(0.12) : theme.cardBackground.opacity(0.7))
                         .clipShape(Capsule())
@@ -1061,9 +901,9 @@ struct CodeBlockCard: View {
                             showingFullViewer = true
                         } label: {
                             HStack(spacing: 2.5) {
-                                Image(systemName: "arrow.up.left.and.arrow.down.right")
-                                    .font(.system(size: 10, weight: .semibold))
-                                Text("全屏")
+                                Image(systemName: "doc.text.magnifyingglass")
+                                    .font(.system(size: 10.5, weight: .semibold))
+                                Text("全文")
                                     .font(.system(size: 11, weight: .medium))
                             }
                             .foregroundColor(theme.secondaryText)
@@ -1102,7 +942,6 @@ struct CodeBlockCard: View {
                 .fill(theme.border)
                 .frame(height: 1)
 
-            // 流式与静态统一采用相同排版结构，避免流式结束瞬间容器切换导致高度跳变
             ZStack(alignment: .bottom) {
                 ScrollView(.horizontal, showsIndicators: !isStreaming) {
                     Text(displayedCode)
@@ -1145,24 +984,24 @@ struct CodeBlockCard: View {
                     HStack(spacing: 5) {
                         Image(systemName: (!isStreaming && totalLines <= 120)
                               ? (isInlineExpanded ? "chevron.up" : "chevron.down")
-                              : "doc.text.magnifyingglass")
+                              : "arrow.up.left.and.arrow.down.right")
                             .font(.system(size: 10.5, weight: .semibold))
                         Text((!isStreaming && totalLines <= 120)
                              ? (isInlineExpanded ? "收起代码" : "展开全部 \(totalLines.formatted()) 行代码")
-                             : "全屏查看全部 \(totalLines.formatted()) 行代码")
+                             : "查看全部 \(totalLines.formatted()) 行完整代码")
                             .font(.system(size: 11.5, weight: .semibold))
                             .lineLimit(1)
                     }
                     .foregroundColor(theme.accent)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 7.5)
-                    .background(theme.elevatedBackground.opacity(0.55))
+                    .background(theme.elevatedBackground.opacity(0.65))
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
         }
-        .frame(maxWidth: cardWidth ?? .infinity, alignment: .leading)
+        .frame(width: cardWidth)
         .background(theme.cardBackground)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
