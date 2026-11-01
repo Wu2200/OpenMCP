@@ -635,8 +635,8 @@ final class ChatMessagesTableViewController: UIViewController, UITableViewDataSo
                     for cell in tableView.visibleCells.compactMap({ $0 as? ChatHostingTableViewCell }) {
                         cell.refreshHostedContentImmediately()
                     }
-                    scheduleCellHeightPass(forceImmediate: true, preserveViewport: true)
-                } else {
+                    scheduleCellHeightPass(forceImmediate: true, preserveViewport: true, refreshHostedContent: true)
+                }
                     performSeamlessCellHeightBatchUpdate(forceRevealLastRow: false)
                 }
             }
