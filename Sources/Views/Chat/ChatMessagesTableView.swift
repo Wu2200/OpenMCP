@@ -252,6 +252,7 @@ private struct ChatRowHostedView: View {
                 .frame(width: rowAvailableWidth, alignment: .leading)
             }
         }
+        .id(item.id)
         .environment(\.chatCellLayoutInvalidator, onIntrinsicLayoutInvalidated)
     }
 }
@@ -304,6 +305,18 @@ private final class ChatHostingTableViewCell: UITableViewCell {
     override func prepareForReuse() {
         super.prepareForReuse()
         hostingController?.resetMeasuredHeight()
+    }
+
+    func refreshHostedContentImmediately() {
+        guard let hostedView = hostingController?.view else { return }
+        contentView.setNeedsLayout()
+        contentView.layoutIfNeeded()
+        hostedView.invalidateIntrinsicContentSize()
+        hostedView.setNeedsUpdateConstraints()
+        hostedView.setNeedsLayout()
+        hostedView.layoutIfNeeded()
+        hostedView.layer.setNeedsDisplay()
+        hostedView.layer.displayIfNeeded()
     }
 
     func configure(
@@ -602,16 +615,20 @@ final class ChatMessagesTableViewController: UIViewController, UITableViewDataSo
         // 1. 行 ID 完全一致（例如点击选中弹出胶囊菜单、工具状态刷新、流式切换静态）：原地更新可见 Cell，保留内部展开态
         if oldIds == newIds {
             var anyVisibleChanged = false
+            let selectionChanged = selectedTurnId != previousSelectedTurnId
             for i in newRows.indices where oldRows[i] != newRows[i] {
                 let ip = IndexPath(row: i, section: 0)
                 if let cell = tableView.cellForRow(at: ip) as? ChatHostingTableViewCell {
                     configureCell(cell, with: newRows[i])
+                    if selectionChanged && newRows[i].turnId == selectedTurnId {
+                        cell.refreshHostedContentImmediately()
+                    }
                     anyVisibleChanged = true
                 }
             }
             if anyVisibleChanged {
-                if selectedTurnId != previousSelectedTurnId {
-                    scheduleCellHeightPass(forceImmediate: true, preserveViewport: true)
+                if selectionChanged {
+                    performSeamlessCellHeightBatchUpdate(forceRevealLastRow: false, preserveViewport: true)
                 } else {
                     performSeamlessCellHeightBatchUpdate(forceRevealLastRow: false)
                 }
@@ -854,7 +871,7 @@ final class ChatMessagesTableViewController: UIViewController, UITableViewDataSo
             onDeleteTurn: { [weak self] turn in self?.onDeleteTurn?(turn) },
             onRetryLastFromError: { [weak self] in self?.onRetryLastFromError?() },
             onIntrinsicLayoutInvalidated: { [weak self] in
-                self?.scheduleCellHeightPass(forceImmediate: true)
+                self?.scheduleCellHeightPass(forceImmediate: true, preserveViewport: true)
             }
         )
 
