@@ -46,6 +46,10 @@ struct ChatLayoutProbe: ViewModifier {
     }
 }
 
+private final class LayoutFramesBox {
+    var frames: [String: CGRect] = [:]
+}
+
 struct ChatLayoutInspectorSheet: View {
     @Environment(\.dismiss) private var dismiss
     let report: String
@@ -63,7 +67,7 @@ struct ChatLayoutInspectorSheet: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
 
                 Toggle(isOn: $isDiagnosticsEnabled) {
-                    Label("启用布局测量", systemImage: "ruler")
+                    Label("启用布局测量（关闭检查器后自动停用）", systemImage: "ruler")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundColor(theme.primaryText)
                 }
@@ -120,7 +124,7 @@ struct ChatLayoutInspectorSheet: View {
     }
 }
 
-/// 仅订阅 settings 与 servers 变更，避免 DataStorage.$conversations 高频更新导致整页二次重绘
+/// 仅订阅 settings 与 servers 变更，避免 DataStorage.$conversations 高频更新导致整页重绘
 @MainActor
 private final class ChatWorkspaceObserver: ObservableObject {
     @Published private(set) var settings: OpenAISettings
@@ -134,6 +138,7 @@ private final class ChatWorkspaceObserver: ObservableObject {
         self.servers = store.servers
 
         store.$settings
+            .dropFirst()
             .sink { [weak self] newSettings in
                 guard let self, self.settings != newSettings else { return }
                 self.settings = newSettings
@@ -141,6 +146,7 @@ private final class ChatWorkspaceObserver: ObservableObject {
             .store(in: &cancellables)
 
         store.$servers
+            .dropFirst()
             .sink { [weak self] newServers in
                 guard let self, self.servers != newServers else { return }
                 self.servers = newServers
@@ -150,6 +156,9 @@ private final class ChatWorkspaceObserver: ObservableObject {
 }
 
 struct ChatDetailView: View {
+    private static let initialVisibleTurnLimit = 12
+    private static let historyExpandStep = 18
+
     let conversationId: String
     @ObservedObject private var coordinator: AgentCoordinator
     @StateObject private var turnProjection: ChatTurnProjectionStore
@@ -170,10 +179,10 @@ struct ChatDetailView: View {
     @State private var pendingDeleteTurn: MessageDisplayTurn? = nil
     @State private var showingClearConversationAlert: Bool = false
     @State private var showingLayoutInspector: Bool = false
-    @AppStorage("chatLayoutDiagnosticsEnabled") private var isLayoutDiagnosticsEnabled = false
+    @State private var isLayoutDiagnosticsEnabled: Bool = false
     @State private var layoutInspectorReport: String = ""
-    @State private var layoutFrames: [String: CGRect] = [:]
-    @State private var visibleHistoryLimit: Int = 50
+    @State private var layoutFramesBox = LayoutFramesBox()
+    @State private var visibleHistoryLimit: Int = ChatDetailView.initialVisibleTurnLimit
     @State private var autoFollowOutput: Bool = true
     @State private var showJumpToBottomButton: Bool = false
     @State private var forceBottomScrollRevision: Int = 0
@@ -185,6 +194,8 @@ struct ChatDetailView: View {
         self.conversationId = conversationId
         self._coordinator = ObservedObject(wrappedValue: AgentCoordinator.coordinator(for: conversationId))
         self._turnProjection = StateObject(wrappedValue: ChatTurnProjectionStore(conversationId: conversationId))
+        // 清理旧版本遗留的持久化布局探针开关，避免几百个 GeometryReader 在后台常驻拖慢滚动帧率
+        UserDefaults.standard.removeObject(forKey: "chatLayoutDiagnosticsEnabled")
     }
 
     private var storage: DataStorage {
@@ -236,12 +247,16 @@ struct ChatDetailView: View {
         GeometryReader { geo in
             let viewportWidth = max(320, geo.size.width)
             let contentMaxWidth = min(viewportWidth, 760)
-            let rowAvailableWidth = max(280, contentMaxWidth - 24)
+            let rowAvailableWidth = max(280, contentMaxWidth - 20)
 
             ScrollViewReader { scrollProxy in
                 ZStack {
                     theme.background
                         .ignoresSafeArea()
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            handleBackgroundTap()
+                        }
 
                     VStack(spacing: 0) {
                         ZStack(alignment: .bottomTrailing) {
@@ -258,17 +273,17 @@ struct ChatDetailView: View {
                                             handleBackgroundTap()
                                         }
                                 } else {
-                                    VStack(spacing: 14) {
+                                    VStack(spacing: 12) {
                                         if hiddenTurnCount > 0 {
                                             Button {
-                                                prependHistoryAnchorRevision &+= 1
-                                                visibleHistoryLimit = min(displayTurns.count, visibleHistoryLimit + 50)
+                                                loadOlderHistoryBatch()
                                             } label: {
                                                 Label("加载更早的 \(hiddenTurnCount) 条消息", systemImage: "arrow.up")
                                                     .font(.system(size: 12, weight: .semibold))
                                                     .foregroundColor(theme.accent)
                                                     .padding(.horizontal, 14)
                                                     .padding(.vertical, 8)
+                                                    .frame(maxWidth: .infinity)
                                                     .background(theme.cardBackground)
                                                     .clipShape(Capsule())
                                                     .overlay(Capsule().stroke(theme.border, lineWidth: 1))
@@ -356,33 +371,41 @@ struct ChatDetailView: View {
 
                                         if coordinator.isGenerating && visibleTurns.last?.role != .assistant {
                                             generatingStatusRow
-                                                .frame(maxWidth: rowAvailableWidth, alignment: .leading)
+                                                .frame(width: rowAvailableWidth, alignment: .leading)
                                                 .id("generating_status")
                                         }
 
                                         if let err = coordinator.errorMessage {
                                             errorBanner(err)
-                                                .frame(maxWidth: rowAvailableWidth)
+                                                .frame(width: rowAvailableWidth)
                                                 .id("error_status")
                                         }
 
                                         Color.clear
                                             .frame(
-                                                height: isKeyboardVisible && editingTurnId != nil
-                                                    ? max(48, geo.size.height * 0.36)
+                                                height: isKeyboardVisible && (editingTurnId == visibleTurns.last?.id || selectedTurnId == visibleTurns.last?.id)
+                                                    ? max(48, geo.size.height * 0.42)
                                                     : 14
                                             )
                                             .id("chat_bottom_anchor")
                                     }
-                                    .padding(.horizontal, 12)
+                                    .padding(.horizontal, 10)
                                     .padding(.top, 10)
                                     .frame(maxWidth: contentMaxWidth)
                                     .frame(maxWidth: .infinity)
+                                    .background(
+                                        Color.clear
+                                            .contentShape(Rectangle())
+                                            .onTapGesture {
+                                                handleBackgroundTap()
+                                            }
+                                    )
                                     .background(
                                         ChatScrollBridgeView(
                                             isViewActive: isChatVisible,
                                             isGenerating: coordinator.isGenerating,
                                             hasMessages: !displayTurns.isEmpty || coordinator.isGenerating,
+                                            hasHiddenHistory: hiddenTurnCount > 0,
                                             autoFollowOutput: autoFollowOutput,
                                             forceBottomRevision: forceBottomScrollRevision,
                                             prependHistoryRevision: prependHistoryAnchorRevision,
@@ -397,6 +420,12 @@ struct ChatDetailView: View {
                                                         showJumpToBottomButton = visible
                                                     }
                                                 }
+                                            },
+                                            onUserScrollingChanged: { scrolling in
+                                                coordinator.streamingState.setUserScrolling(scrolling)
+                                            },
+                                            onReachTopForMoreHistory: {
+                                                loadOlderHistoryBatch()
                                             }
                                         )
                                     )
@@ -406,7 +435,9 @@ struct ChatDetailView: View {
                             .environment(\.chatLayoutDiagnosticsEnabled, isLayoutDiagnosticsEnabled)
                             .coordinateSpace(name: ChatLayoutCoordinateSpace.name)
                             .onPreferenceChange(ChatLayoutFramesPreferenceKey.self) { samples in
-                                layoutFrames = samples
+                                if isLayoutDiagnosticsEnabled {
+                                    layoutFramesBox.frames = samples
+                                }
                             }
                             .scrollDismissesKeyboard(editingTurnId == nil ? .interactively : .never)
 
@@ -447,12 +478,15 @@ struct ChatDetailView: View {
         }
         .onAppear {
             isChatVisible = true
-            visibleHistoryLimit = 50
+            visibleHistoryLimit = Self.initialVisibleTurnLimit
             autoFollowOutput = true
             showJumpToBottomButton = false
+            coordinator.streamingState.setUserScrolling(false)
         }
         .onDisappear {
             isChatVisible = false
+            isLayoutDiagnosticsEnabled = false
+            coordinator.streamingState.setUserScrolling(false)
         }
         .navigationTitle(turnProjection.conversationTitle)
         .navigationBarTitleDisplayMode(.inline)
@@ -475,7 +509,8 @@ struct ChatDetailView: View {
 
                     Menu {
                         Button {
-                            layoutFrames.removeAll()
+                            layoutFramesBox.frames.removeAll()
+                            isLayoutDiagnosticsEnabled = true
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                                 layoutInspectorReport = makeLayoutInspectorReport()
                                 showingLayoutInspector = true
@@ -513,14 +548,15 @@ struct ChatDetailView: View {
             LogViewerSheet(theme: theme, filterConversationId: conversationId)
         }
         .sheet(isPresented: $showingLayoutInspector, onDismiss: {
-            layoutFrames.removeAll()
+            isLayoutDiagnosticsEnabled = false
+            layoutFramesBox.frames.removeAll()
         }) {
             ChatLayoutInspectorSheet(
                 report: layoutInspectorReport,
                 theme: theme,
                 isDiagnosticsEnabled: $isLayoutDiagnosticsEnabled,
                 onDiagnosticsChanged: { enabled in
-                    layoutFrames.removeAll()
+                    layoutFramesBox.frames.removeAll()
                     guard enabled else { return }
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                         guard isLayoutDiagnosticsEnabled else { return }
@@ -597,6 +633,16 @@ struct ChatDetailView: View {
         }
     }
 
+    private func loadOlderHistoryBatch() {
+        guard hiddenTurnCount > 0 else { return }
+        prependHistoryAnchorRevision &+= 1
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            visibleHistoryLimit = min(displayTurns.count, visibleHistoryLimit + Self.historyExpandStep)
+        }
+    }
+
     private var jumpToBottomButton: some View {
         Button {
             requestAutoFollowFromBottom()
@@ -630,10 +676,12 @@ struct ChatDetailView: View {
     private func requestAutoFollowFromBottom() {
         autoFollowOutput = true
         showJumpToBottomButton = false
+        coordinator.streamingState.setUserScrolling(false)
         forceBottomScrollRevision &+= 1
     }
 
     private func makeLayoutInspectorReport() -> String {
+        let frames = layoutFramesBox.frames
         let turns = Array(visibleTurns.suffix(8))
         var lines = [
             "OpenMCP 对话布局诊断报告",
@@ -648,7 +696,7 @@ struct ChatDetailView: View {
 
         for (index, turn) in turns.enumerated() {
             let shortID = String(turn.id.prefix(8))
-            let row = layoutFrames["row|\(turn.role.rawValue)|\(turn.id)"]
+            let row = frames["row|\(turn.role.rawValue)|\(turn.id)"]
             lines.append("")
             lines.append("[\(index + 1)] \(turn.role.rawValue) \(shortID)")
             lines.append("消息行：\(layoutFrameDescription(row))")
@@ -663,12 +711,12 @@ struct ChatDetailView: View {
 
             guard turn.role == .assistant else { continue }
 
-            let card = layoutFrames["assistantCard|\(turn.id)"]
-            let column = layoutFrames["assistantColumn|\(turn.id)"]
-            let hStack = layoutFrames["assistantHStack|\(turn.id)"]
-            let avatar = layoutFrames["avatar|assistant|\(turn.id)"]
-            let actionBar = layoutFrames["actionBar|\(turn.id)"]
-            let editor = layoutFrames["editor|\(turn.id)"]
+            let card = frames["assistantCard|\(turn.id)"]
+            let column = frames["assistantColumn|\(turn.id)"]
+            let hStack = frames["assistantHStack|\(turn.id)"]
+            let avatar = frames["avatar|assistant|\(turn.id)"]
+            let actionBar = frames["actionBar|\(turn.id)"]
+            let editor = frames["editor|\(turn.id)"]
             lines.append("当前选中状态：\(selectedTurnId == turn.id ? "是" : "否")")
             lines.append("助手 HStack 外框：\(layoutFrameDescription(hStack))")
             lines.append("助手头像：\(layoutFrameDescription(avatar))")
@@ -683,19 +731,19 @@ struct ChatDetailView: View {
                 lines.append("卡片底部 → 操作栏顶部：\(String(format: "%.1f", cardToActions)) pt")
             }
 
-            if let frame = layoutFrames["toolSummary|\(turn.id)"] {
+            if let frame = frames["toolSummary|\(turn.id)"] {
                 lines.append("工具摘要：\(layoutFrameDescription(frame))")
             }
-            if let frame = layoutFrames["reasoning|\(turn.id)"] {
+            if let frame = frames["reasoning|\(turn.id)"] {
                 lines.append("思考摘要：\(layoutFrameDescription(frame))")
             }
-            if let frame = layoutFrames["markdown|\(turn.id)"] {
+            if let frame = frames["markdown|\(turn.id)"] {
                 lines.append("Markdown 正文外框：\(layoutFrameDescription(frame))")
             }
         }
 
-        if layoutFrames.isEmpty {
-            lines.append("\n尚未收到布局测量数据；请关闭检查器，等待聊天内容显示后重新打开。")
+        if frames.isEmpty {
+            lines.append("\n尚未收到布局测量数据；请等待聊天内容显示后重试。")
         }
 
         return lines.joined(separator: "\n")
@@ -781,13 +829,13 @@ struct ChatDetailView: View {
     }
 
     private var generatingStatusRow: some View {
-        HStack(alignment: .top, spacing: 8) {
+        HStack(alignment: .top, spacing: 6) {
             ZStack {
                 Circle()
                     .fill(theme.accent.opacity(0.14))
-                    .frame(width: 26, height: 26)
+                    .frame(width: 24, height: 24)
                 Image(systemName: "sparkles")
-                    .font(.system(size: 11.5, weight: .semibold))
+                    .font(.system(size: 11, weight: .semibold))
                     .foregroundColor(theme.accent)
             }
             .padding(.top, 2)
@@ -801,13 +849,17 @@ struct ChatDetailView: View {
             .padding(.horizontal, 13)
             .padding(.vertical, 9)
             .background(theme.cardBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                RoundedRectangle(cornerRadius: 15, style: .continuous)
                     .stroke(theme.border, lineWidth: 1)
             )
 
-            Spacer(minLength: 24)
+            Spacer(minLength: 36)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    handleBackgroundTap()
+                }
         }
     }
 
@@ -856,7 +908,7 @@ struct ChatDetailView: View {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .stroke(Color.red.opacity(0.25), lineWidth: 1)
         )
-        .padding(.leading, 34)
+        .padding(.leading, 30)
     }
 
     private func composerDock(contentMaxWidth: CGFloat) -> some View {
@@ -1008,6 +1060,10 @@ struct ChatDetailView: View {
                 }
 
                 Spacer(minLength: 6)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        handleBackgroundTap()
+                    }
 
                 Menu {
                     let profilesWithModels = workspace.settings.providerProfiles.filter { !$0.enabledModels.isEmpty }
@@ -1087,7 +1143,13 @@ struct ChatDetailView: View {
         .padding(.bottom, 6)
         .frame(maxWidth: contentMaxWidth)
         .frame(maxWidth: .infinity)
-        .background(theme.background)
+        .background(
+            theme.background
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    handleBackgroundTap()
+                }
+        )
     }
 
     private func stagedAttachmentChip(_ att: ChatAttachment) -> some View {
@@ -1323,30 +1385,32 @@ private struct ContextTokenBadge: View {
     }
 }
 
-/// 专为 iOS 16+ 打造的原生 UIScrollView 同步底部锚定与惯性手势桥接器：
-/// 1. 在 contentSize / bounds 布局变化的同一帧内同步调整 contentOffset，彻底消除异步 scrollProxy.scrollTo 的帧滞后与抽搐；
-/// 2. 手指触摸拖动时立即让出控制权，不拦截点击、不暂停文本流、不抢夺原生 60/120fps 惯性滑动；
-/// 3. 加载顶部历史消息时自动保持当前视口锚点不跳回顶部。
 private struct ChatScrollBridgeView: UIViewRepresentable {
     var isViewActive: Bool
     var isGenerating: Bool
     var hasMessages: Bool
+    var hasHiddenHistory: Bool
     var autoFollowOutput: Bool
     var forceBottomRevision: Int
     var prependHistoryRevision: Int
     var onAutoFollowChanged: (Bool) -> Void
     var onJumpButtonVisibilityChanged: (Bool) -> Void
+    var onUserScrollingChanged: (Bool) -> Void
+    var onReachTopForMoreHistory: () -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
             isViewActive: isViewActive,
             isGenerating: isGenerating,
             hasMessages: hasMessages,
+            hasHiddenHistory: hasHiddenHistory,
             autoFollowOutput: autoFollowOutput,
             forceBottomRevision: forceBottomRevision,
             prependHistoryRevision: prependHistoryRevision,
             onAutoFollowChanged: onAutoFollowChanged,
-            onJumpButtonVisibilityChanged: onJumpButtonVisibilityChanged
+            onJumpButtonVisibilityChanged: onJumpButtonVisibilityChanged,
+            onUserScrollingChanged: onUserScrollingChanged,
+            onReachTopForMoreHistory: onReachTopForMoreHistory
         )
     }
 
@@ -1365,8 +1429,11 @@ private struct ChatScrollBridgeView: UIViewRepresentable {
         coord.isViewActive = isViewActive
         coord.isGenerating = isGenerating
         coord.hasMessages = hasMessages
+        coord.hasHiddenHistory = hasHiddenHistory
         coord.onAutoFollowChanged = onAutoFollowChanged
         coord.onJumpButtonVisibilityChanged = onJumpButtonVisibilityChanged
+        coord.onUserScrollingChanged = onUserScrollingChanged
+        coord.onReachTopForMoreHistory = onReachTopForMoreHistory
 
         if coord.autoFollowOutput != autoFollowOutput {
             coord.autoFollowOutput = autoFollowOutput
@@ -1407,11 +1474,14 @@ private struct ChatScrollBridgeView: UIViewRepresentable {
         var isViewActive: Bool
         var isGenerating: Bool
         var hasMessages: Bool
+        var hasHiddenHistory: Bool
         var autoFollowOutput: Bool
         var forceBottomRevision: Int
         var prependHistoryRevision: Int
         var onAutoFollowChanged: (Bool) -> Void
         var onJumpButtonVisibilityChanged: (Bool) -> Void
+        var onUserScrollingChanged: (Bool) -> Void
+        var onReachTopForMoreHistory: () -> Void
 
         private weak var attachedScrollView: UIScrollView?
         private var contentSizeObservation: NSKeyValueObservation?
@@ -1424,33 +1494,43 @@ private struct ChatScrollBridgeView: UIViewRepresentable {
         private var initialPositioningDeadline: CFAbsoluteTime = 0
         private var didPerformInitialSnap: Bool = false
         private var pendingPrependAnchor: (height: CGFloat, offsetY: CGFloat)? = nil
+        private var lastAutoPrependTime: CFAbsoluteTime = 0
         private var lastReportedJumpButtonVisible: Bool = false
+        private var lastReportedUserScrolling: Bool = false
+        private var settleCheckWorkItem: DispatchWorkItem? = nil
 
         init(
             isViewActive: Bool,
             isGenerating: Bool,
             hasMessages: Bool,
+            hasHiddenHistory: Bool,
             autoFollowOutput: Bool,
             forceBottomRevision: Int,
             prependHistoryRevision: Int,
             onAutoFollowChanged: @escaping (Bool) -> Void,
-            onJumpButtonVisibilityChanged: @escaping (Bool) -> Void
+            onJumpButtonVisibilityChanged: @escaping (Bool) -> Void,
+            onUserScrollingChanged: @escaping (Bool) -> Void,
+            onReachTopForMoreHistory: @escaping () -> Void
         ) {
             self.isViewActive = isViewActive
             self.isGenerating = isGenerating
             self.hasMessages = hasMessages
+            self.hasHiddenHistory = hasHiddenHistory
             self.autoFollowOutput = autoFollowOutput
             self.forceBottomRevision = forceBottomRevision
             self.prependHistoryRevision = prependHistoryRevision
             self.onAutoFollowChanged = onAutoFollowChanged
             self.onJumpButtonVisibilityChanged = onJumpButtonVisibilityChanged
+            self.onUserScrollingChanged = onUserScrollingChanged
+            self.onReachTopForMoreHistory = onReachTopForMoreHistory
             super.init()
             if hasMessages {
-                self.initialPositioningDeadline = CFAbsoluteTimeGetCurrent() + 0.45
+                self.initialPositioningDeadline = CFAbsoluteTimeGetCurrent() + 0.35
             }
         }
 
         deinit {
+            settleCheckWorkItem?.cancel()
             contentSizeObservation?.invalidate()
             boundsObservation?.invalidate()
             contentOffsetObservation?.invalidate()
@@ -1463,7 +1543,6 @@ private struct ChatScrollBridgeView: UIViewRepresentable {
                     if attachedScrollView !== sv {
                         detachCurrentScrollView()
                         attachedScrollView = sv
-                        // 关闭内容触摸延迟，使折叠卡片、复制按钮点击零粘滞
                         sv.delaysContentTouches = false
                         sv.canCancelContentTouches = true
                         sv.keyboardDismissMode = .interactive
@@ -1481,6 +1560,7 @@ private struct ChatScrollBridgeView: UIViewRepresentable {
             if let prev = attachedScrollView {
                 prev.panGestureRecognizer.removeTarget(self, action: #selector(handlePan(_:)))
             }
+            settleCheckWorkItem?.cancel()
             contentSizeObservation?.invalidate()
             boundsObservation?.invalidate()
             contentOffsetObservation?.invalidate()
@@ -1499,6 +1579,7 @@ private struct ChatScrollBridgeView: UIViewRepresentable {
             autoFollowOutput = true
             isUserPanning = false
             pendingPrependAnchor = nil
+            reportUserScrolling(false)
             reportJumpButtonVisibility(false)
 
             guard let sv = attachedScrollView, sv.bounds.height > 0 else { return }
@@ -1507,13 +1588,12 @@ private struct ChatScrollBridgeView: UIViewRepresentable {
             guard abs(distance) > 1 else { return }
 
             if distance > sv.bounds.height * 1.6 {
-                // 跨屏距离很大时先无动画跳到近底位置再轻柔落底，避免长距离动画掉帧
                 setOffsetSynchronously(on: sv, y: max(-sv.adjustedContentInset.top, targetY - sv.bounds.height * 0.45))
             }
 
             isAnimatingToBottom = true
             sv.setContentOffset(CGPoint(x: 0, y: bottomOffset(for: sv)), animated: true)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.32) { [weak self] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) { [weak self] in
                 guard let self else { return }
                 self.isAnimatingToBottom = false
                 if self.autoFollowOutput, let sv = self.attachedScrollView, !self.isUserInteracting(with: sv) {
@@ -1548,7 +1628,7 @@ private struct ChatScrollBridgeView: UIViewRepresentable {
                   sv.contentSize.height > 10 else { return }
             didPerformInitialSnap = true
             if initialPositioningDeadline == 0 {
-                initialPositioningDeadline = CFAbsoluteTimeGetCurrent() + 0.35
+                initialPositioningDeadline = CFAbsoluteTimeGetCurrent() + 0.30
             }
             setOffsetSynchronously(on: sv, y: bottomOffset(for: sv))
         }
@@ -1560,7 +1640,7 @@ private struct ChatScrollBridgeView: UIViewRepresentable {
                 let newHeight = change.newValue?.height ?? scrollView.contentSize.height
                 guard abs(newHeight - oldHeight) > 0.5, scrollView.bounds.height > 10 else { return }
 
-                // 1. 顶部加载更早历史消息时：保持原阅读位置不跳动
+                // 顶部加载更早历史消息时：同帧补偿高度差，视口锚定不跳动
                 if let anchor = self.pendingPrependAnchor, newHeight > anchor.height + 4 {
                     self.pendingPrependAnchor = nil
                     let delta = newHeight - anchor.height
@@ -1568,7 +1648,7 @@ private struct ChatScrollBridgeView: UIViewRepresentable {
                     return
                 }
 
-                // 2. 页面初次打开时的布局稳定窗口：无动画静默锚定到底部（解决 iOS 16 无 defaultScrollAnchor 问题）
+                // 初次进页面的稳定窗口内静默贴底
                 if self.hasMessages,
                    !self.isUserInteracting(with: scrollView),
                    self.autoFollowOutput,
@@ -1578,7 +1658,6 @@ private struct ChatScrollBridgeView: UIViewRepresentable {
                     return
                 }
 
-                // 3. 流式输出或卡片展开时：若处于自动跟随且用户未触摸滚动，在同一布局帧内同步贴底
                 guard !self.isUserInteracting(with: scrollView), !self.isAnimatingToBottom else {
                     self.refreshJumpButtonState(for: scrollView)
                     return
@@ -1588,7 +1667,6 @@ private struct ChatScrollBridgeView: UIViewRepresentable {
                     self.setOffsetSynchronously(on: scrollView, y: self.bottomOffset(for: scrollView))
                     self.reportJumpButtonVisibility(false)
                 } else {
-                    // 用户正在阅读上方内容：保持当前 contentOffset 不变，仅防止内容缩小时越界悬空
                     let maxAllowed = self.bottomOffset(for: scrollView)
                     if scrollView.contentOffset.y > maxAllowed + 1 {
                         self.setOffsetSynchronously(on: scrollView, y: maxAllowed)
@@ -1608,7 +1686,6 @@ private struct ChatScrollBridgeView: UIViewRepresentable {
                     return
                 }
 
-                // 键盘弹起使可视区域缩小时，若原本开启自动跟随则同步上推到底部
                 if self.autoFollowOutput && !self.isUserInteracting(with: scrollView) && !self.isAnimatingToBottom {
                     self.setOffsetSynchronously(on: scrollView, y: self.bottomOffset(for: scrollView))
                 } else {
@@ -1621,19 +1698,34 @@ private struct ChatScrollBridgeView: UIViewRepresentable {
                 let distanceFromBottom = self.bottomOffset(for: scrollView) - scrollView.contentOffset.y
 
                 if self.isUserInteracting(with: scrollView) {
-                    if distanceFromBottom > 42 && self.autoFollowOutput {
+                    // 灵敏脱离：手指向上滚离底部超过 18pt 立即停止底部跟随，绝不硬拽粘手
+                    if distanceFromBottom > 18 && self.autoFollowOutput {
                         self.autoFollowOutput = false
                         DispatchQueue.main.async { [weak self] in
                             self?.onAutoFollowChanged(false)
                         }
-                    } else if distanceFromBottom <= 18 && !self.autoFollowOutput && !scrollView.isDragging {
+                    } else if distanceFromBottom <= 10 && !self.autoFollowOutput && !scrollView.isDragging {
                         self.autoFollowOutput = true
                         DispatchQueue.main.async { [weak self] in
                             self?.onAutoFollowChanged(true)
                         }
                     }
-                } else if distanceFromBottom <= 20 && !self.autoFollowOutput {
-                    // 惯性滑动自然停在底部附近时自动恢复底部跟随
+
+                    // 向上滑接近顶部时自动无感加载更早历史消息
+                    let distanceFromTop = scrollView.contentOffset.y + scrollView.adjustedContentInset.top
+                    let now = CFAbsoluteTimeGetCurrent()
+                    if self.hasHiddenHistory,
+                       self.didPerformInitialSnap,
+                       self.pendingPrependAnchor == nil,
+                       distanceFromTop < 260,
+                       now - self.lastAutoPrependTime > 0.28 {
+                        self.lastAutoPrependTime = now
+                        self.pendingPrependAnchor = (height: scrollView.contentSize.height, offsetY: scrollView.contentOffset.y)
+                        DispatchQueue.main.async { [weak self] in
+                            self?.onReachTopForMoreHistory()
+                        }
+                    }
+                } else if distanceFromBottom <= 12 && !self.autoFollowOutput {
                     self.autoFollowOutput = true
                     DispatchQueue.main.async { [weak self] in
                         self?.onAutoFollowChanged(true)
@@ -1651,7 +1743,7 @@ private struct ChatScrollBridgeView: UIViewRepresentable {
                 return
             }
             let distanceFromBottom = bottomOffset(for: sv) - sv.contentOffset.y
-            let shouldShow = distanceFromBottom > 56
+            let shouldShow = distanceFromBottom > 48
             reportJumpButtonVisibility(shouldShow)
         }
 
@@ -1663,16 +1755,47 @@ private struct ChatScrollBridgeView: UIViewRepresentable {
             }
         }
 
+        private func reportUserScrolling(_ scrolling: Bool) {
+            guard lastReportedUserScrolling != scrolling else { return }
+            lastReportedUserScrolling = scrolling
+            DispatchQueue.main.async { [weak self] in
+                self?.onUserScrollingChanged(scrolling)
+            }
+        }
+
+        private func scheduleSettleCheck() {
+            settleCheckWorkItem?.cancel()
+            let item = DispatchWorkItem { [weak self] in
+                guard let self, let sv = self.attachedScrollView else { return }
+                if sv.isTracking || sv.isDragging || sv.isDecelerating {
+                    self.scheduleSettleCheck()
+                    return
+                }
+                self.reportUserScrolling(false)
+                let distanceFromBottom = self.bottomOffset(for: sv) - sv.contentOffset.y
+                if distanceFromBottom <= 14 && !self.autoFollowOutput {
+                    self.autoFollowOutput = true
+                    self.onAutoFollowChanged(true)
+                }
+                self.refreshJumpButtonState(for: sv)
+            }
+            settleCheckWorkItem = item
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: item)
+        }
+
         @objc private func handlePan(_ recognizer: UIPanGestureRecognizer) {
             guard let sv = attachedScrollView else { return }
             switch recognizer.state {
             case .began:
+                settleCheckWorkItem?.cancel()
                 isUserPanning = true
                 isAnimatingToBottom = false
                 initialPositioningDeadline = 0
+                reportUserScrolling(true)
             case .changed:
+                let velocityY = recognizer.velocity(in: sv).y
                 let distanceFromBottom = bottomOffset(for: sv) - sv.contentOffset.y
-                if distanceFromBottom > 42 && autoFollowOutput {
+                if (velocityY > 40 || distanceFromBottom > 18) && autoFollowOutput {
                     autoFollowOutput = false
                     DispatchQueue.main.async { [weak self] in
                         self?.onAutoFollowChanged(false)
@@ -1680,14 +1803,7 @@ private struct ChatScrollBridgeView: UIViewRepresentable {
                 }
             case .ended, .cancelled, .failed:
                 isUserPanning = false
-                let distanceFromBottom = bottomOffset(for: sv) - sv.contentOffset.y
-                if !sv.isDecelerating && distanceFromBottom <= 24 && !autoFollowOutput {
-                    autoFollowOutput = true
-                    DispatchQueue.main.async { [weak self] in
-                        self?.onAutoFollowChanged(true)
-                    }
-                }
-                refreshJumpButtonState(for: sv)
+                scheduleSettleCheck()
             default:
                 break
             }
