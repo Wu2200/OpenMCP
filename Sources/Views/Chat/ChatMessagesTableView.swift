@@ -624,12 +624,15 @@ final class ChatMessagesTableViewController: UIViewController, UITableViewDataSo
                 let ip = IndexPath(row: i, section: 0)
                 if let cell = tableView.cellForRow(at: ip) as? ChatHostingTableViewCell {
                     configureCell(cell, with: newRows[i])
+                    if selectionChanged {
+                        cell.refreshHostedContentImmediately()
+                    }
                     anyVisibleChanged = true
                 }
             }
             if anyVisibleChanged {
                 if selectionChanged {
-                    scheduleCellHeightPass(forceImmediate: true, preserveViewport: true, refreshHostedContent: true)
+                    scheduleCellHeightPass(forceImmediate: true, preserveViewport: true, refreshHostedContent: false)
                 } else {
                     performSeamlessCellHeightBatchUpdate(forceRevealLastRow: false)
                 }
