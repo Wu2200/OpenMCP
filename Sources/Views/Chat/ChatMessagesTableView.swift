@@ -823,7 +823,9 @@ final class ChatMessagesTableViewController: UIViewController, UITableViewDataSo
             let preserveViewport = self.preservesViewportOnNextHeightPass
             self.preservesViewportOnNextHeightPass = false
             if refreshHostedContent {
-                for cell in self.tableView.visibleCells.compactMap({ $0 as? ChatHostingTableViewCell }) {
+                if let anchor = self.pendingViewportAnchor,
+                   let rowIndex = self.rows.firstIndex(where: { $0.id == anchor.rowId }),
+                   let cell = self.tableView.cellForRow(at: IndexPath(row: rowIndex, section: 0)) as? ChatHostingTableViewCell {
                     cell.refreshHostedContentImmediately()
                 }
             }
