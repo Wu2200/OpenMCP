@@ -4,6 +4,7 @@ import UIKit
 struct ToolCallSummaryGroupView: View, Equatable {
     let toolCalls: [ToolCallItem]
     let theme: AppThemePalette
+    @Environment(\.chatCellLayoutInvalidator) private var invalidateCellLayout
     @State private var isGroupExpanded: Bool = false
     @State private var isShowingAllCalls: Bool = false
 
@@ -22,20 +23,16 @@ struct ToolCallSummaryGroupView: View, Equatable {
         toolCalls.filter { !$0.isExecuting }.count
     }
 
-    private var hasAnyError: Bool {
-        toolCalls.contains { $0.error != nil }
-    }
-
     private var summaryStatusColor: Color {
         guard let latest = latestCall else { return theme.accent }
         if latest.isExecuting { return theme.accent }
-        if latest.error != nil || hasAnyError { return .orange }
+        if latest.error != nil { return .orange }
         return theme.accent
     }
 
     private var summaryStatusIcon: String {
         guard let latest = latestCall else { return "checkmark.circle.fill" }
-        if latest.error != nil || hasAnyError { return "exclamationmark.triangle.fill" }
+        if latest.error != nil { return "exclamationmark.triangle.fill" }
         return "checkmark.circle.fill"
     }
 
@@ -52,44 +49,38 @@ struct ToolCallSummaryGroupView: View, Equatable {
         guard let latest = latestCall else { return "工具调用" }
         let cleanName = Self.cleanToolDisplayName(latest.name)
         if latest.isExecuting {
-            return "正在调用 \(cleanName)"
+            return "正在调用: \(cleanName)"
         }
         if latest.error != nil {
-            return "调用异常 · \(cleanName)"
+            return "调用异常: \(cleanName)"
         }
         if toolCalls.count == 1 {
-            return "已调用 \(cleanName)"
+            return "已调用工具: \(cleanName)"
         }
-        return "已完成 \(toolCalls.count) 次工具调用"
+        return "最新完成: \(cleanName)"
     }
 
     private var summarySubtext: String {
         guard let latest = latestCall else { return "" }
         if latest.isExecuting {
-            return "已完成 \(completedCount)/\(toolCalls.count) · 点击查看详情"
+            return "进度 \(completedCount)/\(toolCalls.count) · 点击展开详情"
         }
         if let err = latest.error {
-            return err
+            return "最新状态: \(err)"
         }
-        if toolCalls.count > 1 {
-            let names = toolCalls.map { Self.cleanToolDisplayName($0.name) }
-            let preview = Array(names.suffix(3)).joined(separator: " → ")
-            return preview
-        }
-        return "点击查看参数与返回结果"
+        return "最新工具执行成功 · 共调用 \(toolCalls.count) 次"
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: 5) {
             Button {
-                withAnimation(.easeInOut(duration: 0.16)) {
-                    if isGroupExpanded {
-                        isShowingAllCalls = false
-                    }
-                    isGroupExpanded.toggle()
+                if isGroupExpanded {
+                    isShowingAllCalls = false
                 }
+                isGroupExpanded.toggle()
+                invalidateCellLayout()
             } label: {
-                HStack(spacing: 8) {
+                HStack(spacing: 7) {
                     if latestCall?.isExecuting == true {
                         ProgressView()
                             .scaleEffect(0.68)
@@ -97,12 +88,12 @@ struct ToolCallSummaryGroupView: View, Equatable {
                             .frame(width: 16, height: 16)
                     } else {
                         Image(systemName: summaryStatusIcon)
-                            .font(.system(size: 12.5, weight: .semibold))
+                            .font(.system(size: 12, weight: .semibold))
                             .foregroundColor(summaryStatusColor)
                             .frame(width: 16, height: 16)
                     }
 
-                    VStack(alignment: .leading, spacing: 1.5) {
+                    VStack(alignment: .leading, spacing: 1) {
                         Text(summaryHeadline)
                             .font(.system(size: 12.5, weight: .semibold))
                             .foregroundColor(theme.primaryText)
@@ -114,56 +105,32 @@ struct ToolCallSummaryGroupView: View, Equatable {
                             .lineLimit(1)
                     }
 
-                    Spacer(minLength: 6)
+                    Spacer(minLength: 4)
 
                     Text("\(completedCount)/\(toolCalls.count)")
                         .font(.system(size: 10.5, weight: .semibold, design: .rounded).monospacedDigit())
                         .foregroundColor(summaryStatusColor)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(summaryStatusColor.opacity(0.12))
-                        .clipShape(Capsule())
 
                     Image(systemName: isGroupExpanded ? "chevron.up" : "chevron.down")
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundColor(theme.mutedText)
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7.5)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
             if isGroupExpanded {
-                Rectangle()
-                    .fill(theme.border.opacity(0.75))
-                    .frame(height: 1)
-
-                let firstDisplayedIndex = isShowingAllCalls ? 0 : max(0, toolCalls.count - 5)
+                let firstDisplayedIndex = isShowingAllCalls ? 0 : max(0, toolCalls.count - 4)
 
                 VStack(alignment: .leading, spacing: 4) {
-                    if !isShowingAllCalls && firstDisplayedIndex > 0 {
+                    if isShowingAllCalls && toolCalls.count > 4 {
                         Button {
-                            withAnimation(.easeInOut(duration: 0.15)) {
-                                isShowingAllCalls = true
-                            }
+                            isShowingAllCalls = false
+                            invalidateCellLayout()
                         } label: {
-                            Label("展开更早的 \(firstDisplayedIndex) 次工具调用", systemImage: "arrow.up")
+                            Label("收起至最近 4 次工具调用", systemImage: "arrow.down")
                                 .font(.system(size: 10.5, weight: .semibold))
                                 .foregroundColor(theme.accent)
-                                .padding(.vertical, 2)
-                        }
-                        .buttonStyle(.plain)
-                    } else if isShowingAllCalls && toolCalls.count > 5 {
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.15)) {
-                                isShowingAllCalls = false
-                            }
-                        } label: {
-                            Label("收起至最近 5 次工具调用", systemImage: "arrow.down")
-                                .font(.system(size: 10.5, weight: .semibold))
-                                .foregroundColor(theme.accent)
-                                .padding(.vertical, 2)
                         }
                         .buttonStyle(.plain)
                     }
@@ -173,18 +140,23 @@ struct ToolCallSummaryGroupView: View, Equatable {
                             ToolCallCardView(toolCall: toolCalls[index], theme: theme, stepNumber: index + 1)
                         }
                     }
+
+                    if !isShowingAllCalls && firstDisplayedIndex > 0 {
+                        Button {
+                            isShowingAllCalls = true
+                            invalidateCellLayout()
+                        } label: {
+                            Label("显示全部 \(toolCalls.count) 次工具调用", systemImage: "arrow.up")
+                                .font(.system(size: 10.5, weight: .semibold))
+                                .foregroundColor(theme.accent)
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.top, 2)
+                    }
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
+                .padding(.leading, 7)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(theme.elevatedBackground.opacity(0.55))
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(theme.border, lineWidth: 1)
-        )
     }
 }
 
@@ -192,21 +164,20 @@ struct ToolCallCardView: View {
     let toolCall: ToolCallItem
     let theme: AppThemePalette
     var stepNumber: Int? = nil
+    @Environment(\.chatCellLayoutInvalidator) private var invalidateCellLayout
     @State private var isExpanded: Bool = false
     @State private var isCopied: Bool = false
     @State private var areArgumentsCopied: Bool = false
-    @State private var fullPreviewAttachment: ChatAttachment? = nil
 
-    private static let previewCharacterLimit = 320
+    private static let previewCharacterLimit = 1200
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             Button {
-                withAnimation(.easeInOut(duration: 0.15)) {
-                    isExpanded.toggle()
-                }
+                isExpanded.toggle()
+                invalidateCellLayout()
             } label: {
-                HStack(spacing: 6) {
+                HStack(spacing: 7) {
                     if let step = stepNumber {
                         Text("#\(step)")
                             .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
@@ -220,7 +191,7 @@ struct ToolCallCardView: View {
 
                     Text(statusLabel)
                         .font(.system(size: 10))
-                        .foregroundColor(statusLabelColor)
+                        .foregroundColor(theme.secondaryText)
                         .lineLimit(1)
 
                     Spacer(minLength: 4)
@@ -230,116 +201,88 @@ struct ToolCallCardView: View {
                         .foregroundColor(theme.mutedText)
                 }
                 .contentShape(Rectangle())
-                .frame(minHeight: 26)
-                .padding(.vertical, 1)
+                .frame(minHeight: 28)
+                .padding(.vertical, 2)
             }
             .buttonStyle(.plain)
 
             if isExpanded {
-                VStack(alignment: .leading, spacing: 7) {
-                    payloadSection(
-                        title: "调用参数",
-                        rawText: toolCall.arguments,
-                        fileName: "\(ToolCallSummaryGroupView.cleanToolDisplayName(toolCall.name))_args.json",
-                        copiedFlag: areArgumentsCopied,
-                        onCopy: {
-                            UIPasteboard.general.string = toolCall.arguments
-                            withAnimation { areArgumentsCopied = true }
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                                withAnimation { areArgumentsCopied = false }
+                VStack(alignment: .leading, spacing: 6) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack {
+                            Text("调用参数")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundColor(theme.secondaryText)
+
+                            Spacer()
+
+                            Button {
+                                UIPasteboard.general.string = toolCall.arguments
+                                withAnimation { areArgumentsCopied = true }
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                    withAnimation { areArgumentsCopied = false }
+                                }
+                            } label: {
+                                Text(areArgumentsCopied ? "已复制" : "复制参数")
+                                    .font(.system(size: 10, weight: .medium))
+                                    .foregroundColor(theme.accent)
                             }
+                            .buttonStyle(.plain)
                         }
-                    )
+
+                        ScrollView(.vertical, showsIndicators: true) {
+                            Text(Self.preview(toolCall.arguments))
+                                .font(.system(size: 10.5, design: .monospaced))
+                                .foregroundColor(theme.primaryText)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .frame(maxHeight: 96)
+                    }
 
                     if let res = toolCall.result {
-                        payloadSection(
-                            title: "执行结果",
-                            rawText: res,
-                            fileName: "\(ToolCallSummaryGroupView.cleanToolDisplayName(toolCall.name))_result.txt",
-                            copiedFlag: isCopied,
-                            onCopy: {
-                                UIPasteboard.general.string = res
-                                withAnimation { isCopied = true }
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                                    withAnimation { isCopied = false }
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack {
+                                Text("执行结果")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundColor(theme.secondaryText)
+
+                                Spacer()
+
+                                Button {
+                                    UIPasteboard.general.string = res
+                                    withAnimation { isCopied = true }
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                        withAnimation { isCopied = false }
+                                    }
+                                } label: {
+                                    Text(isCopied ? "已复制" : "复制结果")
+                                        .font(.system(size: 10, weight: .medium))
+                                        .foregroundColor(theme.accent)
                                 }
+                                .buttonStyle(.plain)
                             }
-                        )
+
+                            ScrollView(.vertical, showsIndicators: true) {
+                                Text(Self.preview(res))
+                                    .font(.system(size: 10.5, design: .monospaced))
+                                    .foregroundColor(theme.primaryText)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            .frame(maxHeight: 96)
+                        }
                     }
                 }
-                .padding(.leading, stepNumber == nil ? 0 : 12)
-                .padding(.bottom, 4)
+                .padding(.leading, stepNumber == nil ? 0 : 15)
             }
-        }
-        .sheet(item: $fullPreviewAttachment) { att in
-            AttachmentFilePreviewSheet(attachment: att, theme: theme)
-        }
-    }
-
-    @ViewBuilder
-    private func payloadSection(
-        title: String,
-        rawText: String,
-        fileName: String,
-        copiedFlag: Bool,
-        onCopy: @escaping () -> Void
-    ) -> some View {
-        let isLong = rawText.count > Self.previewCharacterLimit
-
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
-                Text(title)
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(theme.secondaryText)
-
-                Spacer()
-
-                if isLong {
-                    Button {
-                        fullPreviewAttachment = ChatAttachment(
-                            kind: .file,
-                            fileName: fileName,
-                            mimeType: "text/plain",
-                            fileSize: rawText.utf8.count,
-                            textContent: rawText
-                        )
-                    } label: {
-                        Text("全文 (\(rawText.count)字)")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundColor(theme.accent)
-                    }
-                    .buttonStyle(.plain)
-                }
-
-                Button(action: onCopy) {
-                    Text(copiedFlag ? "已复制" : "复制")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(theme.accent)
-                }
-                .buttonStyle(.plain)
-            }
-
-            // 直接内联渲染截断预览文本，避免嵌套纵向 ScrollView 抢夺外层列表滚动手势
-            Text(Self.preview(rawText))
-                .font(.system(size: 10.5, design: .monospaced))
-                .foregroundColor(theme.primaryText)
-                .lineLimit(7)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(7)
-                .background(theme.cardBackground.opacity(0.85))
-                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .stroke(theme.border.opacity(0.75), lineWidth: 1)
-                )
         }
     }
 
     private static func preview(_ text: String) -> String {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let end = trimmed.index(trimmed.startIndex, offsetBy: previewCharacterLimit, limitedBy: trimmed.endIndex) ?? trimmed.endIndex
-        guard end < trimmed.endIndex else { return trimmed }
-        return String(trimmed[..<end]) + "…"
+        let end = text.index(text.startIndex, offsetBy: previewCharacterLimit, limitedBy: text.endIndex) ?? text.endIndex
+        guard end < text.endIndex else { return text }
+        return String(text[..<end]) + "\n\n… 内容较长，仅显示前 \(previewCharacterLimit) 个字符。可复制完整内容。"
     }
 
     private var statusColor: Color {
@@ -348,14 +291,9 @@ struct ToolCallCardView: View {
         return theme.accent
     }
 
-    private var statusLabelColor: Color {
-        if toolCall.error != nil { return .orange }
-        return theme.secondaryText
-    }
-
     private var statusLabel: String {
-        if toolCall.isExecuting { return "执行中..." }
-        if let err = toolCall.error { return "异常: \(err)" }
-        return "完成"
+        if toolCall.isExecuting { return "正在执行 MCP 工具调用..." }
+        if let err = toolCall.error { return "执行异常: \(err)" }
+        return "调用成功"
     }
 }
