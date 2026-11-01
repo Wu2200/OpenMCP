@@ -264,10 +264,16 @@ private final class SizingHostingController<Content: View>: UIHostingController<
         super.viewDidLayoutSubviews()
         let width = view.bounds.width
         guard width > 24 else { return }
-        let fitting = sizeThatFits(in: CGSize(width: width, height: CGFloat.greatestFiniteMagnitude))
-        if abs(fitting.height - lastReportedIdealHeight) > 0.5 {
-            lastReportedIdealHeight = fitting.height
-            onIdealHeightChanged?(fitting.height)
+        let intrinsicH = view.intrinsicContentSize.height
+        let idealHeight: CGFloat
+        if intrinsicH > 1 {
+            idealHeight = intrinsicH
+        } else {
+            idealHeight = sizeThatFits(in: CGSize(width: width, height: CGFloat.greatestFiniteMagnitude)).height
+        }
+        if abs(idealHeight - lastReportedIdealHeight) > 0.5 {
+            lastReportedIdealHeight = idealHeight
+            onIdealHeightChanged?(idealHeight)
         }
     }
 
@@ -380,7 +386,7 @@ struct ChatMessagesTableView: UIViewControllerRepresentable {
 }
 
 @MainActor
-final class ChatMessagesTableViewController: UIViewController, UITableViewDataSource, UITableViewDelegate {
+final class ChatMessagesTableViewController: UIViewController, UITableViewDataSource, UITableViewDelegate, UIGestureRecognizerDelegate {
     private let tableView = UITableView(frame: .zero, style: .plain)
 
     private var conversationId: String = ""
@@ -436,12 +442,10 @@ final class ChatMessagesTableViewController: UIViewController, UITableViewDataSo
         tableView.delegate = self
         tableView.register(ChatHostingTableViewCell.self, forCellReuseIdentifier: ChatHostingTableViewCell.reuseIdentifier)
 
-        let bgView = UIView()
-        bgView.backgroundColor = .clear
-        let bgTap = UITapGestureRecognizer(target: self, action: #selector(handleEmptyBackgroundTap))
-        bgTap.cancelsTouchesInView = false
-        bgView.addGestureRecognizer(bgTap)
-        tableView.backgroundView = bgView
+        let emptyAreaTap = UITapGestureRecognizer(target: self, action: #selector(handleEmptyBackgroundTap))
+        emptyAreaTap.cancelsTouchesInView = false
+        emptyAreaTap.delegate = self
+        tableView.addGestureRecognizer(emptyAreaTap)
 
         view.addSubview(tableView)
         NSLayoutConstraint.activate([
@@ -469,6 +473,11 @@ final class ChatMessagesTableViewController: UIViewController, UITableViewDataSo
 
     @objc private func handleEmptyBackgroundTap() {
         onDismissSelection?()
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        let point = touch.location(in: tableView)
+        return tableView.indexPathForRow(at: point) == nil
     }
 
     private func handleKeyboardDidShow() {
@@ -743,26 +752,15 @@ final class ChatMessagesTableViewController: UIViewController, UITableViewDataSo
         }
     }
 
+    private var hasPendingDeferredHeightRefresh: Bool = false
+
     private func scheduleCellHeightPass(forceImmediate: Bool = false) {
         guard didPerformInitialBottomPlacement, tableView.window != nil else { return }
 
-        // 手指正在拖动或惯性滑行时，节流行高重排保护 60/120fps 原生滑动手势
-        if !forceImmediate && isUserInteracting {
-            let now = CFAbsoluteTimeGetCurrent()
-            let elapsed = now - lastScrollingHeightSyncTime
-            if elapsed < 0.14 {
-                guard deferredScrollingSyncItem == nil else { return }
-                let delay = max(0.03, 0.14 - elapsed)
-                let item = DispatchWorkItem { [weak self] in
-                    guard let self else { return }
-                    self.deferredScrollingSyncItem = nil
-                    self.scheduleCellHeightPass(forceImmediate: true)
-                }
-                deferredScrollingSyncItem = item
-                DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
-                return
-            }
-            lastScrollingHeightSyncTime = now
+        // 手指正在拖动或惯性滑行时，推迟非用户主动点击触发的自动行高同步，确保滚动期间 100% 满帧零卡顿
+        if !forceImmediate && (tableView.isDragging || tableView.isDecelerating) {
+            hasPendingDeferredHeightRefresh = true
+            return
         }
 
         guard !hasScheduledHeightPass else { return }
@@ -771,6 +769,11 @@ final class ChatMessagesTableViewController: UIViewController, UITableViewDataSo
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.hasScheduledHeightPass = false
+            if !forceImmediate && (self.tableView.isDragging || self.tableView.isDecelerating) {
+                self.hasPendingDeferredHeightRefresh = true
+                return
+            }
+            self.hasPendingDeferredHeightRefresh = false
             self.performSeamlessCellHeightBatchUpdate(forceRevealLastRow: false)
         }
     }
@@ -925,15 +928,14 @@ final class ChatMessagesTableViewController: UIViewController, UITableViewDataSo
     }
 
     private func handleUserScrollDidSettle() {
-        reportUserScrolling(false)
         let distanceFromBottom = exactBottomOffset() - tableView.contentOffset.y
         if distanceFromBottom <= 18 && !autoFollowOutput {
             autoFollowOutput = true
             onAutoFollowChanged?(true)
         }
-        if deferredScrollingSyncItem != nil {
-            deferredScrollingSyncItem?.cancel()
-            deferredScrollingSyncItem = nil
+        reportUserScrolling(false)
+        if hasPendingDeferredHeightRefresh {
+            hasPendingDeferredHeightRefresh = false
             scheduleCellHeightPass(forceImmediate: true)
         }
     }
